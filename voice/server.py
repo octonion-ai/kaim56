@@ -29,7 +29,7 @@ PORT = int(os.environ.get("PORT", "8770"))
 # as the katfs node, only one level up.
 HOST = os.environ.get("HOST", "0.0.0.0")
 PIPER = os.environ.get("PIPER_BIN", "/opt/piper/piper")
-VOICE = os.environ.get("PIPER_VOICE", "/opt/piper/de-thorsten-medium.onnx")
+VOICE = os.environ.get("PIPER_VOICE", "/opt/piper/de-thorsten-high.onnx")
 ASR_NAME = os.environ.get("ASR_MODEL", "nemo-parakeet-tdt-0.6b-v3")
 MAX_BODY = 32 * 1024 * 1024      # 32 MB is enough for several minutes of speech
 MAX_TEXT = 4000                  # longer replies are shortened before speaking

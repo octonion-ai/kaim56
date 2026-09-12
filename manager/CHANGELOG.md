@@ -6,6 +6,7 @@ history — `git log -p -- manager/CHANGELOG.md` before 2026-09-08 — and in th
 commit messages.
 
 ## 2026-09-12
+- Voice: default TTS voice is `de-thorsten-high` (medium stays installed, switch in Settings); the Parakeet weights are baked into the voice image so a recreated container answers at once instead of downloading for a minute; `onnx-asr` pinned to 0.12.0
 - Registration corner marks removed from every card and box (chat, composer, manager tabs)
 - Tool status lines („🔧 web_search …“) sit in a collapsed „Tools · n“ block under the answer, in the app (5.35) and the web chat; the answer text no longer carries them (and Markdown no longer italicises their underscores)
 - Web chat: session panel (runtime, uptime, login, MCP servers with secret state, platform services, Restart/Logs/Terminal) and inline search over the open chat (Enter/Shift+Enter walk the hits, Esc closes, Ctrl+F opens), from the claude.ai/design project „Agent Chat Ideas“; `GET /api/session/<instance>[/log]`
