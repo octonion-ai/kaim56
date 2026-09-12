@@ -170,8 +170,9 @@ input[type=checkbox]{accent-color:var(--color-accent)}
 .actwin button:hover{color:var(--color-accent)}
 .actwin button.on{background:var(--color-accent-700);color:#fff}
 .seckey{-webkit-text-security:disc}
-.tabs{display:flex;gap:4px;align-self:stretch;overflow-x:auto;scrollbar-width:none}
-.tabs::-webkit-scrollbar{display:none}
+/* The tab row wraps: with fifteen tabs and a hidden scrollbar the last ones
+   (Secrets, Settings) silently fell off the right edge on narrower windows. */
+.tabs{display:flex;gap:4px;align-self:stretch;flex-wrap:wrap}
 .tabs a{display:flex;align-items:center;padding:0 14px;font-size:13.5px;letter-spacing:.03em;
   text-decoration:none;color:var(--color-text);white-space:nowrap;
   border-bottom:2px solid transparent;margin-bottom:-1px}
