@@ -79,9 +79,10 @@ SETTINGS_SCHEMA = [
         {"value": "", "label": "— off (agent fetches key via broker) —"},
         {"value": "1", "label": "on — keys never leave the host"}]},
     {"key": "TTS_VOICE", "label": "TTS voice (Piper)", "options": [
-        {"value": "", "label": "— default (de-thorsten-medium) —"},
-        {"value": "de-thorsten-medium", "label": "German · Thorsten (medium)"},
-        {"value": "de-eva_k-x_low", "label": "German · Eva K (x_low, faster)"},
+        {"value": "", "label": "— container default —"},
+        {"value": "de-thorsten-high", "label": "German · Thorsten (high)"},
+        {"value": "de-thorsten-medium", "label": "German · Thorsten (medium, faster)"},
+        {"value": "de-eva_k-x_low", "label": "German · Eva K (x_low, fastest)"},
         {"value": "en-amy-medium", "label": "English · Amy (medium)"}]},
     {"key": "TTS_SPEED", "label": "TTS speed (0.5 slow … 2.0 fast, empty = 1.0)"},
 ]
@@ -3268,7 +3269,7 @@ def render():
                 .replace("__TPLS__", tpls or "<option>no templates</option>")
                 .replace("__TPLJSON__", js_json(load_templates()))
                 .replace("__SETTINGS__", js_json(settings_for_ui()))
-                .replace("__SETTINGS_SCHEMA__", js_json(SETTINGS_SCHEMA))
+                .replace("__SETTINGS_SCHEMA__", js_json(settings_schema()))
                 .replace("__PERSONAS__", js_json(load_personas(), ensure_ascii=False))
                 # Only name + description into the page: with an imported
                 # catalog the contents are ~1 MB, and the UI needs them only
@@ -3538,6 +3539,31 @@ def _rt_session(h):
             data = b"(no log yet)"
         return data, "text/plain; charset=utf-8"
     return h._json(session_info(inst))
+
+
+_VOICE_LABELS = {"de-thorsten-high": "German · Thorsten (high)", "de-thorsten-medium": "German · Thorsten (medium, faster)",
+                 "de-eva_k-x_low": "German · Eva K (x_low, fastest)", "en-amy-medium": "English · Amy (medium)"}
+
+
+def settings_schema():
+    """The settings form's schema; the TTS voice list is whatever the voice
+    container actually has installed (a voice added to the image showed up
+    in the health line but not in the dropdown), the static list is the
+    fallback while the container is down."""
+    out = []
+    for s in SETTINGS_SCHEMA:
+        if s["key"] == "TTS_VOICE":
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{VOICE_PORT}/health", timeout=2) as r:
+                    d = json.loads(r.read())
+                voices = [v for v in d.get("voices", []) if isinstance(v, str)]
+                if voices:
+                    s = {**s, "options": [{"value": "", "label": f"— container default ({d.get('voice', '?')}) —"}]
+                         + [{"value": v, "label": _VOICE_LABELS.get(v, v)} for v in voices]}
+            except Exception:
+                pass
+        out.append(s)
+    return out
 
 
 @ROUTER.get("/api/settings", admin=True)
