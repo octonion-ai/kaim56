@@ -2876,7 +2876,79 @@ from mgr.missions import (load_missions, mission_list, mission_start,  # noqa: E
 
 
 # ---- Secrets broker (on-demand, allowlist per template/instance) -----------
-SECRETS_FILE = os.environ.get("SECRETS_FILE", "/home/ulrich/.config/kat56/secrets.env")
+SECRETS_FILE = os.environ.get("SECRETS_FILE", os.path.join(HOME_DIR, ".config", "kat56", "secrets.env"))
+_SECRET_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
+
+
+def _secrets_write(lines):
+    """Rewrite the store atomically: same directory, mode 0600, the owner
+    the file had (the manager runs as root, the file is the operator's)."""
+    d = os.path.dirname(SECRETS_FILE)
+    os.makedirs(d, exist_ok=True)
+    uid = gid = None
+    try:
+        st = os.stat(SECRETS_FILE); uid, gid = st.st_uid, st.st_gid
+    except OSError:
+        pass
+    fd, tmp = tempfile.mkstemp(prefix=".secrets.", dir=d)
+    with os.fdopen(fd, "w") as fh:
+        fh.write("".join(lines))
+    os.chmod(tmp, 0o600)
+    if uid is not None and os.geteuid() == 0:
+        os.chown(tmp, uid, gid)
+    os.replace(tmp, SECRETS_FILE)
+
+
+def secret_set(name, value):
+    """Add or replace one value in the store. Names are SHOUTING_SNAKE, the
+    value one line; other lines (order, comments) stay as they are. The
+    value is never echoed back — the UI shows only that the key is set."""
+    name = str(name or "").strip()
+    if not _SECRET_NAME_RE.match(name):
+        return "invalid name (A-Z, 0-9, _ ; 2-64 chars, starts with a letter)"
+    value = str(value or "")
+    if not value.strip() or "\n" in value or "\r" in value or len(value) > 4096:
+        return "value must be one non-empty line (max 4096 chars)"
+    try:
+        lines = open(SECRETS_FILE).readlines() if os.path.exists(SECRETS_FILE) else []
+    except OSError as e:
+        return f"error: {e}"
+    new, done = [], False
+    for ln in lines:
+        k = ln.split("=", 1)[0].strip() if "=" in ln and not ln.lstrip().startswith("#") else None
+        if k == name:
+            if not done:
+                new.append(f"{name}={value}\n"); done = True
+            continue                          # a duplicate line is dropped
+        new.append(ln if ln.endswith("\n") else ln + "\n")
+    if not done:
+        new.append(f"{name}={value}\n")
+    try:
+        _secrets_write(new)
+    except OSError as e:
+        return f"error: {e}"
+    print(f"[secrets] {'replaced' if done else 'added'} {name}", flush=True)
+    return f"{name} {'replaced' if done else 'added'}"
+
+
+def secret_delete(name):
+    name = str(name or "").strip()
+    if not _SECRET_NAME_RE.match(name):
+        return "invalid name"
+    try:
+        lines = open(SECRETS_FILE).readlines() if os.path.exists(SECRETS_FILE) else []
+    except OSError as e:
+        return f"error: {e}"
+    keep = [ln for ln in lines
+            if not ("=" in ln and not ln.lstrip().startswith("#") and ln.split("=", 1)[0].strip() == name)]
+    if len(keep) == len(lines):
+        return f"{name} not in the store"
+    try:
+        _secrets_write(keep)
+    except OSError as e:
+        return f"error: {e}"
+    print(f"[secrets] deleted {name}", flush=True)
+    return f"{name} deleted"
 SECRET_POLICY_FILE = os.path.join(BASE, "secret-policy.json")
 
 
@@ -5094,7 +5166,25 @@ def _rt_security(h):
 
 @ROUTER.get("/api/secret-keys", admin=True)
 def _rt_secret_keys(h):
-    return h._json({"keys": sorted(secret_store().keys())})
+    # Names only, never values; `sources` says where a key lives (the store
+    # file, editable here, or the settings, edited in the Settings tab).
+    store = load_secrets_file()
+    keys = sorted(secret_store().keys())
+    return h._json({"keys": keys, "sources": {k: ("store" if k in store else "settings") for k in keys}})
+
+
+@_msg_route("POST", "/api/secret-store")
+def _rt_secret_store_set(h):
+    b = h._body()
+    return secret_set(b.get("name", ""), b.get("value", ""))
+
+
+@_msg_route("POST", "/api/secret-store/", prefix=True)
+def _rt_secret_store_delete(h):
+    parts = h.path.split("?", 1)[0].strip("/").split("/")
+    if len(parts) == 4 and parts[3] == "delete":
+        return secret_delete(parts[2])
+    return "unknown"
 
 
 @ROUTER.get("/api/secret-policy", admin=True)

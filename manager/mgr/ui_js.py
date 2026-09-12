@@ -1117,16 +1117,45 @@ async function renderSecrets(){
   const el=document.getElementById('secrets');
   let keys=[];
   try{
-    keys=(await (await fetch('/api/secret-keys')).json()).keys||[];
+    const sk=await (await fetch('/api/secret-keys')).json(); keys=sk.keys||[]; SECSRC=sk.sources||{};
     SECPOL=await (await fetch('/api/secret-policy')).json();
   }catch(e){el.innerHTML='<span class=text-muted style="font-size:13px">not available</span>';return;}
-  if(!keys.length){el.innerHTML='<span class=text-muted style="font-size:13px">No secret keys found in the store.</span>';return;}
+  if(!keys.length){el.innerHTML='<span class=text-muted style="font-size:13px">No secret keys yet.</span>'+
+    `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px"><input class="input mono" id=sk-name placeholder="NEW_KEY" style="width:220px;font-size:12.5px" autocomplete=off spellcheck=false>`+
+    `<input class="input seckey" id=sk-val placeholder="value" style="width:300px" type=text autocomplete=off spellcheck=false><button class="btn btn-secondary btn-sm" onclick="secAdd()">Add</button></div>`;return;}
   const tpls=(TEMPLATES||[]).map(t=>t.template), bt=SECPOL.by_template||{}, gr=SECPOL.guest_readable||[];
   const head=`<tr><th>Secret key</th>`+tpls.map(t=>`<th style="text-align:center">${escT(t)}</th>`).join('')+`<th style="text-align:center" title="Only a key ticked here ever leaves the host as a raw value (get_secret). A release per template/instance alone lets the MCP hub substitute it on the host.">raw to guest</th></tr>`;
+  const src=SECSRC||{};
+  // Value column: the key is set (values never come to the browser); store
+  // keys can be replaced or deleted here, settings keys point to their tab.
+  const val=k=>src[k]==='settings'
+    ?`<span class=text-muted style="font-size:11.5px">set · <a href="#settings">Settings</a></span>`
+    :`<span class=text-muted style="font-size:11.5px">set</span> <button class="btn btn-ghost" style="font-size:11.5px;padding:2px 6px" title="Replace the value" onclick="secReplace('${esc(k)}')">replace</button>`+
+     `<button class="btn btn-ghost" style="font-size:11.5px;padding:2px 6px;color:var(--color-neutral-600)" title="Delete from the store" onclick="secDelete('${esc(k)}')">delete</button>`;
   const body=keys.map(k=>`<tr><td data-label="Secret key" class=mono style="font-size:12.5px">${escT(k)}</td>`+
+    `<td data-label="Value" style="white-space:nowrap">${val(k)}</td>`+
     tpls.map(t=>`<td data-label="${esc(t)}" style="text-align:center"><input type=checkbox data-tpl="${esc(t)}" value="${esc(k)}" ${(bt[t]||[]).indexOf(k)>=0?'checked':''}></td>`).join('')+
     `<td data-label="raw to guest" style="text-align:center"><input type=checkbox data-gr="1" value="${esc(k)}" ${gr.indexOf(k)>=0?'checked':''}></td></tr>`).join('');
-  el.innerHTML=`<table class=table><thead>${head}</thead><tbody>${body}</tbody></table>`;
+  el.innerHTML=`<table class=table><thead>${head.replace('<th>Secret key</th>','<th>Secret key</th><th>Value</th>')}</thead><tbody>${body}</tbody></table>`+
+    `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px">`+
+    `<input class="input mono" id=sk-name placeholder="NEW_KEY" style="width:220px;font-size:12.5px" autocomplete=off spellcheck=false>`+
+    `<input class="input seckey" id=sk-val placeholder="value" style="width:300px" type=text autocomplete=off spellcheck=false>`+
+    `<button class="btn btn-secondary btn-sm" onclick="secAdd()">Add / replace</button>`+
+    `<span class=text-muted style="font-size:11.5px">Written to the secret store on the host (0600), never shown again. LLM keys live in Settings.</span></div>`;
+}
+let SECSRC={};
+async function secAdd(){
+  const n=document.getElementById('sk-name').value.trim().toUpperCase(), v=document.getElementById('sk-val').value;
+  if(!n||!v)return alert('Name and value?');
+  const r=await (await fetch('/api/secret-store',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n,value:v})})).json();
+  document.getElementById('secmsg').textContent=r.msg||'';
+  if(/added|replaced/.test(r.msg||'')){document.getElementById('sk-val').value='';renderSecrets();}
+}
+function secReplace(k){document.getElementById('sk-name').value=k;const v=document.getElementById('sk-val');v.value='';v.focus();}
+async function secDelete(k){
+  if(!confirm('Delete '+k+' from the secret store? Releases that use it stop working.'))return;
+  const r=await (await fetch('/api/secret-store/'+encodeURIComponent(k)+'/delete',{method:'POST'})).json();
+  document.getElementById('secmsg').textContent=r.msg||'';renderSecrets();
 }
 function saveSecrets(){
   const bt={};

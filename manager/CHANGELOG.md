@@ -6,6 +6,7 @@ history — `git log -p -- manager/CHANGELOG.md` before 2026-09-08 — and in th
 commit messages.
 
 ## 2026-09-12
+- Secrets tab manages the values too: add, replace and delete keys of the host store (`~/.config/kat56/secrets.env`, written 0600, never echoed back); LLM keys stay in Settings; store path derives from the tree
 - Voice: default TTS voice is `de-thorsten-high` (medium stays installed, switch in Settings); the Parakeet weights are baked into the voice image so a recreated container answers at once instead of downloading for a minute; `onnx-asr` pinned to 0.12.0
 - Registration corner marks removed from every card and box (chat, composer, manager tabs)
 - Tool status lines („🔧 web_search …“) sit in a collapsed „Tools · n“ block under the answer, in the app (5.35) and the web chat; the answer text no longer carries them (and Markdown no longer italicises their underscores)

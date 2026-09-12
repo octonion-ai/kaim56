@@ -356,7 +356,7 @@ HTML_TOP = """</head><body>
 
 <section class="screen" id=s-secrets>
   <div class=sec-head>
-    <div><h6>Runtime access</h6><h3>Secrets access</h3></div>
+    <div><h6>Runtime access</h6><h3>Secrets</h3></div>
     <span class="note text-muted">Per template/instance: which keys the host may substitute into that agent's MCP servers · <b>raw to guest</b>: which of those an agent may fetch via <code>get_secret(name)</code> — default none, since the hub and the LLM key proxy exist · values never written to disk</span>
   </div>
   <div class="banner blueprint" style="background:var(--color-neutral-100);margin:16px 0 20px;padding:9px 14px">

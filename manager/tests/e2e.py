@@ -3273,6 +3273,46 @@ class ManagerFunctions(unittest.TestCase):
         finally:
             m.load_settings = old
 
+    def test_secret_store_edit_from_the_ui(self):
+        """Values are added, replaced and deleted in the store file through
+        admin routes: names validated, other lines and comments kept, the
+        file stays 0600, values never come back through /api/secret-keys."""
+        m = self.m
+        tmp = tempfile.mkdtemp(prefix="e2e-secstore-")
+        old = m.SECRETS_FILE, m.load_settings, m.instance_by_ip, m.PW
+        try:
+            m.SECRETS_FILE = os.path.join(tmp, "secrets.env")
+            with open(m.SECRETS_FILE, "w") as fh:
+                fh.write("# my secrets\nHA_TOKEN=old\nMRMUSIC_TOKEN=m\n")
+            os.chmod(m.SECRETS_FILE, 0o600)
+            m.load_settings = lambda: {"OPENROUTER_API_KEY": "sk"}
+            self.assertEqual(m.secret_set("CALDAV_PASSWORD", "p4ss"), "CALDAV_PASSWORD added")
+            self.assertEqual(m.secret_set("HA_TOKEN", "new"), "HA_TOKEN replaced")
+            self.assertIn("invalid name", m.secret_set("bad-name", "x"))
+            self.assertIn("one non-empty line", m.secret_set("X_KEY", "a\nb"))
+            self.assertIn("one non-empty line", m.secret_set("X_KEY", "  "))
+            txt = open(m.SECRETS_FILE).read()
+            self.assertEqual(txt, "# my secrets\nHA_TOKEN=new\nMRMUSIC_TOKEN=m\nCALDAV_PASSWORD=p4ss\n")
+            self.assertEqual(os.stat(m.SECRETS_FILE).st_mode & 0o777, 0o600)
+            self.assertEqual(m.secret_delete("MRMUSIC_TOKEN"), "MRMUSIC_TOKEN deleted")
+            self.assertEqual(m.secret_delete("MRMUSIC_TOKEN"), "MRMUSIC_TOKEN not in the store")
+            self.assertEqual(set(m.load_secrets_file()), {"HA_TOKEN", "CALDAV_PASSWORD"})
+            m.instance_by_ip = lambda ip: None; m.PW = ""
+            h = self._handler("/api/secret-keys", "10.0.0.5"); h._do_GET()
+            body = json.loads(h.wfile.getvalue().split(b"\r\n\r\n", 1)[1])
+            self.assertEqual(body["sources"], {"CALDAV_PASSWORD": "store", "HA_TOKEN": "store", "OPENROUTER_API_KEY": "settings"})
+            self.assertNotIn("p4ss", h.wfile.getvalue().decode()); self.assertNotIn("new", body["keys"])
+            h = self._post_handler("/api/secret-store", "10.0.0.5", b'{"name": "NEW_KEY", "value": "v"}'); h.do_POST()
+            self.assertIn(b"NEW_KEY added", h.wfile.getvalue())
+            h = self._post_handler("/api/secret-store/NEW_KEY/delete", "10.0.0.5", b"{}"); h.do_POST()
+            self.assertIn(b"NEW_KEY deleted", h.wfile.getvalue())
+            guest = {"name": "vm1", "index": 3, "config": {}}
+            m.instance_by_ip = lambda ip: guest
+            h = self._post_handler("/api/secret-store", "172.30.3.2", b'{"name": "X_KEY", "value": "v"}'); h.do_POST()
+            self.assertEqual(self._status(h), 403)                                       # guests: never
+        finally:
+            m.SECRETS_FILE, m.load_settings, m.instance_by_ip, m.PW = old
+
     def test_guest_get_denylist_covers_ui_proxy_and_terminal(self):
         """GET /i/<other>/term opened the shell of every other VM — only POST
         was gated. The denylist names the admin UI, chat, katfs and /i/."""
