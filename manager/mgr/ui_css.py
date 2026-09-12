@@ -170,10 +170,11 @@ input[type=checkbox]{accent-color:var(--color-accent)}
 .actwin button:hover{color:var(--color-accent)}
 .actwin button.on{background:var(--color-accent-700);color:#fff}
 .seckey{-webkit-text-security:disc}
-/* The tab row wraps: with fifteen tabs and a hidden scrollbar the last ones
-   (Secrets, Settings) silently fell off the right edge on narrower windows. */
-.tabs{display:flex;gap:4px;align-self:stretch;flex-wrap:wrap}
-.tabs a{display:flex;align-items:center;padding:0 14px;font-size:13.5px;letter-spacing:.03em;
+/* Fifteen tabs in one row: compact type and padding so they fit the 1160px
+   shell; if a window is narrower still, the row scrolls with a visible thin
+   bar instead of hiding the last tabs (Secrets, Settings fell off once). */
+.tabs{display:flex;gap:2px;align-self:stretch;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:thin}
+.tabs a{display:flex;align-items:center;padding:0 8px;font-size:12px;letter-spacing:.01em;
   text-decoration:none;color:var(--color-text);white-space:nowrap;
   border-bottom:2px solid transparent;margin-bottom:-1px}
 .tabs a:hover{color:var(--color-accent-700)}
