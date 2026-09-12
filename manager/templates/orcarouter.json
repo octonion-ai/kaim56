@@ -19,7 +19,7 @@
     },
     {
       "key": "ALLOWED_SENDERS",
-      "label": "Allowed number(s)",
+      "label": "Allowed number(s) — comma-separated, e.g. +4917…,+4915…",
       "default": ""
     },
     {

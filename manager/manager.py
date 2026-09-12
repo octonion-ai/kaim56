@@ -71,7 +71,7 @@ SETTINGS_SCHEMA = [
     {"key": "ORCAROUTER_API_KEY", "label": "OrcaRouter API key (sk-orca-…)"},
     {"key": "ORCAROUTER_URL", "label": "OrcaRouter base URL (blank = https://api.orcarouter.ai/v1; set only when self-hosting OrcaRouter-Lite)"},
     {"key": "SIGNAL_NUMBER", "label": "Signal bot number"},
-    {"key": "ALLOWED_SENDERS", "label": "Allowed Signal number(s)"},
+    {"key": "ALLOWED_SENDERS", "label": "Allowed Signal number(s) — who may command the bots and receive its messages; several separated by commas, international format: +4917…, +4915…"},
     {"key": "SIGNAL_API", "label": "Signal REST API URL"},
     {"key": "LLAMA_ENDPOINT", "label": "llama.cpp endpoint (OpenAI-compatible base URL, e.g. http://10.0.0.50:8080/v1)"},
     {"key": "LLAMA_API_KEY", "label": "llama.cpp API key (optional, only if --api-key is set)"},

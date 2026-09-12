@@ -6,7 +6,7 @@
   "params": [
     {"key": "TRANSPORT", "label": "Transport", "type": "select", "options": ["signal", "web", "mail"], "default": "signal"},
     {"key": "SIGNAL_NUMBER", "label": "Signal number (bot)", "default": ""},
-    {"key": "ALLOWED_SENDERS", "label": "Allowed number(s)", "default": ""},
+    {"key": "ALLOWED_SENDERS", "label": "Allowed number(s) — comma-separated, e.g. +4917…,+4915…", "default": ""},
     {"key": "ANTHROPIC_MODEL", "label": "Model (Claude Code)", "type": "select", "default": "",
      "options": [
        {"value": "", "label": "— account default —"},
