@@ -3256,6 +3256,23 @@ class ManagerFunctions(unittest.TestCase):
                        'function searchApply', 'function panelLoad', '"vm1"'):
             self.assertIn(needle, page, needle)
 
+    def test_settings_for_ui_masks_every_credential_shaped_value(self):
+        """Not only the schema's key params: any setting named like a
+        credential is replaced by the placeholder before the page embeds it;
+        the placeholder never overwrites the stored value on save."""
+        m = self.m
+        old = m.load_settings
+        try:
+            m.load_settings = lambda: {"OPENROUTER_API_KEY": "sk-or-x", "HF_TOKEN": "hf_abc", "MY_PASSWORD": "p",
+                                       "BRAVE_API_KEY": "b", "SIGNAL_NUMBER": "+49", "TTS_VOICE": "de-thorsten-high", "EMPTY_KEY": ""}
+            ui = m.settings_for_ui()
+            self.assertEqual({k: v for k, v in ui.items() if v == m.SETTINGS_KEEP},
+                             {k: m.SETTINGS_KEEP for k in ("OPENROUTER_API_KEY", "HF_TOKEN", "MY_PASSWORD", "BRAVE_API_KEY")})
+            self.assertEqual((ui["SIGNAL_NUMBER"], ui["TTS_VOICE"], ui["EMPTY_KEY"]), ("+49", "de-thorsten-high", ""))
+            self.assertNotIn("hf_abc", json.dumps(ui))
+        finally:
+            m.load_settings = old
+
     def test_guest_get_denylist_covers_ui_proxy_and_terminal(self):
         """GET /i/<other>/term opened the shell of every other VM — only POST
         was gated. The denylist names the admin UI, chat, katfs and /i/."""

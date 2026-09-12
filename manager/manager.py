@@ -549,10 +549,20 @@ def load_settings():
         return {}
 
 
+_SECRET_NAME = re.compile(r"(KEY|TOKEN|SECRET|PASS|PASSWORD)$")
+
+
+def is_secret_setting(key):
+    """A setting whose value must never reach the browser: the known key
+    params and anything named like a credential (a stray HF_TOKEN in the
+    file was embedded raw into the admin page once)."""
+    return key in SECRET_PARAMS or bool(_SECRET_NAME.search(str(key).upper()))
+
+
 def settings_for_ui():
     d = dict(load_settings())
     for k in list(d):
-        if k in SECRET_PARAMS and d[k]:
+        if is_secret_setting(k) and d[k]:
             d[k] = SETTINGS_KEEP
     return d
 
