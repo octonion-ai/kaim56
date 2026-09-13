@@ -175,6 +175,7 @@ input[type=checkbox]{accent-color:var(--color-accent)}
    bar instead of hiding the last tabs (Secrets, Settings fell off once). */
 .tabs{display:flex;gap:2px;align-self:stretch;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
 .tabs::-webkit-scrollbar{display:none}
+.tabs.more{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 36px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 36px),transparent)}
 .tabs a{display:flex;align-items:center;padding:0 8px;font-size:12px;letter-spacing:.01em;
   text-decoration:none;color:var(--color-text);white-space:nowrap;
   border-bottom:2px solid transparent;margin-bottom:-1px}

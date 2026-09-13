@@ -480,7 +480,13 @@ function showTab(t){
   /* the row scrolls without a visible bar: keep the active tab in view */
   const cur=document.querySelector('#tabs a[aria-current=page]');
   if(cur&&cur.scrollIntoView)cur.scrollIntoView({inline:'nearest',block:'nearest'});
+  tabsFade();
 }
+/* a faded right edge says "more tabs" while the row overflows */
+function tabsFade(){const n=document.getElementById('tabs');if(!n)return;
+  n.classList.toggle('more',n.scrollWidth-n.clientWidth>2&&n.scrollLeft+n.clientWidth<n.scrollWidth-2);}
+window.addEventListener('resize',tabsFade);
+document.getElementById('tabs').addEventListener('scroll',tabsFade,{passive:true});
 window.addEventListener('hashchange',()=>{const t=location.hash.slice(1);showTab(t);if(t==='missions')loadMissions();if(t==='sharing'){loadKatfs();loadIroh();}});
 
 async function loadPlaybooks(){
