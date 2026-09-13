@@ -3258,7 +3258,7 @@ def render():
         sub = " · ".join(x for x in (inst.get("template", ""), transport) if x)
         _chip = ('<svg width=12 height=12 viewBox="0 0 24 24" fill=none stroke=currentColor '
                  'stroke-width=1.6 stroke-linecap=round stroke-linejoin=round style="vertical-align:-1px">'
-                 '<rect x=6 y=6 width=12 height=12 rx=1/><path d="M9 2v2M15 2v2M9 20v2M15 20v2'
+                 '<rect x=6 y=6 width=12 height=12 rx="1"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2'
                  'M2 9h2M2 15h2M20 9h2M20 15h2"/></svg>')
         # The chip is clickable: opens the model-switch dialog (editModel in PAGE JS).
         model_line = (f"<button class='mono' style=\"font-size:12px;color:var(--color-accent-700);"

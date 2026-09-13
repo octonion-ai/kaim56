@@ -162,6 +162,7 @@ function _bar(pct,max,color){
   return `<div style="background:var(--color-neutral-200,#e5e7eb);border-radius:4px;height:6px;overflow:hidden;min-width:60px"><div style="width:${w}%;height:100%;background:${color}"></div></div>`;
 }
 async function loadResources(){
+  loadUsageChart();                       // the chart below the table, same tab, both entry points
   let rs=[]; try{rs=(await (await fetch('/api/resources')).json()).resources||[];}catch(e){return;}
   const el=document.getElementById('resrows'); if(!el)return;
   el.innerHTML = rs.length ? rs.map(r=>{
@@ -1224,7 +1225,7 @@ window.onload=()=>{
     if(t==='tasks'&&!TK_EDIT)loadTasks();
     else if(t==='missions')loadMissions();
     else if(t==='policy')loadPolicy(true);
-    else if(t==='resources'){loadResources();loadUsageChart();}
+    else if(t==='resources')loadResources();
     else if(t==='instances')refreshUsage();
   },15000);
   document.getElementById('actdlg').onclick=e=>{if(e.target.id==='actdlg')actClose()};

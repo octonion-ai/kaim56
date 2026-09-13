@@ -63,6 +63,14 @@ and starts the next.
 
 ![Architecture](docs/img/architecture.png)
 
+## Around the workbench
+
+| | |
+|---|---|
+| ![Chat](docs/img/chat.png) **Chat** — tool calls fold under the answer, the session panel shows what the agent is and sees | ![Resources](docs/img/resources.png) **Resources** — tokens in and out per instance stacked by model, cost as billed |
+| ![Policy](docs/img/policy.png) **Policy** — per instance: network, secrets, MCP servers and the tools it may call | ![MCP servers](docs/img/mcp.png) **MCP servers** — a catalog attached per instance; secrets are injected on the host |
+| ![Skills](docs/img/skills.png) **Skills** — expert knowledge loaded into context on demand, proposals from the agents' own experience | ![Personas](docs/img/personas.png) **Personas** — system prompts and prompt templates, usable as slash commands |
+
 ## Getting started
 
 Requirements: Linux x86_64 with KVM (`/dev/kvm`), Docker, Python ≥ 3.9, systemd.

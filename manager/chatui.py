@@ -305,7 +305,7 @@ mark.sh{background:color-mix(in srgb,var(--accent) 30%,transparent);color:inheri
     <button class=icon id=searchBtn title="Search in this chat" onclick=searchToggle()><svg width=18 height=18 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round stroke-linejoin=round><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></button>
     <button class=icon id=gwBtn title="Security Gateway" onclick=gwToggle()><svg width=18 height=18 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round stroke-linejoin=round><path d="M12 2l8 4v6c0 5-3.4 8.6-8 10-4.6-1.4-8-5-8-10V6z"/></svg></button>
     <span id=gwCount class=gwcount></span>
-    <button class=icon id=termBtn title="Browser terminal" onclick=openTerm()><svg width=18 height=18 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round stroke-linejoin=round><rect x=2 y=3 width=20 height=14 rx=2/><path d="M8 21h8M12 17v4"/></svg></button>
+    <button class=icon id=termBtn title="Browser terminal" onclick=openTerm()><svg width=18 height=18 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round stroke-linejoin=round><rect x=2 y=3 width=20 height=14 rx="2"/><path d="M8 21h8M12 17v4"/></svg></button>
     <button class=icon id=panelBtn title="Session panel" onclick=panelToggle()><svg width=18 height=18 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round stroke-linejoin=round><rect x="3" y="5" width="18" height="14"/><path d="M15 5v14"/></svg></button>
     <button class=icon title="Restart agent (resets the agent session)" onclick=restartAgent()><svg width=18 height=18 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round stroke-linejoin=round><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
   </header>
@@ -353,9 +353,9 @@ mark.sh{background:color-mix(in srgb,var(--accent) 30%,transparent);color:inheri
 const _S='<svg width=18 height=18 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=1.6 stroke-linecap=round stroke-linejoin=round>';
 const IC={
   clip:_S+'<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>',
-  term:_S+'<rect x=2 y=3 width=20 height=14 rx=2/><path d="M8 21h8M12 17v4"/></svg>',
+  term:_S+'<rect x=2 y=3 width=20 height=14 rx="2"/><path d="M8 21h8M12 17v4"/></svg>',
   refresh:_S+'<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>',
-  bot:_S+'<rect x=4 y=9 width=16 height=11 rx=2/><path d="M12 9V5M9 3h6"/><circle cx=9 cy=14 r=1.2 fill=currentColor stroke=none/><circle cx=15 cy=14 r=1.2 fill=currentColor stroke=none/></svg>',
+  bot:_S+'<rect x=4 y=9 width=16 height=11 rx="2"/><path d="M12 9V5M9 3h6"/><circle cx=9 cy=14 r=1.2 fill=currentColor stroke="none"/><circle cx=15 cy=14 r=1.2 fill=currentColor stroke="none"/></svg>',
 };
 const AGENTS=__AGENTS__, START=__CURRENT__;
 const $=id=>document.getElementById(id);
