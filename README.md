@@ -126,6 +126,83 @@ Per-client details live next to the code: `app/README.md`, `voice-client/README.
   agent image and proves it on one instance without a model call; the Instances
   tab flags VMs still running an older image.
 
+## Feature set
+
+### Agents and runtime
+
+- One Firecracker microVM per agent: own kernel, /30 network behind NAT, copy-on-write rootfs, optional persistent disk, harness drive with the agent code (an agent fix is one restart, not a rebuild).
+- Templates: `openrouter` (OpenRouter, OrcaRouter or a local llama.cpp — same agent, picked by env), `claude` (Claude Code headless), `pi`, `prime`. Model, reasoning and tool set per instance; `/model` switches at runtime.
+- Tool-calling loop with a per-turn step cap, a time budget per task (the agent gets a deadline and wraps up before it), streaming answers with thinking rendered separately and kept out of the context.
+- Context management: summarising overflow (oldest turns folded into a pinned summary, the last ten verbatim), offloading of large tool outputs to files with paged reads, `/fresh` throwaway turns, asides that fold back into a note.
+- Goal loop: `/goal <criterion>` lets a judge check and refine each answer up to three times. Oracle tool: a second opinion before destructive actions.
+
+### Slash commands (web chat, app, Signal)
+
+| Command | Effect |
+|---|---|
+| `/model <backend:model>` | switch the model for this instance at runtime |
+| `/reasoning low\|medium\|high\|off` | toggle the model's reasoning, rendered as a collapsible block |
+| `/steps N` · `/steps unlimited` | tool-step cap for the next turns; `/steps N <text>` for one turn |
+| `/tools` | list the tools this instance may call |
+| `/goal <criterion>` | refine answers against a judge |
+| `/reset` | clear the context (voice sessions are archived) |
+| `/fresh <text>` | one request in a throwaway context, history untouched |
+| `/aside <text>` · `/back` · `/back drop` | open a side thread, close it as a note, or discard it |
+| `/branch` | branch the conversation (web chat) |
+| `/<template> [extra]` | prompt templates from the Personas tab, expanded server-side |
+| `/task`, `/agents`, `/help` | app shortcuts for the task queue and the agent list |
+
+### Tools
+
+- **Work**: `bash` (hard denylist always on), `read_file`, `write_file`, `list_dir`, `offload_read`, `http_fetch`, `web_search`, `read_pdf`.
+- **Delegation**: `spawn_subagent` (fresh VM, fresh context), `create_task`, `list_agents`, `recall_tasks`, `read_inbox`; the orchestrator additionally edits and deletes tasks.
+- **Missions**: `mission_start`, `mission_update`, `mission_finish`, `missions`.
+- **Memory and rules**: `memory_store`, `memory_recall`, `playbook_add`, `playbooks`, `playbook_forget`, `search_sessions`.
+- **Skills**: `list_skills`, `load_skill`, `propose_skill`.
+- **People and devices**: `send_signal`, `notify`, `ha_control`, `ha_learn_alias`, plus every attached MCP server's tools (`homeassistant__…`, `caldav__…`, `portainer__…`, `mrmusic__…`).
+- **Files of the user**: `remote_ls`, `remote_read`, `remote_write`, `remote_delete` over katfs, without mounting anything into the VM.
+- **Secrets**: `list_secrets`, `get_secret` for keys explicitly released to that instance; LLM keys never reach a VM.
+- Drop-in **plugins**: a `.py` file or folder with `DESC` / `PARAMS` / `run()` becomes a tool after a restart.
+
+### Memory
+
+- **Short term**: the conversation in the VM; summarised on overflow, cleared by `/reset`.
+- **Semantic long term**: `memory_store` embeds every note on the host (multilingual-e5, CPU); each turn the nearest notes to the question are injected — only what fits, never the whole store.
+- **Markdown memory folder**: `memory/<instance>/` mounted at `/memory` in the VM: notes as files, a daily timeline written by the manager (trimmed after two days, weekly after two weeks), a `MEMORY.md` index the agent sees every turn, versioned in git.
+- **Playbooks**: standing rules the agent records when told how to do something; injected on every turn, editable in the Personas tab.
+- **Session search**: full-text search over every chat and task run (`search_sessions`), scoped to the calling instance.
+
+### Autonomy
+
+- **Tasks**: one message on one instance, once or on a schedule (`every 30m`, `daily 07:00`, …), run-now button, results in the chat history and queryable by agents.
+- **Missions**: multi-step plans that survive resets and restarts; steps are delegated to whichever instance has the tools, completions advance the mission event-driven.
+- **Orchestrator**: an instance that routes work with `create_task` instead of doing it, sees the inbox of user messages, and prunes its own queue.
+- **Sub-agents**: ephemeral VMs for a bounded job, capped in number.
+- **Skills from experience**: after a long successful turn the agent proposes a skill; the Skills tab shows proposals for approval.
+
+### Traces and observability
+
+- Every turn is a trace: agent turn → LLM calls → tool calls with duration, outcome and error; the Activity dialog groups by turn, the app shows the same trace per message.
+- Token and cost accounting per instance and model in the Resources tab (24h/7d/30d/all), spend counter per instance, audit trail of tool targets (URLs, paths, queries — never contents).
+- Notifications with a link target (mission, task, chat) on web and Android; Signal replies for approvals.
+
+### Security
+
+- Keys stay on the host: the LLM proxy injects the API key on egress; other secrets are released per template or instance and substituted into MCP configs on the host.
+- Per-instance policy: tool allowlist, MCP servers, secrets, internet on/off, daily token budget, LLM rate limit, HITL approval over Signal for risky tools.
+- Guest boundary: instances identified by source IP with anti-spoofing, NFS workspaces exported per instance to its own address and squashed to a dedicated system user, root-only state files, login lockout, CSRF origin check, body caps.
+- Security gateway per chat: strips invisible Unicode and image metadata in both directions before anything reaches the guest.
+
+### Clients and voice
+
+- **Web**: the manager (instances, personas, skills, plugins, MCP, tasks, missions, policy, models, resources, sharing, secrets, settings, changelog, architecture) and the chat (streaming, images, voice, inline search, session panel, branches).
+- **KatAgent** (Android): chat, voice, missions, tasks, traces, notifications; digital-assistant hook; offline Gemma mode; bridge for the Brilliant Labs Halo glasses.
+- **Desktop voice client** (Linux topbar): hands-free conversations, energy VAD, wake word, barge-in.
+- **MrVoice** (ESP32-S3): push-to-talk device.
+- **Signal**: allow-listed senders trigger the orchestrator; approvals and replies come back the same way.
+- **Speech**: Parakeet TDT for recognition, Piper for synthesis (German and English voices, selectable), both as host containers behind the manager.
+- **katfs**: share folders from a browser to the agents over iroh, browse and download them in the manager.
+
 ## License
 
 kAIm56 is licensed under the **GNU Affero General Public License v3.0
