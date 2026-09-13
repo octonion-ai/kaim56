@@ -1,0 +1,108 @@
+# Builds the KatAgent APK from the repo and attaches it to the GitHub release
+# of a v* tag. Two jobs: the native iroh module (Rust, cargo-ndk, UniFFI
+# bindings) and the Gradle build. Signing uses the project's stable key when the
+# secret KATAGENT_KEYSTORE_B64 (base64 of app/keystore/katagent.jks) is set —
+# only then can the APK update an installed KatAgent in place, and only then is
+# it attached to the release. Without the secret a throwaway key is used and the
+# APK is kept as a workflow artifact for inspection.
+name: apk
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  native:
+    name: native iroh module (arm64-v8a)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app/iroh-android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/iroh-android
+      - name: cargo-ndk
+        run: cargo install cargo-ndk --locked
+      - name: build the shared library for the APK
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
+        run: |
+          cargo ndk -t arm64-v8a -o ../app/src/main/jniLibs build --release
+          find ../app/src/main/jniLibs -name 'libiroh*.so' -delete
+      - name: host build + UniFFI Kotlin bindings
+        run: |
+          cargo build --release
+          cargo run --release --bin uniffi-bindgen -- generate \
+            --library target/release/libkaim_iroh.so --language kotlin \
+            --out-dir ../app/src/main/kotlin
+          ls -R ../app/src/main/jniLibs ../app/src/main/kotlin/uniffi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native
+          path: |
+            app/app/src/main/jniLibs
+            app/app/src/main/kotlin/uniffi
+          if-no-files-found: error
+
+  apk:
+    name: KatAgent APK
+    needs: native
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: native
+          path: app/app/src/main
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: signing key
+        id: key
+        env:
+          KEYSTORE_B64: ${{ secrets.KATAGENT_KEYSTORE_B64 }}
+        run: |
+          mkdir -p app/keystore
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > app/keystore/katagent.jks
+            echo "stable=true" >> "$GITHUB_OUTPUT"
+          else
+            keytool -genkeypair -keystore app/keystore/katagent.jks -storepass katagent -keypass katagent \
+              -alias katagent -keyalg RSA -keysize 2048 -validity 36500 -dname "CN=KatAgent CI (throwaway)"
+            echo "stable=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::KATAGENT_KEYSTORE_B64 is not set — the APK is signed with a throwaway key and NOT attached to the release"
+          fi
+      - name: build
+        run: gradle -p app assembleDebug --no-daemon --console=plain
+      - name: name the APK after its versionName
+        id: apk
+        run: |
+          v=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/app/build.gradle.kts | head -1)
+          cp app/app/build/outputs/apk/debug/app-debug.apk "katagent-$v.apk"
+          echo "file=katagent-$v.apk" >> "$GITHUB_OUTPUT"
+          ls -la "katagent-$v.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.apk.outputs.file }}
+          path: ${{ steps.apk.outputs.file }}
+      - name: attach to the release
+        if: startsWith(github.ref, 'refs/tags/v') && steps.key.outputs.stable == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.apk.outputs.file }}
