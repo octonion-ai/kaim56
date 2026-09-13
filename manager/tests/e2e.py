@@ -3493,6 +3493,31 @@ class ManagerHTTP(unittest.TestCase):
         self.assertEqual(st, 200)
         self.assertIn("missions", json.loads(txt))
 
+    def test_usage_by_model_folds_task_vms(self):
+        """The Resources chart's data: one row per instance AND model; the
+        one-shot task VMs are summed as "tasks"; `since` cuts by time."""
+        import mgr.store as st
+        old = st.HISTORY_DB, st._migrated[0]
+        tmp = tempfile.mkdtemp(prefix="e2e-ubm-")
+        try:
+            st.HISTORY_DB = os.path.join(tmp, "history.db"); st._migrated[0] = False
+            now = int(time.time())
+            for inst, model, pt, ct, cost, ts in (("orch", "a/x", 100, 10, 0.01, now), ("orch", "b/y", 50, 5, 0.02, now),
+                                                  ("task-0a1b2c", "a/x", 20, 2, 0.001, now), ("task-3d4e5f", "a/x", 30, 3, 0.002, now),
+                                                  ("orch", "a/x", 1000, 1, 1.0, now - 100000)):
+                with st._hist_lock, st._hist_conn() as c:
+                    c.execute("INSERT INTO llm_usage(ts,instance,model,prompt_tokens,completion_tokens,cost) VALUES(?,?,?,?,?,?)",
+                              (ts, inst, model, pt, ct, cost))
+            rows = {(r["instance"], r["model"]): r for r in st.usage_by_model(now - 3600)}
+            self.assertEqual(set(rows), {("orch", "a/x"), ("orch", "b/y"), ("tasks", "a/x")})
+            self.assertEqual((rows[("tasks", "a/x")]["in"], rows[("tasks", "a/x")]["calls"], rows[("tasks", "a/x")]["cost"]), (50, 2, 0.003))
+            self.assertEqual(rows[("orch", "a/x")]["in"], 100)                   # the old row is outside the window
+            self.assertEqual(st.usage_by_model(0)[0], {**rows[("orch", "a/x")], "in": 1100, "out": 11, "calls": 2, "cost": 1.01})
+            st_, txt = _http("/api/usage-by-model?since=0")
+            self.assertEqual(st_, 200); self.assertIn("rows", json.loads(txt))
+        finally:
+            st.HISTORY_DB, st._migrated[0] = old
+
     def test_usage_by_instance(self):
         st, txt = _http("/api/usage/orchestrator?since=0")
         self.assertEqual(st, 200)

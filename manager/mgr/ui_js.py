@@ -179,6 +179,41 @@ async function loadResources(){
       `<td data-label="Disk (Overlay)" style="font-size:12px">${disk}</td></tr>`;
   }).join('') : '<tr><td colspan=7 class=text-muted style="padding:14px">no instances</td></tr>';
 }
+/* — LLM usage chart (Resources tab): one row per instance, tokens stacked
+   by model and a cost bar, each scaled to the largest instance. — */
+let USAGE_WIN=0;
+const MODEL_HUES=[212,28,150,268,92,340,48,190];
+function usageWindow(sec){
+  USAGE_WIN=sec;
+  document.querySelectorAll('#uwin button').forEach(b=>b.classList.toggle('on',(+b.dataset.w)===sec));
+  loadUsageChart();
+}
+async function loadUsageChart(){
+  const el=document.getElementById('usagechart'); if(!el)return;
+  const since=USAGE_WIN?Math.floor(Date.now()/1000)-USAGE_WIN:0;
+  let rows=[]; try{rows=(await (await fetch('/api/usage-by-model?since='+since)).json()).rows||[];}catch(e){el.textContent='usage unavailable';return;}
+  if(!rows.length){el.textContent='no LLM calls in this window';return;}
+  const models=[]; rows.forEach(r=>{if(models.indexOf(r.model)<0)models.push(r.model)});
+  const col=m=>`hsl(${MODEL_HUES[models.indexOf(m)%MODEL_HUES.length]} 55% ${models.indexOf(m)>=MODEL_HUES.length?35:50}%)`;
+  const inst={};
+  rows.forEach(r=>{const i=inst[r.instance]||(inst[r.instance]={name:r.instance,tok:0,cost:0,calls:0,parts:[]});
+    i.tok+=r.in+r.out; i.cost+=r.cost; i.calls+=r.calls; i.parts.push(r);});
+  const list=Object.values(inst).sort((a,b)=>b.tok-a.tok);
+  const maxT=Math.max(...list.map(i=>i.tok),1), maxC=Math.max(...list.map(i=>i.cost),1e-9);
+  const totT=list.reduce((s,i)=>s+i.tok,0), totC=list.reduce((s,i)=>s+i.cost,0);
+  const cell=(l,v)=>`<td data-label="${l}">${v}</td>`;
+  el.innerHTML=`<table class=table><thead><tr><th style="width:18%">Instance</th><th>Tokens by model</th><th style="width:9%;text-align:right">Tokens</th><th style="width:24%">Cost</th><th style="width:7%;text-align:right">Calls</th></tr></thead><tbody>`+
+    list.map(i=>`<tr>${cell('Instance',`<b style="font-family:var(--font-heading)">${escT(i.name)}</b>`)}`+
+      cell('Tokens by model',`<div style="display:flex;height:14px;width:${Math.max(1,100*i.tok/maxT).toFixed(1)}%;min-width:2px;border-radius:3px;overflow:hidden">`+
+        i.parts.sort((a,b)=>(b.in+b.out)-(a.in+a.out)).map(p=>`<div title="${esc(p.model)}: ${fmtTok(p.in)} in / ${fmtTok(p.out)} out · ${fmtCost(p.cost)}" style="width:${(100*(p.in+p.out)/Math.max(i.tok,1)).toFixed(2)}%;background:${col(p.model)}"></div>`).join('')+`</div>`)+
+      cell('Tokens',`<span style="font-variant-numeric:tabular-nums;font-size:12px;float:right">${fmtTok(i.tok)}</span>`)+
+      cell('Cost',`<div style="display:flex;align-items:center;gap:8px;font-size:12px"><span style="font-variant-numeric:tabular-nums;min-width:52px">${fmtCost(i.cost)}</span>${_bar(i.cost,maxC,'var(--color-accent)')}</div>`)+
+      cell('Calls',`<span style="font-variant-numeric:tabular-nums;font-size:12px;float:right">${i.calls}</span>`)+`</tr>`).join('')+
+    `</tbody><tfoot><tr><td class=text-muted style="font-size:12px" colspan=2>${list.length} instances · ${models.length} models</td><td style="text-align:right;font-size:12px;font-variant-numeric:tabular-nums">${fmtTok(totT)}</td><td style="font-size:12px;font-variant-numeric:tabular-nums">${fmtCost(totC)}</td><td></td></tr></tfoot></table>`+
+    `<div style="display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:10px;font-size:12px">`+
+    models.map(m=>{const t=rows.filter(r=>r.model===m).reduce((s,r)=>s+r.in+r.out,0), c=rows.filter(r=>r.model===m).reduce((s,r)=>s+r.cost,0);
+      return `<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:2px;background:${col(m)}"></span><span class=mono>${escT(m)}</span><span class=text-muted style="font-variant-numeric:tabular-nums">${fmtTok(t)} · ${fmtCost(c)}</span></span>`}).join('')+`</div>`;
+}
 let ACT_CUR='', ACT_EVENTS=[], ACT_WIN=0;
 async function openActivity(name){
   ACT_CUR=name;
@@ -1184,7 +1219,7 @@ window.onload=()=>{
     if(t==='tasks'&&!TK_EDIT)loadTasks();
     else if(t==='missions')loadMissions();
     else if(t==='policy')loadPolicy(true);
-    else if(t==='resources')loadResources();
+    else if(t==='resources'){loadResources();loadUsageChart();}
     else if(t==='instances')refreshUsage();
   },15000);
   document.getElementById('actdlg').onclick=e=>{if(e.target.id==='actdlg')actClose()};

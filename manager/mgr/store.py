@@ -292,6 +292,32 @@ def usage_summary():
     return out
 
 
+_EPHEMERAL_RE = re.compile(r"^task-[0-9a-f]{6}$")
+
+
+def usage_by_model(since=0):
+    """Tokens and cost per instance AND model since `since` (epoch), for the
+    chart in the Resources tab. Ephemeral task VMs (task-xxxxxx) fold into
+    one row "tasks", else a hundred one-shot names would drown the chart."""
+    rows = {}
+    try:
+        with _hist_lock, _hist_conn() as c:
+            for inst, model, calls, pt, ct, cost in c.execute(
+                    "SELECT instance, model, COUNT(*), SUM(prompt_tokens), "
+                    "SUM(completion_tokens), SUM(cost) FROM llm_usage "
+                    "WHERE ts >= ? GROUP BY instance, model", (int(since or 0),)):
+                name = "tasks" if _EPHEMERAL_RE.match(inst or "") else (inst or "?")
+                r = rows.setdefault((name, model or "?"), {"instance": name, "model": model or "?",
+                                                           "calls": 0, "in": 0, "out": 0, "cost": 0.0})
+                r["calls"] += calls or 0; r["in"] += pt or 0; r["out"] += ct or 0; r["cost"] += cost or 0.0
+    except Exception:
+        return []
+    out = sorted(rows.values(), key=lambda r: -(r["in"] + r["out"]))
+    for r in out:
+        r["cost"] = round(r["cost"], 4)
+    return out
+
+
 def usage_for(instance, since=0):
     """Usage of ONE instance since `since` (epoch). For the Activity panel:
     tokens in/out, cost and number of LLM calls in the chosen time window.

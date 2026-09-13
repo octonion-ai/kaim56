@@ -1065,7 +1065,7 @@ def merge_chats(incoming):
 from mgr import store as _store  # noqa: E402
 _store.configure(BASE)
 from mgr.store import (HISTORY_DB, MEMORY_FILE, TASKS_FILE, EMBED_URL, _hist_lock, _hist_conn,  # noqa: E402,F401
-                       usage_add, usage_summary, usage_for, history_add, history_search,
+                       usage_add, usage_summary, usage_for, usage_by_model, history_add, history_search,
                        load_tasks, save_tasks, add_task, update_task, _next_run,
                        _embed, sem_store, sem_search, load_memory, mem_store, mem_recall, with_tasks,
                        turn_start, turn_end, turns_read, turn_trace, turns_prune,
@@ -3737,6 +3737,15 @@ def _rt_tasks(h):
 @ROUTER.get("/api/usage", admin=True)
 def _rt_usage(h):
     return json.dumps(usage_summary()).encode(), "application/json"
+
+
+@ROUTER.get("/api/usage-by-model", admin=True)
+def _rt_usage_by_model(h):
+    try:
+        since = int(_qs(h).get("since", ["0"])[0] or 0)
+    except ValueError:
+        since = 0
+    return h._json({"rows": usage_by_model(since)})
 
 
 @ROUTER.get("/api/gateway", admin=True)

@@ -194,6 +194,17 @@ HTML_TOP = """</head><body>
     <thead><tr><th style="width:22%">Instance</th><th>Status</th><th>vCPU</th><th>RAM (config.)</th><th>RAM (used)</th><th>CPU</th><th>Disk (Overlay)</th></tr></thead>
     <tbody id=resrows><tr><td colspan=7 class=text-muted style="padding:14px">…</td></tr></tbody>
   </table>
+  <div class=sec-head style="margin-top:28px">
+    <div><h6>LLM usage</h6><h3>Tokens &amp; cost per instance</h3></div>
+    <div class=actwin id=uwin>
+      <button data-w=86400 onclick="usageWindow(86400)">24h</button>
+      <button data-w=604800 onclick="usageWindow(604800)">7d</button>
+      <button data-w=2592000 onclick="usageWindow(2592000)">30d</button>
+      <button data-w=0 class=on onclick="usageWindow(0)">All</button>
+    </div>
+  </div>
+  <div class=text-muted style="font-size:12px;margin:-6px 0 12px">Tokens (in + out) stacked by model, cost as billed by the provider &#183; one-shot task VMs are summed as &#8220;tasks&#8221;.</div>
+  <div id=usagechart class=text-muted style="font-size:13px">…</div>
 </section>
 
 <section class="screen" id=s-models>
@@ -601,7 +612,7 @@ HTML_BOTTOM = """
   <code>create_task</code> instead of doing it itself. Only the orchestrator (env <code>TASK_ADMIN</code>)
   gets the <code>list_tasks</code>/<code>delete_task</code>/<code>edit_task</code> tools, so it can prune or
   reschedule the queue itself; the matching <code>/api/task-delete</code> and <code>/api/task-edit</code> routes
-  are gated to that instance. <code>llm_usage</code> in the same DB feeds the per-instance spend counter and the Activity panel&#8217;s per-window usage (<code>/api/usage/&#8249;name&#8250;?since=</code>): tokens are summed per time window, not attributed to single audit lines (a turn triggers 0..N tool calls).</p></div>
+  are gated to that instance. <code>llm_usage</code> in the same DB feeds the per-instance spend counter and the Activity panel&#8217;s per-window usage (<code>/api/usage/&#8249;name&#8250;?since=</code>) and the Resources tab&#8217;s tokens-by-model chart (<code>/api/usage-by-model?since=</code>, task VMs folded into &#8220;tasks&#8221;): tokens are summed per time window, not attributed to single audit lines (a turn triggers 0..N tool calls).</p></div>
 
   <div class="card blueprint"><span class=card-title>Voice</span>
   <p class=card-body>Docker container bound to 127.0.0.1:8770, reachable only through the
