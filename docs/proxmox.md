@@ -90,7 +90,9 @@ instance from a template. A second `./install.sh` run updates.
 ## 5. Network and firewall
 
 - The microVMs sit on a private `/30` each and reach the internet through NAT
-  on the VM's default interface (`ens18` on Proxmox; detected, not configured).
+  on the VM's default interface (`ens18` on Proxmox). The installer detects it from
+  the default route and writes it into the service unit; a line `HOSTIF=<nic>` in
+  `/etc/firecracker-manager.env` overrides it and survives updates.
   Nothing needs to change on the bridge, no promiscuous mode.
 - If the Proxmox VM firewall is on, allow **TCP 8700** in (the manager). The
   phone and the desktop client come in over iroh and need no port at all. For
