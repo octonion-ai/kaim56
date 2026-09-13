@@ -6,7 +6,7 @@ history — `git log -p -- manager/CHANGELOG.md` before 2026-09-08 — and in th
 commit messages.
 
 ## 2026-09-13
-- Resources tab: tokens per instance stacked by model plus cost and calls per instance (24h/7d/30d/all), legend with per-model totals; `GET /api/usage-by-model?since=`; one-shot task VMs are summed as „tasks“
+- Resources tab: tokens in and out per instance (separate bars, each stacked by model on its own scale) plus cost and calls per instance (24h/7d/30d/all), legend with per-model totals; `GET /api/usage-by-model?since=`; one-shot task VMs are summed as „tasks“
 - Chat: choosing another instance in the dropdown opens that instance's newest chat (or an empty one) instead of re-pointing the open chat at it
 - Chat session panel drops the „Commands“ cell (the / picker already lists every command)
 

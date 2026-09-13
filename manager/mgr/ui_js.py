@@ -199,23 +199,25 @@ async function loadUsageChart(){
   const models=[]; rows.forEach(r=>{if(models.indexOf(r.model)<0)models.push(r.model)});
   const col=m=>`hsl(${MODEL_HUES[models.indexOf(m)%MODEL_HUES.length]} 55% ${models.indexOf(m)>=MODEL_HUES.length?35:50}%)`;
   const inst={};
-  rows.forEach(r=>{const i=inst[r.instance]||(inst[r.instance]={name:r.instance,tok:0,cost:0,calls:0,parts:[]});
-    i.tok+=r.in+r.out; i.cost+=r.cost; i.calls+=r.calls; i.parts.push(r);});
-  const list=Object.values(inst).sort((a,b)=>b.tok-a.tok);
-  const maxT=Math.max(...list.map(i=>i.tok),1), maxC=Math.max(...list.map(i=>i.cost),1e-9);
-  const totT=list.reduce((s,i)=>s+i.tok,0), totC=list.reduce((s,i)=>s+i.cost,0);
+  rows.forEach(r=>{const i=inst[r.instance]||(inst[r.instance]={name:r.instance,tin:0,tout:0,cost:0,calls:0,parts:[]});
+    i.tin+=r.in; i.tout+=r.out; i.cost+=r.cost; i.calls+=r.calls; i.parts.push(r);});
+  const list=Object.values(inst).sort((a,b)=>(b.tin+b.tout)-(a.tin+a.tout));
+  const maxI=Math.max(...list.map(i=>i.tin),1), maxO=Math.max(...list.map(i=>i.tout),1), maxC=Math.max(...list.map(i=>i.cost),1e-9);
+  const totI=list.reduce((s,i)=>s+i.tin,0), totO=list.reduce((s,i)=>s+i.tout,0), totC=list.reduce((s,i)=>s+i.cost,0);
   const cell=(l,v)=>`<td data-label="${l}">${v}</td>`;
-  el.innerHTML=`<table class=table><thead><tr><th style="width:18%">Instance</th><th>Tokens by model</th><th style="width:9%;text-align:right">Tokens</th><th style="width:24%">Cost</th><th style="width:7%;text-align:right">Calls</th></tr></thead><tbody>`+
+  /* in and out each on their own scale (out is ~1% of in): a stacked bar by model, the figure beside it */
+  const stack=(i,key,max)=>`<div style="display:flex;align-items:center;gap:8px;font-size:12px"><span style="font-variant-numeric:tabular-nums;min-width:48px;text-align:right">${fmtTok(i[key==='in'?'tin':'tout'])}</span>`+
+    `<div style="display:flex;height:12px;flex:0 0 ${Math.max(1,100*i[key==='in'?'tin':'tout']/max).toFixed(1)}%;max-width:calc(100% - 56px);min-width:2px;border-radius:3px;overflow:hidden">`+
+    i.parts.filter(p=>p[key]>0).sort((a,b)=>b[key]-a[key]).map(p=>`<div title="${esc(p.model)}: ${fmtTok(p.in)} in / ${fmtTok(p.out)} out · ${fmtCost(p.cost)}" style="width:${(100*p[key]/Math.max(i[key==='in'?'tin':'tout'],1)).toFixed(2)}%;background:${col(p.model)}"></div>`).join('')+`</div></div>`;
+  el.innerHTML=`<table class=table><thead><tr><th style="width:16%">Instance</th><th style="width:28%">Tokens in (by model)</th><th style="width:28%">Tokens out (by model)</th><th style="width:20%">Cost</th><th style="width:8%;text-align:right">Calls</th></tr></thead><tbody>`+
     list.map(i=>`<tr>${cell('Instance',`<b style="font-family:var(--font-heading)">${escT(i.name)}</b>`)}`+
-      cell('Tokens by model',`<div style="display:flex;height:14px;width:${Math.max(1,100*i.tok/maxT).toFixed(1)}%;min-width:2px;border-radius:3px;overflow:hidden">`+
-        i.parts.sort((a,b)=>(b.in+b.out)-(a.in+a.out)).map(p=>`<div title="${esc(p.model)}: ${fmtTok(p.in)} in / ${fmtTok(p.out)} out · ${fmtCost(p.cost)}" style="width:${(100*(p.in+p.out)/Math.max(i.tok,1)).toFixed(2)}%;background:${col(p.model)}"></div>`).join('')+`</div>`)+
-      cell('Tokens',`<span style="font-variant-numeric:tabular-nums;font-size:12px;float:right">${fmtTok(i.tok)}</span>`)+
+      cell('Tokens in',stack(i,'in',maxI))+cell('Tokens out',stack(i,'out',maxO))+
       cell('Cost',`<div style="display:flex;align-items:center;gap:8px;font-size:12px"><span style="font-variant-numeric:tabular-nums;min-width:52px">${fmtCost(i.cost)}</span>${_bar(i.cost,maxC,'var(--color-accent)')}</div>`)+
       cell('Calls',`<span style="font-variant-numeric:tabular-nums;font-size:12px;float:right">${i.calls}</span>`)+`</tr>`).join('')+
-    `</tbody><tfoot><tr><td class=text-muted style="font-size:12px" colspan=2>${list.length} instances · ${models.length} models</td><td style="text-align:right;font-size:12px;font-variant-numeric:tabular-nums">${fmtTok(totT)}</td><td style="font-size:12px;font-variant-numeric:tabular-nums">${fmtCost(totC)}</td><td></td></tr></tfoot></table>`+
+    `</tbody><tfoot><tr><td class=text-muted style="font-size:12px">${list.length} instances · ${models.length} models</td><td style="font-size:12px;font-variant-numeric:tabular-nums;padding-left:8px">${fmtTok(totI)} in</td><td style="font-size:12px;font-variant-numeric:tabular-nums;padding-left:8px">${fmtTok(totO)} out</td><td style="font-size:12px;font-variant-numeric:tabular-nums">${fmtCost(totC)}</td><td></td></tr></tfoot></table>`+
     `<div style="display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:10px;font-size:12px">`+
-    models.map(m=>{const t=rows.filter(r=>r.model===m).reduce((s,r)=>s+r.in+r.out,0), c=rows.filter(r=>r.model===m).reduce((s,r)=>s+r.cost,0);
-      return `<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:2px;background:${col(m)}"></span><span class=mono>${escT(m)}</span><span class=text-muted style="font-variant-numeric:tabular-nums">${fmtTok(t)} · ${fmtCost(c)}</span></span>`}).join('')+`</div>`;
+    models.map(m=>{const rs=rows.filter(r=>r.model===m), ti=rs.reduce((s,r)=>s+r.in,0), to=rs.reduce((s,r)=>s+r.out,0), c=rs.reduce((s,r)=>s+r.cost,0);
+      return `<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:2px;background:${col(m)}"></span><span class=mono>${escT(m)}</span><span class=text-muted style="font-variant-numeric:tabular-nums">${fmtTok(ti)} in · ${fmtTok(to)} out · ${fmtCost(c)}</span></span>`}).join('')+`</div>`;
 }
 let ACT_CUR='', ACT_EVENTS=[], ACT_WIN=0;
 async function openActivity(name){

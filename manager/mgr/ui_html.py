@@ -203,7 +203,7 @@ HTML_TOP = """</head><body>
       <button data-w=0 class=on onclick="usageWindow(0)">All</button>
     </div>
   </div>
-  <div class=text-muted style="font-size:12px;margin:-6px 0 12px">Tokens (in + out) stacked by model, cost as billed by the provider &#183; one-shot task VMs are summed as &#8220;tasks&#8221;.</div>
+  <div class=text-muted style="font-size:12px;margin:-6px 0 12px">Tokens in and out, each stacked by model on its own scale, cost as billed by the provider &#183; one-shot task VMs are summed as &#8220;tasks&#8221;.</div>
   <div id=usagechart class=text-muted style="font-size:13px">…</div>
 </section>
 
