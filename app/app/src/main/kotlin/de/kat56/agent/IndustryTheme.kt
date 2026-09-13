@@ -1,18 +1,21 @@
+// kAIm56 KatAgent — Android client for the kAIm56 agent platform
+// Copyright (C) 2026 Ulrich Neidel
+// SPDX-License-Identifier: AGPL-3.0-or-later
 package de.kat56.agent
 
-// Colors, type and edges from the "KatAgent Prototype" (claude.ai/design).
+// Farben, Schrift und Kanten aus dem Prototyp "KatAgent Prototype" (claude.ai/design).
 //
-// This prototype replaces the Industry tokens that stood here before. It is the
-// newer template and was drawn explicitly for THIS app, so it wins wherever it
-// conflicts:
-//   Type      IBM Plex Sans / IBM Plex Mono   instead of Barlow / Barlow Condensed
-//   Canvas    dark (#0E1218)                  instead of slate-on-light
-//   Edges     rounded (10-22 px)              instead of consistently square
-//   Frame     hairline without register marks instead of blueprint corners
+// Dieser Prototyp loest die Industry-Tokens ab, die hier vorher standen. Er ist
+// die neuere Vorlage und ausdruecklich fuer DIESE App gezeichnet, also gewinnt
+// er, wo er widerspricht:
+//   Schrift   IBM Plex Sans / IBM Plex Mono   statt Barlow / Barlow Condensed
+//   Band      dunkel (#0E1218)                statt Slate-auf-Hell
+//   Kanten    rund (10-22 px)                 statt durchgehend eckig
+//   Rahmen    Haarlinie ohne Registermarken   statt Blueprint-Ecken
 //
-// The prototype is defined in exactly ONE theme (dark="true", #0E1218). There is
-// no light theme there — so the app always runs dark rather than inventing a
-// second palette.
+// Der Prototyp ist in genau EINEM Band definiert (dark="true", #0E1218). Ein
+// helles Band steht dort nicht — die App laeuft deshalb immer dunkel, statt
+// eine zweite Palette zu erfinden.
 
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Shapes
@@ -39,25 +42,25 @@ val PlexMono = FontFamily(
 )
 
 /**
- * The prototype's color values, 1:1. Named by role, not by hue, so that
- * changes to the template affect exactly one place here.
+ * Die Farbwerte des Prototyps, 1:1. Namen nach Rolle, nicht nach Ton, damit
+ * Aenderungen an der Vorlage hier genau eine Stelle treffen.
  */
 object Kat {
-    val bg = Color(0xFF0E1218)            // screen background
-    val surface = Color(0xFF171D26)       // card, menu, agent bubble, input
-    val elevated = Color(0xFF12161D)      // drawer, attachment sheet
-    val tile = Color(0xFF1B2430)          // avatar/icon tile, inactive send button
+    val bg = Color(0xFF0E1218)            // Bildschirmgrund
+    val surface = Color(0xFF171D26)       // Karte, Menue, Agenten-Blase, Eingabe
+    val elevated = Color(0xFF12161D)      // Schublade, Anhang-Blatt
+    val tile = Color(0xFF1B2430)          // Avatar-/Icon-Kachel, inaktiver Senden-Knopf
     val tileBorder = Color(0xFF26303E)
     val border = Color(0xFF262F3C)
     val borderFocus = Color(0xFF35507A)
 
-    val accent = Color(0xFF2D5C96)        // filled action, own message
+    val accent = Color(0xFF2D5C96)        // gefuellte Aktion, eigene Nachricht
     val accentHover = Color(0xFF356BAD)
-    val accentText = Color(0xFF7FB0E8)    // accent on a dark background
+    val accentText = Color(0xFF7FB0E8)    // Akzent auf dunklem Grund
     val accentBright = Color(0xFFA9CBF2)
     val onAccent = Color(0xFFF0F5FB)
-    val chipSel = Color(0xFF20304A)       // selected chip / selected preset
-    val rowSel = Color(0xFF1B2836)        // open chat in the drawer
+    val chipSel = Color(0xFF20304A)       // gewaehlter Chip / gewaehltes Preset
+    val rowSel = Color(0xFF1B2836)        // offener Chat in der Schublade
 
     val text = Color(0xFFE8ECF2)
     val textStrong = Color(0xFFDCE3EC)
@@ -70,7 +73,7 @@ object Kat {
     val green = Color(0xFF4CC38A)
     val red = Color(0xFFE06C75)
 
-    // rgba(255,255,255,a) from the template
+    // rgba(255,255,255,a) aus der Vorlage
     val hairline = Color(0x0FFFFFFF)      // 0.06
     val hairlineStrong = Color(0x12FFFFFF) // 0.07
     val hover = Color(0x0DFFFFFF)         // 0.05
@@ -78,8 +81,8 @@ object Kat {
     val scrim = Color(0x80000000)         // 0.5
 
     /**
-     * Agent colors from the template. Unknown names stay neutral — exactly
-     * like in the prototype (`agentColor[c.agent] || '#8A94A6'`).
+     * Agentenfarben aus der Vorlage. Unbekannte Namen bleiben neutral — genau
+     * wie im Prototyp (`agentColor[c.agent] || '#8A94A6'`).
      */
     fun agent(name: String): Color = when (name) {
         "orchestrator" -> Color(0xFF7FB0E8)
@@ -110,8 +113,8 @@ val KatColors = darkColorScheme(
 )
 
 /**
- * The radii the prototype actually names: 10 px on input fields and menu rows,
- * 14 px on cards, 18 px on chips, 22 px on the round buttons.
+ * Die Radien, die der Prototyp tatsaechlich nennt: 10 px an Eingabefeldern und
+ * Menuezeilen, 14 px an Karten, 18 px an Chips, 22 px an den runden Knoepfen.
  */
 val KatShapes = Shapes(
     extraSmall = RoundedCornerShape(8.dp),
@@ -128,9 +131,9 @@ private fun sans(size: Double, weight: FontWeight = FontWeight.Normal, lh: Doubl
     )
 
 /**
- * The sizes as given in the template: 17/600 in the header, 15 in the bubble,
- * 14.5 in list rows, 13.5 on chips, 12 on subrows, 11 in the footnote.
- * 11.5/600 uppercase with 0.08em tracking is the section title.
+ * Die Groessen stehen so in der Vorlage: 17/600 im Kopf, 15 in der Blase,
+ * 14.5 in Listenzeilen, 13.5 an den Chips, 12 an Unterzeilen, 11 an der
+ * Fussnote. 11.5/600 versal mit 0.08em Sperrung ist der Abschnittstitel.
  */
 val KatTypography = Typography(
     displayLarge = sans(32.0, FontWeight.SemiBold, 1.15, -0.32),
@@ -147,6 +150,6 @@ val KatTypography = Typography(
     bodySmall = sans(13.0, FontWeight.Normal, 1.45),
     labelLarge = sans(14.0, FontWeight.SemiBold, 1.3),
     labelMedium = sans(12.0, FontWeight.Normal, 1.35),
-    // section title: uppercase, letter-spaced
+    // Abschnittstitel: versal, gesperrt
     labelSmall = sans(11.5, FontWeight.SemiBold, 1.3, 0.92),
 )

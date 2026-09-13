@@ -1,3 +1,6 @@
+// kAIm56 KatAgent — Android client for the kAIm56 agent platform
+// Copyright (C) 2026 Ulrich Neidel
+// SPDX-License-Identifier: AGPL-3.0-or-later
 package de.kat56.agent
 
 import android.content.Context
@@ -12,8 +15,8 @@ import com.google.ai.edge.litertlm.SamplerConfig
 import kotlinx.coroutines.flow.collect
 import java.io.File
 
-/** On-device LLM via LiteRT-LM. Loads .litertlm models (incl. Gemma 4).
- *  gemma-3n/gemma-4 are multimodal -> optional image input. */
+/** On-Device-LLM via LiteRT-LM. Laedt .litertlm-Modelle (inkl. Gemma 4).
+ *  gemma-3n/gemma-4 sind multimodal -> optionaler Bild-Input. */
 class LocalGemma(private val context: Context) {
     private var engine: Engine? = null
     var loadedPath: String = ""
@@ -21,13 +24,13 @@ class LocalGemma(private val context: Context) {
 
     fun isReady(): Boolean = engine != null
 
-    /** Load a model (path to a .litertlm file). May take several seconds. */
+    /** Modell laden (Pfad auf eine .litertlm-Datei). Kann mehrere Sekunden dauern. */
     fun load(modelPath: String) {
         close()
         val cfg = EngineConfig(
             modelPath = modelPath,
             backend = Backend.CPU(),
-            visionBackend = Backend.CPU(),   // enable image input (multimodal)
+            visionBackend = Backend.CPU(),   // Bild-Input (multimodal) aktivieren
         )
         val e = Engine(cfg)
         e.initialize()
@@ -35,11 +38,11 @@ class LocalGemma(private val context: Context) {
         loadedPath = modelPath
     }
 
-    /** Streaming: onPartial for each chunk, onDone at the end. */
-    /** Streaming via Flow: calls onPartial per token; returns when finished.
-     *  The caller then sets 'busy=false' (in finally) -> no longer hangs. */
+    /** Streaming: onPartial fuer jedes Teilstueck, am Ende onDone. */
+    /** Streaming per Flow: ruft onPartial je Token; kehrt zurueck wenn fertig.
+     *  Der Aufrufer setzt danach 'busy=false' (im finally) -> haengt nicht mehr. */
     suspend fun generateStreaming(prompt: String, image: Bitmap?, onPartial: (String) -> Unit) {
-        val eng = engine ?: throw IllegalStateException("No model loaded.")
+        val eng = engine ?: throw IllegalStateException("Kein Modell geladen.")
         val conversation = eng.createConversation(
             ConversationConfig(samplerConfig = SamplerConfig(topK = 40, topP = 0.95, temperature = 0.8))
         )

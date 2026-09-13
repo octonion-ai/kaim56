@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Tests the glasses' device side without hardware. Lua is not on the host,
-# hence the container (alpine + lua5.4).
+# Testet die Geraeteseite der Brille ohne Hardware. Lua liegt nicht auf dem
+# Host, deshalb im Container (alpine + lua5.4).
 set -e
 cd "$(dirname "$0")/../.."
 docker run --rm -v "$PWD:/w" -w /w alpine:latest \

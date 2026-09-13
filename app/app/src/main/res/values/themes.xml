@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- The prototype is drawn dark only (#0E1218). Window and status-bar
-         backgrounds are pinned to it, otherwise the light Material background
-         flashes through at startup. -->
+    <!-- Der Prototyp ist nur dunkel gezeichnet (#0E1218). Fenster- und
+         Statusleistengrund werden fest darauf gesetzt, sonst blitzt beim Start
+         der helle Material-Grund durch. -->
     <style name="Theme.KatAgent" parent="Theme.Material3.Dark.NoActionBar">
         <item name="android:windowBackground">@color/kat_bg</item>
         <item name="android:statusBarColor">@color/kat_bg</item>

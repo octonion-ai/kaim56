@@ -60,9 +60,7 @@ iroh-gw/target/
 iroh-gw/.out/
 
 # native iroh module: generated per-ABI libs + UniFFI Kotlin bindings
-app/src/main/jniLibs/
 app/app/src/main/jniLibs/
-app/src/main/kotlin/uniffi/
 app/app/src/main/kotlin/uniffi/
 app/iroh-android/.out/
 

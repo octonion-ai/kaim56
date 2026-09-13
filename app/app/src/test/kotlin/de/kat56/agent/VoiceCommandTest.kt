@@ -2,9 +2,8 @@
 // Copyright (C) 2026 Ulrich Neidel
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Recognising voice commands — and above all: NOT recognising them where a
-// real question for the agent stands. The expensive mistake would be to
-// swallow a question.
+// Sprachbefehle erkennen — und vor allem: NICHT erkennen, wo eine echte Frage
+// an den Agenten steht. Der teure Fehler waere, eine Frage zu verschlucken.
 package de.kat56.agent
 
 import org.junit.Assert.assertEquals
@@ -14,58 +13,58 @@ import org.junit.Test
 class VoiceCommandTest {
 
     @Test
-    fun `the bare command is recognised`() {
+    fun `der blanke Befehl wird erkannt`() {
         assertEquals(VoiceCommand.Action.SCREENSHOT, VoiceCommand.parse("Screenshot")?.action)
         assertEquals(VoiceCommand.Action.PHOTO, VoiceCommand.parse("Foto")?.action)
         assertEquals(VoiceCommand.Action.STOP, VoiceCommand.parse("Stopp!")?.action)
     }
 
     @Test
-    fun `politeness and verbs in front do not get in the way`() {
+    fun `Hoeflichkeit und Verben davor stoeren nicht`() {
         val screenshots = listOf(
-            "Please take a screenshot",
-            "take a screenshot",
-            "Can you please take a screenshot",
+            "Mach mal bitte einen Screenshot",
+            "mach einen screenshot",
+            "Kannst du bitte einen Screenshot machen",
             "Bildschirmfoto",
         )
         for (s in screenshots) {
-            assertEquals("not recognised: '$s'",
+            assertEquals("nicht erkannt: '$s'",
                 VoiceCommand.Action.SCREENSHOT, VoiceCommand.parse(s)?.action)
         }
-        for (s in listOf("nimm ein Foto", "Take a photo", "take a picture")) {
-            assertEquals("not recognised: '$s'",
+        for (s in listOf("nimm ein Foto", "Take a photo", "mach ein Bild aufnehmen")) {
+            assertEquals("nicht erkannt: '$s'",
                 VoiceCommand.Action.PHOTO, VoiceCommand.parse(s)?.action)
         }
     }
 
     @Test
-    fun `the question spoken along is preserved`() {
-        val p = VoiceCommand.parse("Screenshot, what does it say?")
+    fun `die mitgesprochene Frage bleibt erhalten`() {
+        val p = VoiceCommand.parse("Screenshot, was steht da?")
         assertEquals(VoiceCommand.Action.SCREENSHOT, p?.action)
-        assertEquals("what does it say", p?.rest)
+        assertEquals("was steht da", p?.rest)
     }
 
     @Test
-    fun `fillers before the remaining question fall away`() {
-        assertEquals("what is that", VoiceCommand.parse("Photo and what is that?")?.rest)
+    fun `Fuellwoerter vor der Restfrage fallen weg`() {
+        assertEquals("was ist das", VoiceCommand.parse("Foto und was ist das?")?.rest)
     }
 
     @Test
-    fun `real questions for the agent are NOT intercepted`() {
-        // This is the expensive failure: a question that gets stuck in the phone.
+    fun `echte Fragen an den Agenten werden NICHT abgefangen`() {
+        // Das ist der teure Fehlerfall: eine Frage, die im Telefon haengen bleibt.
         for (s in listOf(
-            "What was on yesterday's screenshot?",
-            "Send me the photo from the hike",
-            "Explain to me how a screenshot works",
-            "What is the weather?",
+            "Was war auf dem Screenshot von gestern?",
+            "Schick mir das Foto von der Wanderung",
+            "Erklaer mir, wie ein Screenshot funktioniert",
+            "Wie ist das Wetter?",
             "Stoppuhr auf drei Minuten stellen",
         )) {
-            assertNull("wrongly taken as a command: '$s'", VoiceCommand.parse(s))
+            assertNull("faelschlich als Befehl erkannt: '$s'", VoiceCommand.parse(s))
         }
     }
 
     @Test
-    fun `empty input or bare fillers are not a command`() {
+    fun `leere oder blosse Floskeln sind kein Befehl`() {
         assertNull(VoiceCommand.parse(""))
         assertNull(VoiceCommand.parse("   "))
         assertNull(VoiceCommand.parse("bitte"))

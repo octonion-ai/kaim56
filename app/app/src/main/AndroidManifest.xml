@@ -5,12 +5,12 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- Voice control: record and send to the manager. -->
+    <!-- Sprachbedienung: aufnehmen und zum Manager schicken. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <!-- Brilliant glasses (Halo/Frame) over Bluetooth LE. neverForLocation:
-         we look for a specific device, not for locations — which drops the
-         location permission from Android 12 on. Below that the system still
-         demands it for scanning, hence the legacy entries with maxSdkVersion. -->
+    <!-- Brilliant-Brille (Halo/Frame) ueber Bluetooth LE. neverForLocation:
+         wir suchen ein bestimmtes Geraet, keine Standorte — damit entfaellt
+         ab Android 12 die Standortberechtigung. Darunter verlangt das System
+         sie trotzdem fuer den Scan, deshalb die Altlast mit maxSdkVersion. -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
         android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
@@ -29,13 +29,30 @@
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.KatAgent">
 
+        <!-- singleTask: der Assistent wird aus jeder Lage heraus gerufen. Ohne
+             das stapelt sich bei jedem Druck auf die Ein-Aus-Taste eine
+             weitere Kopie der App, jede mit eigenem Chatzustand. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Assistent: damit KatAgent unter Einstellungen > Apps >
+                 Standard-Apps > Digitaler Assistent auftaucht und beim langen
+                 Druck auf die Ein-Aus-Taste startet. ASSIST ist der Weg ueber
+                 die Aktivitaet; VOICE_COMMAND meldet zusaetzlich die
+                 Sprachfaehigkeit an. -->
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VOICE_COMMAND" />
+                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
 

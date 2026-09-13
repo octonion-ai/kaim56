@@ -6,16 +6,28 @@ Small Android app with **two modes**:
    `POST {server-url}/i/{instance}/api/chat` (body `{"message": …}` → `{"reply": …}`), basic auth.
 2. **On-device (Gemma)** — runs a **Gemma model locally** on the phone (MediaPipe LLM Inference, offline, works without network/VPN too, e.g. on the go).
 
-## Building (without a local Android SDK, via Docker)
+## Building
+
+Layout: this folder is the Gradle root project (`settings.gradle.kts`, plugins),
+`app/` the module, `iroh-android/` the native iroh module (Rust) whose shared
+library and UniFFI Kotlin bindings the module needs before Gradle runs.
+
+Without a local Android SDK, via Docker:
 ```bash
-cd /home/ulrich/katagent
+cd app
+./iroh-android/build-android.sh                               # once, and after lib.rs changes
 docker build -f Dockerfile.build -t katagent-build .          # once (Android SDK + Gradle)
-docker run --rm -v /home/ulrich/katagent:/project \
-  -v katagent-gradle:/root/.gradle katagent-build \
+docker run --rm -v "$PWD":/project -v katagent-gradle:/root/.gradle katagent-build \
   gradle assembleDebug --no-daemon --console=plain
-# Result:
-#   app/build/outputs/apk/debug/app-debug.apk
+# Result: app/build/outputs/apk/debug/app-debug.apk — ship it as katagent-<versionName>.apk
 ```
+
+CI: `.github/workflows/apk.yml` builds the native module and the APK on every
+`v*` tag and attaches `katagent-<versionName>.apk` to the release. The APK is
+signed with the project's stable key from the repository secret
+`KATAGENT_KEYSTORE_B64` (base64 of `keystore/katagent.jks`, gitignored); without
+the secret the workflow signs with a throwaway key and only keeps an artifact,
+because such an APK could not update an installed KatAgent in place.
 
 ## Chat sync
 Chats live in the manager's shared store (`/api/chats`) and are reconciled

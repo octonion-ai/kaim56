@@ -2,15 +2,14 @@
 // Copyright (C) 2026 Ulrich Neidel
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Bluetooth substrate for the glasses: scans, connects, negotiates the MTU,
-// subscribes to notifications and writes packets at the pace of the
-// acknowledgements. The messages themselves are built by Halo.kt — this file
-// only knows bytes.
+// Bluetooth-Unterbau fuer die Brille: sucht, verbindet, handelt die MTU aus,
+// abonniert die Benachrichtigungen und schreibt Pakete im Takt der Quittungen.
+// Die Nachrichten selbst baut Halo.kt — diese Datei kennt nur Bytes.
 //
-// CAUTION, untested: everything here can only be checked with real glasses.
-// Framing, reassembly and the device side are tested separately (HaloTest.kt,
-// tools/halo/test_frame_app.lua); what sits here is the remainder that cannot
-// be proven without hardware.
+// ACHTUNG, ungetestet: alles hier laesst sich erst mit echter Brille pruefen.
+// Rahmung, Zusammensetzen und die Geraeteseite sind separat getestet
+// (HaloTest.kt, tools/halo/test_frame_app.lua); was hier drinsteckt, ist der
+// Rest, der ohne Hardware nicht zu beweisen ist.
 package de.kat56.agent
 
 import android.Manifest
@@ -37,25 +36,26 @@ import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.TimeUnit
 
 /**
- * Connection to a pair of Brilliant glasses.
+ * Verbindung zu einer Brilliant-Brille.
  *
- * Calls to [write] and [writeString] BLOCK until the glasses have acknowledged
- * — they belong on a background thread, never on the main thread. That is
- * deliberate: the glasses set the pace (they acknowledge every packet), and a
- * blocking call makes that cadence visible instead of hiding it behind a queue.
+ * Aufrufe von [write] und [writeString] BLOCKIEREN, bis die Brille quittiert
+ * hat — sie gehoeren auf einen Hintergrund-Thread, nie auf den Haupt-Thread.
+ * Das ist Absicht: die Brille gibt das Tempo vor (sie bestaetigt jedes Paket),
+ * und ein blockierender Aufruf macht diesen Takt sichtbar, statt ihn hinter
+ * einer Warteschlange zu verstecken.
  */
-@SuppressLint("MissingPermission")   // permissions are checked in connect()
+@SuppressLint("MissingPermission")   // Rechte werden in connect() geprueft
 class HaloBle(private val ctx: Context) : HaloLink {
 
     interface Listener {
-        /** connected and ready (MTU negotiated, notifications on). */
+        /** verbunden und bereit (MTU ausgehandelt, Benachrichtigungen an). */
         fun onReady(isHalo: Boolean) {}
         fun onDisconnected(reason: String) {}
-        /** Text from the Lua interpreter (print, error messages). */
+        /** Text aus dem Lua-Interpreter (print, Fehlermeldungen). */
         fun onText(text: String) {}
-        /** A piece of the recording; [done] = the recording has ended. */
+        /** Ein Stueck Mitschnitt; [done] = die Aufnahme ist beendet. */
         fun onAudio(pcm: ByteArray, done: Boolean) {}
-        /** A piece of a photo; [done] = the image is complete. */
+        /** Ein Stueck Foto; [done] = das Bild ist vollstaendig. */
         fun onPhoto(part: ByteArray, done: Boolean) {}
     }
 
@@ -64,27 +64,27 @@ class HaloBle(private val ctx: Context) : HaloLink {
     private var rx: BluetoothGattCharacteristic? = null
     private var listener: Listener? = null
 
-    @Volatile private var negotiatedMtu = 23      // the BLE default until more is negotiated
+    @Volatile private var negotiatedMtu = 23      // BLE-Vorgabe, bis mehr ausgehandelt ist
     @Volatile private var halo = false
     @Volatile private var ready = false
 
     override val mtu: Int get() = negotiatedMtu
     override val isHalo: Boolean get() = halo
 
-    /** Queues of length 1: one step per write. */
+    /** Warteschlangen der Laenge 1: je Schreibvorgang ein Schritt. */
     private val writeDone = ArrayBlockingQueue<Boolean>(1)
     private val acks = ArrayBlockingQueue<Boolean>(1)
     private val connected = ArrayBlockingQueue<Boolean>(1)
-    /** Finished photos — [awaitPhoto] picks them up here. */
+    /** Fertige Fotos — [awaitPhoto] holt sie hier ab. */
     private val photos = ArrayBlockingQueue<ByteArray>(1)
     private val writeLock = Any()
 
     private val audio = Halo.AudioCollector()
     private val photo = Halo.PhotoCollector()
 
-    // ---- Scan and connect ------------------------------------------------
+    // ---- Suchen und verbinden --------------------------------------------
 
-    /** Missing permissions as a list — empty means: good to go. */
+    /** Fehlende Rechte als Liste — leer heisst: es kann losgehen. */
     fun missingPermissions(): List<String> {
         val need = if (Build.VERSION.SDK_INT >= 31)
             listOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
@@ -96,26 +96,26 @@ class HaloBle(private val ctx: Context) : HaloLink {
     }
 
     /**
-     * Finds the nearest glasses and connects. Blocks until done.
-     * Returns: null = connected, otherwise the reason it failed.
+     * Sucht die naechste Brille und verbindet sich. Blockiert bis fertig.
+     * Rueckgabe: null = verbunden, sonst der Grund des Scheiterns.
      */
     fun connect(timeoutMs: Long = 30000, listener: Listener): String? {
         this.listener = listener
-        missingPermissions().let { if (it.isNotEmpty()) return "missing permissions: ${it.joinToString()}" }
+        missingPermissions().let { if (it.isNotEmpty()) return "Rechte fehlen: ${it.joinToString()}" }
         val mgr = ctx.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
-            ?: return "no Bluetooth on this device"
-        val adapter: BluetoothAdapter = mgr.adapter ?: return "no Bluetooth adapter"
-        if (!adapter.isEnabled) return "Bluetooth is off"
+            ?: return "kein Bluetooth auf diesem Geraet"
+        val adapter: BluetoothAdapter = mgr.adapter ?: return "kein Bluetooth-Adapter"
+        if (!adapter.isEnabled) return "Bluetooth ist aus"
 
         val found = ArrayBlockingQueue<BluetoothDevice>(1)
-        val scanner = adapter.bluetoothLeScanner ?: return "scanner not available"
+        val scanner = adapter.bluetoothLeScanner ?: return "Scanner nicht verfuegbar"
         val cb = object : ScanCallback() {
             override fun onScanResult(type: Int, result: ScanResult) {
                 result.device?.let { found.offer(it) }
             }
         }
-        // Only devices offering the glasses service — otherwise you catch
-        // half the living room.
+        // Nur Geraete, die den Brillen-Dienst anbieten — sonst faengt man das
+        // halbe Wohnzimmer ein.
         val filter = ScanFilter.Builder()
             .setServiceUuid(ParcelUuid(UUID.fromString(Halo.SERVICE))).build()
         val settings = ScanSettings.Builder()
@@ -125,12 +125,12 @@ class HaloBle(private val ctx: Context) : HaloLink {
             found.poll(timeoutMs, TimeUnit.MILLISECONDS)
         } finally {
             runCatching { scanner.stopScan(cb) }
-        } ?: return "no glasses found"
+        } ?: return "keine Brille gefunden"
 
         connected.clear()
         gatt = device.connectGatt(ctx, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
         val ok = connected.poll(timeoutMs, TimeUnit.MILLISECONDS)
-        return if (ok == true) null else "the connection did not come up"
+        return if (ok == true) null else "Verbindung nicht zustande gekommen"
     }
 
     fun disconnect() {
@@ -140,43 +140,43 @@ class HaloBle(private val ctx: Context) : HaloLink {
         gatt = null
     }
 
-    // ---- Sending ---------------------------------------------------------
+    // ---- Senden ----------------------------------------------------------
 
     /**
-     * Write one packet and wait for the glasses to acknowledge it. They set the
-     * pace: without the wait their receive buffer overflows.
+     * Ein Paket schreiben und warten, bis die Brille es bestaetigt. Der Takt
+     * kommt von ihr: ohne das Warten laeuft ihr Empfangspuffer ueber.
      */
     override fun write(packet: ByteArray) {
-        val c = tx ?: throw IllegalStateException("not connected")
-        require(ready) { "connection not ready yet" }
+        val c = tx ?: throw IllegalStateException("nicht verbunden")
+        require(ready) { "Verbindung noch nicht bereit" }
         require(packet.size <= Halo.maxPacket(Halo.maxDataLength(negotiatedMtu, halo))) {
-            "packet larger than the negotiated MTU allows"
+            "Paket groesser als die ausgehandelte MTU zulaesst"
         }
         synchronized(writeLock) {
             writeDone.clear(); acks.clear()
             send(c, packet, withResponse = true)
-            check(writeDone.poll(5, TimeUnit.SECONDS) == true) { "the glasses do not confirm the write" }
+            check(writeDone.poll(5, TimeUnit.SECONDS) == true) { "Brille bestaetigt den Schreibvorgang nicht" }
             val ack = acks.poll(5, TimeUnit.SECONDS)
-                ?: throw IllegalStateException("no acknowledgement from the glasses")
-            check(ack) { "the glasses report a receive error" }
+                ?: throw IllegalStateException("keine Quittung der Brille")
+            check(ack) { "Brille meldet einen Fehler beim Empfang" }
         }
     }
 
-    /** A line for the Lua interpreter — without 0x01 and without an ack. */
+    /** Zeile an den Lua-Interpreter — ohne 0x01 und ohne Quittung. */
     override fun writeString(text: String) {
-        val c = tx ?: throw IllegalStateException("not connected")
+        val c = tx ?: throw IllegalStateException("nicht verbunden")
         val bytes = text.toByteArray(Charsets.UTF_8)
-        require(bytes.size <= Halo.maxStringLength(negotiatedMtu, halo)) { "line too long" }
+        require(bytes.size <= Halo.maxStringLength(negotiatedMtu, halo)) { "Zeile zu lang" }
         synchronized(writeLock) {
             writeDone.clear()
             send(c, bytes, withResponse = true)
-            check(writeDone.poll(5, TimeUnit.SECONDS) == true) { "the line was not accepted" }
+            check(writeDone.poll(5, TimeUnit.SECONDS) == true) { "Zeile wurde nicht angenommen" }
         }
     }
 
     @Suppress("DEPRECATION")
     private fun send(c: BluetoothGattCharacteristic, data: ByteArray, withResponse: Boolean) {
-        val g = gatt ?: throw IllegalStateException("not connected")
+        val g = gatt ?: throw IllegalStateException("nicht verbunden")
         val type = if (withResponse) BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
                    else BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
         if (Build.VERSION.SDK_INT >= 33) {
@@ -188,11 +188,11 @@ class HaloBle(private val ctx: Context) : HaloLink {
         }
     }
 
-    // ---- Receiving -------------------------------------------------------
+    // ---- Empfangen -------------------------------------------------------
 
     private fun onNotify(raw: ByteArray) {
         if (!Halo.isDataFrame(raw)) {
-            // Not a data frame -> output of the Lua interpreter.
+            // Kein Datenrahmen -> Ausgabe des Lua-Interpreters.
             listener?.onText(String(raw, Charsets.UTF_8))
             return
         }
@@ -208,7 +208,7 @@ class HaloBle(private val ctx: Context) : HaloLink {
                 if (done) {
                     val jpeg = photo.jpeg()
                     photo.reset()
-                    photos.offer(jpeg)          // a waiting caller gets it
+                    photos.offer(jpeg)          // wartender Aufrufer bekommt es
                     listener?.onPhoto(jpeg, true)
                 } else {
                     listener?.onPhoto(frame.copyOfRange(1, frame.size), false)
@@ -218,15 +218,15 @@ class HaloBle(private val ctx: Context) : HaloLink {
     }
 
     /**
-     * Waits for the next complete photo. Blocks; null = none arrived in time
-     * (camera off, connection gone, the read hangs).
+     * Wartet auf das naechste vollstaendige Foto. Blockiert; null = es kam
+     * keines rechtzeitig (Kamera aus, Verbindung weg, Auslesen haengt).
      */
     fun awaitPhoto(timeoutMs: Long = 20000): ByteArray? {
-        photos.clear()                       // do not hand back an old capture
+        photos.clear()                       // alte Aufnahme nicht zurueckgeben
         return photos.poll(timeoutMs, TimeUnit.MILLISECONDS)
     }
 
-    /** The recording since the last start, as WAV for /api/stt. */
+    /** Der Mitschnitt seit dem letzten Start, als WAV fuer /api/stt. */
     fun recordingAsWav(sampleRate: Int = 8000, bitsPerSample: Int = 16): ByteArray =
         Halo.wav(audio.pcm(), sampleRate, bitsPerSample)
 
@@ -240,7 +240,7 @@ class HaloBle(private val ctx: Context) : HaloLink {
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 ready = false
                 connected.offer(false)
-                listener?.onDisconnected("disconnected (status $status)")
+                listener?.onDisconnected("Verbindung getrennt (Status $status)")
             }
         }
 
@@ -249,7 +249,7 @@ class HaloBle(private val ctx: Context) : HaloLink {
             if (svc == null) { connected.offer(false); return }
             tx = svc.getCharacteristic(UUID.fromString(Halo.CHAR_TX))
             rx = svc.getCharacteristic(UUID.fromString(Halo.CHAR_RX))
-            // Only Halo has the audio channel — that identifies the model.
+            // Nur Halo hat den Audiokanal — daran erkennt man das Modell.
             halo = svc.getCharacteristic(UUID.fromString(Halo.CHAR_AUDIO_TX)) != null
             if (tx == null || rx == null) { connected.offer(false); return }
             g.requestMtu(Halo.MTU_REQUEST)
@@ -257,8 +257,8 @@ class HaloBle(private val ctx: Context) : HaloLink {
 
         override fun onMtuChanged(g: BluetoothGatt, mtuValue: Int, status: Int) {
             negotiatedMtu = mtuValue
-            // Only switch notifications on now: before this, something could
-            // arrive that no longer fits into a packet.
+            // Erst jetzt die Benachrichtigungen einschalten: vorher koennte
+            // schon etwas hereinkommen, das nicht mehr in ein Paket passt.
             val c = rx ?: return
             g.setCharacteristicNotification(c, true)
             val cccd = c.getDescriptor(
@@ -283,7 +283,7 @@ class HaloBle(private val ctx: Context) : HaloLink {
             writeDone.offer(status == BluetoothGatt.GATT_SUCCESS)
         }
 
-        // Android 13+ hands the value along; before that it sits in the characteristic.
+        // Android 13+ liefert den Wert mit, davor steckt er in der Characteristic.
         override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic,
                                              value: ByteArray) = onNotify(value)
 

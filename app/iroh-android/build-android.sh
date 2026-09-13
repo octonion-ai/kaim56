@@ -6,11 +6,11 @@
 #   ./build-android.sh              # arm64 + armv7 + x86_64
 #
 # Output:
-#   app/src/main/jniLibs/<abi>/libkaim_iroh.so
-#   app/src/main/kotlin/uniffi/kaim_iroh/kaim_iroh.kt
+#   app/app/src/main/jniLibs/<abi>/libkaim_iroh.so
+#   app/app/src/main/kotlin/uniffi/kaim_iroh/kaim_iroh.kt
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-APP="$(cd "$HERE/.." && pwd)"                 # app/
+APP="$(cd "$HERE/../app" && pwd)"             # the Gradle module app/app
 JNILIBS="$APP/src/main/jniLibs"
 KOTLIN="$APP/src/main/kotlin"
 
@@ -34,9 +34,3 @@ find "$JNILIBS" -name "libiroh*.so" -delete   # keep only libkaim_iroh.so (self-
 echo "built jniLibs + Kotlin bindings:"
 ls -R "$JNILIBS" 2>/dev/null | head
 ls "$KOTLIN/uniffi/kaim_iroh/" 2>/dev/null || true
-
-# Keep the two app trees in sync (repo has app/ and app/app/).
-if [ -d "$APP/app/src/main" ]; then
-  rsync -a "$JNILIBS/" "$APP/app/src/main/jniLibs/"
-  rsync -a "$KOTLIN/uniffi/" "$APP/app/src/main/kotlin/uniffi/"
-fi

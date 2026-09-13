@@ -1,12 +1,13 @@
-"""The device side against the vendor's Halo emulator.
+"""Geraeteseite gegen den Halo-Emulator des Herstellers.
 
-Unlike tools/halo/test_frame_app.lua (our own fake), our unmodified
-katagent.lua runs here on Brilliant Labs' emulation: a real Lua 5.4 runtime,
-the complete frame.* API, a virtual 256x256 display whose framebuffer can be
-read back. What is injected is exactly what Halo.kt produces -- minus the
-leading 0x01, which the Bluetooth stack strips before the Lua handler sees it.
+Anders als tools/halo/test_frame_app.lua (eigene Attrappe) laeuft hier unser
+unveraendertes katagent.lua auf der Emulation von Brilliant Labs: echte
+Lua-5.4-Laufzeit, die vollstaendige frame.*-API, ein virtuelles 256x256-Display,
+dessen Bildpuffer man auslesen kann. Eingespeist werden genau die Pakete, die
+Halo.kt erzeugt — abzueglich des fuehrenden 0x01, das der Bluetooth-Stapel
+abschneidet, bevor der Lua-Handler sie sieht.
 
-Run (Python with its dependencies only exists in the container):
+Aufruf (Python liegt mit den Abhaengigkeiten nur im Container):
   tools/halo/run-emu-tests.sh
 """
 import shutil
@@ -34,7 +35,7 @@ def check(name, cond, detail=""):
 
 
 def packets(code, payload, max_data=241):
-    """Like Halo.packets(), but without the 0x01 -- that is how the device sees it."""
+    """Wie Halo.packets(), aber ohne das 0x01 — so kommt es beim Geraet an."""
     chunk = max_data - 1
     out, sent, first = [], 0, True
     while True:

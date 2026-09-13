@@ -1,3 +1,6 @@
+// kAIm56 KatAgent — Android client for the kAIm56 agent platform
+// Copyright (C) 2026 Ulrich Neidel
+// SPDX-License-Identifier: AGPL-3.0-or-later
 package de.kat56.agent
 
 import android.annotation.SuppressLint

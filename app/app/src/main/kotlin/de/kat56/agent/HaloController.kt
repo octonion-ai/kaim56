@@ -2,45 +2,45 @@
 // Copyright (C) 2026 Ulrich Neidel
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// The glasses on the agent: connect, upload the Lua modules, click ->
-// recording -> speech recognition -> instance -> reply on the display.
+// Die Brille am Agenten: verbinden, Lua-Module hochladen, Klick -> Mitschnitt
+// -> Spracherkennung -> Instanz -> Antwort aufs Display.
 //
-// Deliberately WITHOUT Android dependencies and without networking: everything
-// that comes from outside (Bluetooth, speech recognition, the agent, the Lua
-// files) sits behind functions the caller provides. That way the whole flow can
-// be walked dry — with HaloDryLink instead of real glasses.
+// Bewusst OHNE Android-Abhaengigkeiten und ohne Netz: alles, was von aussen
+// kommt (Bluetooth, Spracherkennung, der Agent, die Lua-Dateien), steckt hinter
+// Funktionen, die der Aufrufer stellt. Dadurch laesst sich der ganze Ablauf
+// trocken durchspielen — mit HaloDryLink statt echter Brille.
 package de.kat56.agent
 
 /**
- * A fake of the glasses for the dry run: takes the same packets as the real
- * ones, reassembles them and keeps track of what would be on the display. That
- * makes the whole path clickable without hardware.
+ * Attrappe der Brille fuer den Trockenlauf: nimmt dieselben Pakete entgegen wie
+ * die echte, setzt sie wieder zusammen und fuehrt Buch darueber, was auf dem
+ * Display staende. So laesst sich der ganze Weg ohne Hardware durchklicken.
  */
 class HaloDryLink(
     override val mtu: Int = 247,
     override val isHalo: Boolean = true,
-    /** What the camera delivers in the dry run. */
+    /** Was die Kamera im Trockenlauf liefert. */
     private val cannedPhoto: ByteArray = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte()),
 ) : HaloLink {
     private val pending = mutableListOf<ByteArray>()
 
-    /** The last "captured" photo, null while none was triggered. */
+    /** Das zuletzt "aufgenommene" Foto, null solange keins ausgeloest wurde. */
     var photo: ByteArray? = null
         private set
 
-    /** What would currently be on the glasses' display (line by line). */
+    /** Was gerade auf dem Display der Brille stuende (zeilenweise). */
     val display = mutableListOf<String>()
-    /** Uploaded Lua modules, in upload order. */
+    /** Hochgeladene Lua-Module, in der Reihenfolge des Hochladens. */
     val uploaded = mutableListOf<String>()
-    /** Is the microphone running? */
+    /** Laeuft das Mikrofon? */
     var recording = false
         private set
-    /** Every received message as (code, payload) — for tests. */
+    /** Alle empfangenen Nachrichten als (Code, Nutzdaten) — fuer Tests. */
     val messages = mutableListOf<Pair<Int, ByteArray>>()
 
     override fun write(packet: ByteArray) {
         pending.add(packet)
-        // A packet completing a message? Then evaluate and clear.
+        // Ein Paket mit vollstaendiger Nachricht? Dann auswerten und leeren.
         val done = runCatching { Halo.reassemble(pending.toList()) }.getOrNull() ?: return
         pending.clear()
         messages.add(done)
@@ -59,87 +59,87 @@ class HaloDryLink(
     }
 
     override fun writeString(text: String) {
-        // The end of an upload reveals the module name: …open('name.lua','w')…
+        // Das Ende eines Uploads verraet den Modulnamen: …open('name.lua','w')…
         Regex("""open\('([^']+)\.lua'""").find(text)?.let { uploaded.add(it.groupValues[1]) }
     }
 }
 
 /**
- * Flow and state of the glasses integration. Knows neither Bluetooth nor HTTP —
- * the caller hands both in.
+ * Ablauf und Zustand der Brillenanbindung. Kennt weder Bluetooth noch HTTP —
+ * beides reicht der Aufrufer herein.
  */
 class HaloController(
-    /** Supplies the source of a Lua module (from the assets). */
+    /** Liefert den Quelltext eines Lua-Moduls (aus den Assets). */
     private val luaSource: (String) -> String,
-    /** Recording -> recognised text (in the manager: /api/stt). Null = failed. */
+    /** Aufnahme -> erkannter Text (im Manager: /api/stt). Null = fehlgeschlagen. */
     private val transcribe: (ByteArray) -> String?,
-    /** Hand the recognised text to the instance; returns the reply. */
+    /** Erkannten Text an die Instanz geben; liefert die Antwort. */
     private val ask: (String) -> String,
-    /** A question WITH an image for the instance (JPEG as the glasses deliver it). */
+    /** Frage MIT Bild an die Instanz (JPEG, wie es die Brille liefert). */
     private val askWithImage: (String, ByteArray) -> String = { q, _ -> ask(q) },
-    /** Waits for the next finished photo; null = none arrived. */
+    /** Wartet auf das naechste fertige Foto; null = keines gekommen. */
     private val awaitPhoto: (Long) -> ByteArray? = { null },
-    /** Progress for the UI. */
+    /** Fortschritt fuer die Oberflaeche. */
     private val onStatus: (String) -> Unit = {},
 ) {
-    /** Modules that go onto the glasses when connecting. Order matters:
-     *  katagent.lua needs the others at startup. */
+    /** Module, die beim Verbinden auf die Brille wandern. Reihenfolge zaehlt:
+     *  katagent.lua braucht die anderen beim Start. */
     val modules = listOf("data.min", "plain_text.min", "audio.min", "camera.min",
                          "code.min", "katagent")
 
     var session: HaloSession? = null
         private set
 
-    // Measured on the vendor's emulator (tools/halo/emu_test.py), not guessed:
-    // 59 'M' fit side by side across the 256 px width, and 13 lines fit below
-    // each other at 20 px line spacing. A little margin is left.
-    /** Characters per line. */
+    // Am Emulator des Herstellers gemessen (tools/halo/emu_test.py), nicht
+    // geraten: auf die 256 px Breite passen 59 'M' nebeneinander, und bei
+    // 20 px Zeilenabstand 13 Zeilen untereinander. Etwas Rand bleibt.
+    /** Zeichen je Zeile. */
     var columns = 56
-    /** Lines that fit on the display. */
+    /** Zeilen, die auf das Display passen. */
     var rows = 12
 
     fun attach(link: HaloLink) {
         val s = HaloSession(link)
         session = s
-        onStatus("loading modules…")
+        onStatus("Module werden geladen…")
         modules.forEach { s.uploadLua(it, luaSource(it)) }
         s.clear()
-        onStatus("glasses ready")
+        onStatus("Brille bereit")
     }
 
     fun detach() {
         session = null
     }
 
-    /** Start recording (a click on the glasses or a button in the app). */
+    /** Aufnahme starten (Klick an der Brille oder Knopf in der App). */
     fun startListening() {
         val s = session ?: return
-        s.showText("… listening")
+        s.showText("… hört zu")
         s.startAudio()
-        onStatus("recording")
+        onStatus("Aufnahme laeuft")
     }
 
     /**
-     * End the recording and walk the whole path: recording -> speech
-     * recognition -> instance -> reply on the display. Blocks; belongs on a
-     * background thread. Returns the reply or null.
+     * Aufnahme beenden und den ganzen Weg gehen: Mitschnitt -> Spracherkennung
+     * -> Instanz -> Antwort auf das Display. Blockiert; gehoert auf einen
+     * Hintergrund-Thread. Rueckgabe: die Antwort oder null.
      */
     fun stopAndAsk(recordingWav: ByteArray): String? {
         val s = session ?: return null
         s.stopAudio()
-        onStatus("speech recognition…")
+        onStatus("Spracherkennung…")
         val heard = transcribe(recordingWav)
         if (heard.isNullOrBlank()) {
-            s.showText("did not catch that")
-            onStatus("did not catch that")
+            s.showText("nichts verstanden")
+            onStatus("nichts verstanden")
             return null
         }
         return handle(heard)
     }
 
     /**
-     * Carry out one utterance: first check whether a local command is in it
-     * (photo, cancel), otherwise it goes to the instance as a question.
+     * Eine Aeusserung ausfuehren: erst pruefen, ob ein lokaler Befehl darin
+     * steckt (Foto, Abbrechen), sonst geht sie als Frage an die Instanz.
      */
     fun handle(heard: String): String? {
         val s = session ?: return null
@@ -148,19 +148,19 @@ class HaloController(
             VoiceCommand.Action.STOP -> {
                 s.stopAudio()
                 s.clear()
-                onStatus("cancelled")
+                onStatus("abgebrochen")
                 return null
             }
-            // A screenshot of the phone: not wired up yet. Better to say so than
-            // to quietly do nothing.
+            // Bildschirmfoto des Telefons: noch nicht angeschlossen. Lieber
+            // sagen als still nichts tun.
             VoiceCommand.Action.SCREENSHOT -> {
-                show("I cannot do screenshots yet")
-                onStatus("the screenshot is not wired up yet")
+                show("Screenshot kann ich noch nicht")
+                onStatus("Screenshot ist noch nicht angeschlossen")
                 return null
             }
             null -> {}
         }
-        onStatus("question: $heard")
+        onStatus("Frage: $heard")
         s.showText(wrap("> $heard"))
         val answer = ask(heard)
         show(answer)
@@ -169,29 +169,29 @@ class HaloController(
     }
 
     /**
-     * Take a photo with the glasses' camera and send it with the question to
-     * the instance. Without a question spoken along, the obvious one is asked.
+     * Foto mit der Kamera der Brille und mit der Frage an die Instanz schicken.
+     * Ohne mitgesprochene Frage wird die naheliegende gestellt.
      */
     fun photoAndAsk(question: String = "", timeoutMs: Long = 20000): String? {
         val s = session ?: return null
-        onStatus("photo…")
-        s.showText("… photo")
+        onStatus("Foto…")
+        s.showText("… Foto")
         s.takePhoto()
         val jpeg = awaitPhoto(timeoutMs)
         if (jpeg == null || jpeg.isEmpty()) {
-            show("no image received")
-            onStatus("no image received")
+            show("kein Bild bekommen")
+            onStatus("kein Bild bekommen")
             return null
         }
-        val q = question.ifBlank { "What do you see in this image?" }
-        onStatus("image to the agent…")
+        val q = question.ifBlank { "Was siehst du auf diesem Bild?" }
+        onStatus("Bild an den Agenten…")
         val answer = askWithImage(q, jpeg)
         show(answer)
         onStatus("")
         return answer
     }
 
-    /** Put a reply on the glasses, wrapped and cut to the display height. */
+    /** Antwort auf die Brille bringen, umgebrochen und auf die Hoehe gekuerzt. */
     fun show(text: String, maxLines: Int = rows) {
         val s = session ?: return
         val lines = wrap(text).split("\n")
@@ -199,8 +199,8 @@ class HaloController(
     }
 
     /**
-     * Line wrapping for the display. The glasses do not wrap by themselves — if
-     * the text arrived in one piece it would simply run off the right edge.
+     * Zeilenumbruch fuers Display. Die Brille bricht nicht selbst um — kaeme
+     * der Text am Stueck, liefe er rechts einfach aus dem Bild.
      */
     fun wrap(text: String, width: Int = columns): String {
         val out = StringBuilder()
@@ -208,7 +208,7 @@ class HaloController(
             if (para.isEmpty()) { out.append('\n'); continue }
             var line = StringBuilder()
             for (word in para.split(" ")) {
-                // Break a single overlong word (URL, path) hard.
+                // Ein einzelnes ueberlanges Wort (URL, Pfad) hart trennen.
                 var w = word
                 while (w.length > width) {
                     if (line.isNotEmpty()) { out.append(line).append('\n'); line = StringBuilder() }

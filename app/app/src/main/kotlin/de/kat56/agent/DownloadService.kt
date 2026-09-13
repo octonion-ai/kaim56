@@ -1,3 +1,6 @@
+// kAIm56 KatAgent — Android client for the kAIm56 agent platform
+// Copyright (C) 2026 Ulrich Neidel
+// SPDX-License-Identifier: AGPL-3.0-or-later
 package de.kat56.agent
 
 import android.app.NotificationChannel
@@ -17,7 +20,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import java.io.File
 
-/** Download state the UI observes (persists even after the app is reopened). */
+/** Download-Zustand, den die UI beobachtet (auch nach Wieder-Öffnen der App). */
 sealed class Dl {
     data object Idle : Dl()
     data class Progress(val done: Long, val total: Long) : Dl()
@@ -29,8 +32,8 @@ object DownloadBus {
     val state = MutableStateFlow<Dl>(Dl.Idle)
 }
 
-/** Foreground service: keeps downloading the model in the background, even with
- *  the screen locked / the app closed. Shows a progress notification. */
+/** Foreground-Service: laedt das Modell im Hintergrund weiter, auch bei
+ *  gesperrtem Display / geschlossener App. Zeigt eine Fortschritts-Notification. */
 class DownloadService : Service() {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var job: Job? = null
@@ -43,7 +46,7 @@ class DownloadService : Service() {
         if (url.isNullOrBlank()) { stopSelf(); return START_NOT_STICKY }
 
         ensureChannel()
-        startForeground(NOTIF_ID, build("Model download", "starting…", 0, 0, true))
+        startForeground(NOTIF_ID, build("Modell-Download", "startet…", 0, 0, true))
 
         job?.cancel()
         job = scope.launch {
@@ -58,16 +61,16 @@ class DownloadService : Service() {
                     val pct = if (total > 0) (done * 100 / total).toInt() else 0
                     if (pct != lastPct) {
                         lastPct = pct
-                        notify(build("Model download: $name", "$pct %  (${done / 1_000_000}/${total / 1_000_000} MB)",
+                        notify(build("Modell-Download: $name", "$pct %  (${done / 1_000_000}/${total / 1_000_000} MB)",
                             100, pct, false))
                     }
                 }
                 Prefs(this@DownloadService).activeModel = out.name
                 DownloadBus.state.value = Dl.Done(out.absolutePath)
-                notify(build("Model loaded ✅", "Download complete", 0, 0, false))
+                notify(build("Modell geladen ✅", "Download fertig", 0, 0, false))
             } catch (e: Exception) {
-                DownloadBus.state.value = Dl.Error(e.message ?: "Error")
-                notify(build("Download aborted", e.message ?: "Error — restart to resume", 0, 0, false))
+                DownloadBus.state.value = Dl.Error(e.message ?: "Fehler")
+                notify(build("Download abgebrochen", e.message ?: "Fehler — erneut starten setzt fort", 0, 0, false))
             } finally {
                 stopForeground(STOP_FOREGROUND_DETACH)
                 stopSelf()
@@ -78,7 +81,7 @@ class DownloadService : Service() {
 
     private fun ensureChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val ch = NotificationChannel(CHAN, "Model download", NotificationManager.IMPORTANCE_LOW)
+            val ch = NotificationChannel(CHAN, "Modell-Download", NotificationManager.IMPORTANCE_LOW)
             (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(ch)
         }
     }

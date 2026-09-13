@@ -1,3 +1,6 @@
+// kAIm56 KatAgent — Android client for the kAIm56 agent platform
+// Copyright (C) 2026 Ulrich Neidel
+// SPDX-License-Identifier: AGPL-3.0-or-later
 package de.kat56.agent
 
 import java.net.HttpURLConnection
@@ -5,8 +8,8 @@ import java.net.URL
 import java.net.URLDecoder
 import java.net.URLEncoder
 
-/** Web access for on-device mode: DuckDuckGo search (no API key) +
- *  fetching page text. The result is prepended to Gemma as context. */
+/** Web-Zugriff für den On-Device-Modus: DuckDuckGo-Suche (kein API-Key) +
+ *  Seiten-Text abrufen. Ergebnis wird Gemma als Kontext vorangestellt. */
 object WebSearch {
 
     data class Result(val title: String, val url: String, val snippet: String)
@@ -57,21 +60,21 @@ object WebSearch {
             .replace(Regex("\\s+"), " ").trim().take(maxChars)
     }
 
-    /** Builds the web context for a prompt: if the message contains a URL,
-     *  its content is fetched; otherwise a search runs (+ excerpt of the top page). */
+    /** Baut den Web-Kontext für einen Prompt: enthält die Nachricht eine URL,
+     *  wird deren Inhalt geholt; sonst wird gesucht (+ Auszug der Top-Seite). */
     fun buildContext(message: String): String {
         val urlInMsg = Regex("https?://\\S+").find(message)?.value
         if (urlInMsg != null) {
             val t = fetchText(urlInMsg, 3000)
-            return if (t.isNotBlank()) "Content of $urlInMsg:\n$t" else "(page not retrievable)"
+            return if (t.isNotBlank()) "Inhalt von $urlInMsg:\n$t" else "(Seite nicht abrufbar)"
         }
         val res = search(message, 4)
-        if (res.isEmpty()) return "(no web results)"
+        if (res.isEmpty()) return "(keine Web-Ergebnisse)"
         val sb = StringBuilder()
         res.forEach { sb.append("• ${it.title}\n  ${it.url}\n  ${it.snippet}\n") }
         res.firstOrNull()?.url?.let { top ->
             val body = fetchText(top, 1800)
-            if (body.isNotBlank()) sb.append("\nExcerpt (${res.first().title}):\n$body\n")
+            if (body.isNotBlank()) sb.append("\nAuszug (${res.first().title}):\n$body\n")
         }
         return sb.toString()
     }
