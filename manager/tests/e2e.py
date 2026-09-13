@@ -3242,7 +3242,7 @@ class ManagerFunctions(unittest.TestCase):
             m.instance_by_ip = lambda ip: None
             cl = {**inst, "template": "claude", "config": {}}
             self.assertIn(m.session_info(cl)["login"], ("ok", "missing (log in on the host)"))
-            self.assertEqual(m.session_info(cl)["commands"], "/reset /fresh /model")
+            self.assertNotIn("commands", m.session_info(cl))                       # the / picker lists them
         finally:
             (m.load_instances, m.is_running, m.pidfile, m.load_settings, m.secret_store, m.load_secret_policy,
              m.load_mcps, m.load_skills, m.RUN_DIR, m.instance_by_ip, m.PW, st.HISTORY_DB, m.image_state) = old
@@ -3253,8 +3253,10 @@ class ManagerFunctions(unittest.TestCase):
         import chatui
         page = chatui.render([{"name": "vm1", "running": True}], "vm1", "")
         for needle in ('id=panel', 'id=searchbar', 'id=searchBtn', 'id=panelBtn', "'/api/session/'",
-                       'function searchApply', 'function panelLoad', '"vm1"'):
+                       'function searchApply', 'function panelLoad', '"vm1"',
+                       "convs.filter(x=>x.agent===agent)"):                    # dropdown opens that instance's chat
             self.assertIn(needle, page, needle)
+        self.assertNotIn("cell('Commands'", page)                              # the / picker lists them
 
     def test_settings_for_ui_masks_every_credential_shaped_value(self):
         """Not only the schema's key params: any setting named like a

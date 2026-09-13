@@ -5,6 +5,10 @@ entry (root causes, measurements, alternatives considered) lives in git
 history — `git log -p -- manager/CHANGELOG.md` before 2026-09-08 — and in the
 commit messages.
 
+## 2026-09-13
+- Chat: choosing another instance in the dropdown opens that instance's newest chat (or an empty one) instead of re-pointing the open chat at it
+- Chat session panel drops the „Commands“ cell (the / picker already lists every command)
+
 ## 2026-09-12
 - Secrets tab manages the values too: add, replace and delete keys of the host store (`~/.config/kat56/secrets.env`, written 0600, never echoed back); LLM keys stay in Settings; store path derives from the tree
 - Voice: default TTS voice is `de-thorsten-high` (medium stays installed, switch in Settings); the Parakeet weights are baked into the voice image so a recreated container answers at once instead of downloading for a minute; `onnx-asr` pinned to 0.12.0

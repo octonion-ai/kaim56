@@ -634,7 +634,12 @@ function drawAgents(){
   agent=(AGENTS.find(a=>a.name===START)||AGENTS[0]||{}).name||'';
   $('agent').value=agent;
 }
-function pickAgent(){agent=$('agent').value;if(cur)cur.agent=agent;save();refreshState();if(!cur)draw()}
+/* Switching the instance switches the chat: the newest chat of that
+   instance opens, or an empty one — a chat never changes its agent. */
+function pickAgent(){agent=$('agent').value;
+  const c=convs.filter(x=>x.agent===agent).sort((x,y)=>(y.ts||0)-(x.ts||0))[0];
+  if(c){openChat(c.id);return}
+  cur=null;refreshState();draw();drawConvs();branchUi();$('t').focus()}
 async function refreshState(){
   let a=null;
   try{a=(await (await fetch('/api/instances')).json()).find(i=>i.name===agent)}catch(e){}
@@ -682,7 +687,7 @@ function panelPaint(){
   $('pbody').innerHTML=
     `<div class="pcard blueprint">`+
     `<div class=phead><span class=pname>${esc(d.name)}</span><span class="pstate${d.running?' on':''}"><span class=sq></span>${d.running?'running':'off'}${d.stale?' · stale image':''}</span></div>`+
-    `<div class=pgrid>${cell('Runtime',d.runtime)}${cell('Uptime',d.running?fmtUp(d.uptime):'—')}${cell('Commands',d.commands)}${cell('Login',d.login)}`+
+    `<div class=pgrid>${cell('Runtime',d.runtime)}${cell('Uptime',d.running?fmtUp(d.uptime):'—')}${cell('Login',d.login)}`+
     (d.model?cell('Model',d.model):'')+`</div>`+
     `<div class=pbtns><button class=pbtn onclick=restartAgent()>Restart</button><button class=pbtn onclick=openLogs()>Logs</button><button class=pbtn onclick=openTerm()>Terminal</button></div></div>`+
     `<div class=pk>Platform · kAIm56</div><div class=plist>${plat}</div>`+

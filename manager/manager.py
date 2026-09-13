@@ -3549,8 +3549,6 @@ def _rt_instances(h):
 TEMPLATE_RUNTIME = {"openrouter": "openrouter-agent", "orcarouter": "openrouter-agent",
                     "llama": "openrouter-agent (local model)", "claude": "claude-code",
                     "pi": "pi", "prime": "prime"}
-TEMPLATE_COMMANDS = {"claude": "/reset /fresh /model",
-                     "default": "/reset /fresh /model /steps /goal /aside /back /tools /reasoning"}
 
 
 def session_info(inst):
@@ -3598,7 +3596,6 @@ def session_info(inst):
             "running": running, "uptime": int(time.time() - started) if started else 0,
             "model": cfg.get("OPENROUTER_MODEL") or cfg.get("ANTHROPIC_MODEL") or "",
             "stale": image_state(inst)[0], "login": login,
-            "commands": TEMPLATE_COMMANDS.get(tpl, TEMPLATE_COMMANDS["default"]),
             "platform": platform, "mcps": mcps,
             "need_secret": sum(1 for m in mcps if not m["ready"])}
 
