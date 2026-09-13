@@ -33,9 +33,10 @@ jobs:
       - name: cargo-ndk
         run: cargo install cargo-ndk --locked
       - name: build the shared library for the APK
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
+        # the runner's NDK path lives only in the shell environment, not in the workflow's env context
         run: |
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          echo "NDK: $ANDROID_NDK_HOME"
           cargo ndk -t arm64-v8a -o ../app/src/main/jniLibs build --release
           find ../app/src/main/jniLibs -name 'libiroh*.so' -delete
       - name: host build + UniFFI Kotlin bindings
