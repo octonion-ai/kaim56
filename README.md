@@ -92,8 +92,9 @@ Debian 12 VM. The Android app comes as an APK with each
 [release](https://github.com/octonion-ai/kaim56/releases); the desktop voice client
 builds with `voice-client/build.sh`.
 
-Running the manager by hand instead: `manager/README.md` (config files, NFS share,
-templates, the policy and secret model).
+On Proxmox VE: [`docs/proxmox.md`](docs/proxmox.md) (a VM with nested virtualization, CPU type
+`host`; not an LXC container). Running the manager by hand instead: `manager/README.md`
+(config files, NFS share, templates, the policy and secret model).
 
 ## Repository
 
