@@ -173,7 +173,8 @@ input[type=checkbox]{accent-color:var(--color-accent)}
 /* Fifteen tabs in one row: compact type and padding so they fit the 1160px
    shell; if a window is narrower still, the row scrolls with a visible thin
    bar instead of hiding the last tabs (Secrets, Settings fell off once). */
-.tabs{display:flex;gap:2px;align-self:stretch;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:thin}
+.tabs{display:flex;gap:2px;align-self:stretch;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
 .tabs a{display:flex;align-items:center;padding:0 8px;font-size:12px;letter-spacing:.01em;
   text-decoration:none;color:var(--color-text);white-space:nowrap;
   border-bottom:2px solid transparent;margin-bottom:-1px}

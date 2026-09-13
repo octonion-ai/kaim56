@@ -477,6 +477,9 @@ function showTab(t){
   document.querySelectorAll('#tabs a,.af-nav a').forEach(a=>{
     if(a.getAttribute('href')==='#'+t)a.setAttribute('aria-current','page');
     else a.removeAttribute('aria-current');});
+  /* the row scrolls without a visible bar: keep the active tab in view */
+  const cur=document.querySelector('#tabs a[aria-current=page]');
+  if(cur&&cur.scrollIntoView)cur.scrollIntoView({inline:'nearest',block:'nearest'});
 }
 window.addEventListener('hashchange',()=>{const t=location.hash.slice(1);showTab(t);if(t==='missions')loadMissions();if(t==='sharing'){loadKatfs();loadIroh();}});
 

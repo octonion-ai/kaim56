@@ -6,6 +6,7 @@ history — `git log -p -- manager/CHANGELOG.md` before 2026-09-08 — and in th
 commit messages.
 
 ## 2026-09-13
+- Manager tab row: no visible scrollbars any more (the thin horizontal one and a stray vertical one from the tab underline); the row still scrolls by wheel/touch and keeps the active tab in view
 - README: a detailed feature set before the licence (runtime, slash commands, tools, memory, autonomy, traces, security, clients)
 - `docs/proxmox.md`: running kAIm56 in a Proxmox VE VM (nested virtualization, CPU type host, sizing, cloud-image `qm` recipe, firewall, snapshots); linked from Getting started
 - Resources chart also loads when the page opens directly on `#resources` (only the tab switch loaded it); three unquoted SVG attributes (`rx=1/>`) quoted; README gets six screenshots (chat, resources, policy, MCP, skills, personas), anonymised like the first
