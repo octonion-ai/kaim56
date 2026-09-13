@@ -191,7 +191,10 @@ function usageWindow(sec){
 async function loadUsageChart(){
   const el=document.getElementById('usagechart'); if(!el)return;
   const since=USAGE_WIN?Math.floor(Date.now()/1000)-USAGE_WIN:0;
-  let rows=[]; try{rows=(await (await fetch('/api/usage-by-model?since='+since)).json()).rows||[];}catch(e){el.textContent='usage unavailable';return;}
+  let r,rows=[];
+  try{r=await fetch('/api/usage-by-model?since='+since)}catch(e){el.textContent='usage unavailable (network: '+e.message+')';return;}
+  if(!r.ok){el.textContent='usage unavailable (HTTP '+r.status+')';return;}
+  try{rows=(await r.json()).rows||[];}catch(e){el.textContent='usage unavailable (answer is not JSON)';return;}
   if(!rows.length){el.textContent='no LLM calls in this window';return;}
   const models=[]; rows.forEach(r=>{if(models.indexOf(r.model)<0)models.push(r.model)});
   const col=m=>`hsl(${MODEL_HUES[models.indexOf(m)%MODEL_HUES.length]} 55% ${models.indexOf(m)>=MODEL_HUES.length?35:50}%)`;
