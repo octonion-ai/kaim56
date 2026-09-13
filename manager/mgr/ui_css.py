@@ -63,7 +63,6 @@ code{font-family:var(--font-mono);font-size:.88em;background:var(--color-neutral
   border:1px solid var(--color-divider);padding:.02rem .3rem}
 /* — blueprint frame — */
 .blueprint{position:relative;border:1px solid var(--color-divider);border-radius:0}
-  color:color-mix(in srgb,var(--color-text) 55%,transparent)}
 /* — buttons — */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;
   text-decoration:none;font-family:var(--font-heading);font-weight:var(--font-heading-weight);
