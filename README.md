@@ -68,7 +68,7 @@ and starts the next.
 Requirements: Linux x86_64 with KVM (`/dev/kvm`), Docker, Python ≥ 3.9, systemd.
 
 ```bash
-git clone https://github.com/uneidel/kaim56 && cd kaim56
+git clone https://github.com/octonion-ai/kaim56 && cd kaim56
 ./install.sh --check                           # prerequisites only
 ./install.sh --with-voice                      # ~10 minutes the first time
 ```
@@ -81,7 +81,7 @@ It is idempotent: a second run updates. Afterwards: web UI on port 8700 (login
 printed at the end, kept in `/etc/firecracker-manager.env`), Settings tab, add an
 API key, create an instance from a template. Verified end to end on a clean
 Debian 12 VM. The Android app comes as an APK with each
-[release](https://github.com/uneidel/kaim56/releases); the desktop voice client
+[release](https://github.com/octonion-ai/kaim56/releases); the desktop voice client
 builds with `voice-client/build.sh`.
 
 Running the manager by hand instead: `manager/README.md` (config files, NFS share,
