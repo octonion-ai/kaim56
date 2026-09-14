@@ -100,8 +100,11 @@ mkdir -p "$FC_DIR/bin" "$FC_DIR/instances" "$FC_DIR/run" "$FC_DIR/audit"
 rsync -a "$SRC/manager/manager.py" "$SRC/manager/chatui.py" "$SRC/manager/webterm.py" \
          "$SRC/manager/text_unicode.py" \
          "$SRC/manager/setup-nfs-host.sh" "$SRC/manager/logo.svg" \
-         "$SRC/manager/mcp-catalog.json" "$SRC/manager/personas.json" \
-         "$SRC/manager/secret-policy.json" "$SRC/manager/run-tests.sh" "$FC_DIR/" 2>/dev/null || true
+         "$SRC/manager/run-tests.sh" "$FC_DIR/" 2>/dev/null || true
+# Seeds, not code: the catalog, personas and secret policy are the operator's
+# once they exist — an update must never reset them.
+rsync -a --ignore-existing "$SRC/manager/mcp-catalog.json" "$SRC/manager/personas.json" \
+         "$SRC/manager/secret-policy.json" "$FC_DIR/" 2>/dev/null || true
 printf '%s\n' "$VERSION" > "$FC_DIR/VERSION"       # what the Settings tab compares with the newest release
 rsync -a "$SRC/manager/templates/" "$FC_DIR/templates/"
 rsync -a "$SRC/manager/mgr/" "$FC_DIR/mgr/"
@@ -162,10 +165,15 @@ fi
 # ── [6] systemd service ──────────────────────────────────────────────────────
 say "[6/7] systemd service (needs sudo)"
 HOSTIF="$(ip route 2>/dev/null | awk '/default/{print $5; exit}')"
+# An existing unit may carry settings this installer does not know (a fixed
+# MANAGER_USER/MANAGER_PASS behind a reverse proxy, LLM_KEY_PROXY, …): every
+# Environment= line except the ones written below is carried over.
+KEEP_ENV="$($SUDO cat /etc/systemd/system/firecracker-manager.service 2>/dev/null \
+  | grep '^Environment=' | grep -vE '^Environment=(PORT|HOSTIF|GUEST_DNS|AGENT_ROOT)=' || true)"
 # The password lives in a root-only env file the unit always references;
 # it is generated once (an update run must not drop the login).
 PASS_LINE="EnvironmentFile=-/etc/firecracker-manager.env"
-if ! $SUDO test -f /etc/firecracker-manager.env; then
+if ! $SUDO test -f /etc/firecracker-manager.env && ! printf '%s' "$KEEP_ENV" | grep -q '^Environment=MANAGER_PASS='; then
   PW="$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 20)"
   printf 'MANAGER_PASS=%s\n' "$PW" | $SUDO install -m 600 -o root -g root /dev/stdin /etc/firecracker-manager.env
   echo "  web login: admin / $PW   (changeable in /etc/firecracker-manager.env)"
@@ -183,6 +191,7 @@ Environment=PORT=8700
 Environment=HOSTIF=$HOSTIF
 Environment=GUEST_DNS=$GUEST_DNS
 Environment=AGENT_ROOT=$BASE/agent
+$KEEP_ENV
 $PASS_LINE
 ExecStart=/usr/bin/python3 $FC_DIR/manager.py
 Restart=on-failure
