@@ -5,6 +5,9 @@ entry (root causes, measurements, alternatives considered) lives in git
 history — `git log -p -- manager/CHANGELOG.md` before 2026-09-08 — and in the
 commit messages.
 
+## 2026-09-14
+- Updates: install.sh writes `VERSION` and installs `kaim56-update.service` (root oneshot: `install.sh --release`, newest tag, same options); the manager compares with the newest GitHub release (`GET /api/version`, cached 6 h, `UPDATE_CHECK=0` disables, `UPDATE_REPO` in site.json), footer badge and a card in Settings with an Update button (`POST /api/update`) that streams `run/update.log`; the installer runs as root from the unit (sudo no-op, git as the operator)
+
 ## 2026-09-13
 - Buttons: a stray declaration left behind by the corner-mark removal (2026-09-12) made the browser drop the whole `.btn` rule — link buttons (Terminal, Chat) rendered as underlined links and every button lost its base padding and font; fragment removed
 - GitHub Action `apk.yml`: native iroh module + KatAgent APK on every `v*` tag, attached to the release when the stable keystore secret is set; repo `app/` is now one buildable Gradle root (the flattened duplicate `app/src` is gone) mirrored from the live project

@@ -577,7 +577,7 @@ HTML_BOTTOM = """
   in it any more: a <b>harness drive</b> (8&#8201;MB ext4, read-only, rebuilt from
   <code>AGENT_SRC</code> whenever the sources change) is attached to every VM on that image and
   mounted at <code>/harness</code>. An agent fix is one instance restart; a rootfs rebuild is
-  for packages. The Instances tab flags VMs started before the last rebuild of either.</p></div>
+  for packages. The Instances tab flags VMs started before the last rebuild of either. It also writes <code>VERSION</code> and installs <code>kaim56-update.service</code>: the manager compares it with the newest GitHub release (<code>/api/version</code>, cached six hours, footer badge) and the Update button in Settings starts that oneshot unit &#8212; <code>install.sh --release</code> (newest tag, same options as the install) with its log in <code>run/update.log</code>, ending in a manager restart.</p></div>
 
   <div class="card blueprint"><span class=card-title>Secret broker &amp; policy</span>
   <p class=card-body><b>LLM keys go one step further:</b> with <code>LLM_KEY_PROXY</code> they never enter a VM — the manager injects them on egress (<code>/api/llm/&#8249;backend&#8250;</code>). API keys and tokens never land in instance configs or on the config disk.
@@ -754,6 +754,11 @@ HTML_BOTTOM = """
   <div class="panel blueprint">
     
     <div class="banner blueprint" style="margin:0 0 16px;padding:9px 14px"><span id=voicestat class=text-muted style="font-size:12.5px">Voice: …</span></div>
+    <div class="banner blueprint" style="margin:0 0 16px;padding:9px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <span id=updtxt class=text-muted style="font-size:12.5px">Version: …</span>
+      <button class="btn btn-secondary btn-sm" id=updbtn hidden style="margin-left:auto" onclick=runUpdate()>Update</button>
+    </div>
+    <pre id=updlog hidden class=mono style="font-size:11.5px;max-height:180px;overflow:auto;margin:-8px 0 16px;padding:8px 12px;border:1px solid var(--color-divider);white-space:pre-wrap"></pre>
     <div class=stack id=settings></div>
     <div class=panel-foot><span id=setmsg class=msg></span><button class="btn btn-primary" onclick=saveSettings()>Save</button></div>
   </div>
@@ -766,6 +771,7 @@ HTML_BOTTOM = """
   <span class=af-stat>NAT via __HOSTIF__</span>
   <span class=af-stat>Pool __POOL__</span>
   <span class=af-stat id=spend></span>
+  <span class=af-stat id=version></span>
   <nav class=af-nav>
     <a href="#changelog">Changelog</a>
     <a href="#architecture">Architecture</a>

@@ -15,7 +15,10 @@
 #   --no-build         skip the Docker builds (files/service only)
 #   --with-voice       also install the voice service (STT/TTS, ~2 GB Docker build)
 #   --with-agents      also build the pi/prime/claude rootfs (large)
+#   --release          update the clone to the newest release tag first (what the
+#                      Update button in the web UI runs, via kaim56-update.service)
 #   KAIM56_BASE=<dir>  target directory (default: $HOME)
+#   KAIM56_USER=<user> operator whose tree this is when running as root (the update unit)
 #   VMLINUX_URL=<url>  guest kernel to download (default: the Firecracker CI kernel 6.1.128)
 #   GUEST_DNS=<ip>     DNS for the microVMs (default: 1.1.1.1)
 #   REPO_URL=<url>     git source (default: github kaim56)
@@ -30,9 +33,10 @@ REPO_URL="${REPO_URL:-https://github.com/octonion-ai/kaim56.git}"
 BASE="${KAIM56_BASE:-$HOME}"
 FC_DIR="$BASE/firecracker"
 GUEST_DNS="${GUEST_DNS:-1.1.1.1}"
-CHECK_ONLY=0; NO_BUILD=0; WITH_VOICE=0; WITH_AGENTS=0; FILES_ONLY=0
+CHECK_ONLY=0; NO_BUILD=0; WITH_VOICE=0; WITH_AGENTS=0; FILES_ONLY=0; RELEASE=0
 for a in "$@"; do case "$a" in
   --check) CHECK_ONLY=1;;
+  --release) RELEASE=1;;
   --files-only) FILES_ONLY=1; NO_BUILD=1;;
   --no-build) NO_BUILD=1;;
   --with-voice) WITH_VOICE=1;;
@@ -42,6 +46,12 @@ esac; done
 
 say()  { printf '\033[1m== %s\033[0m\n' "$*"; }
 fail() { printf '\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
+# Run as the operator (sudo for the root steps) or as root from the update
+# unit: then sudo is a no-op and git runs as the operator, so the clone stays
+# theirs.
+OP_USER="${KAIM56_USER:-$(id -un)}"
+if [ "$(id -u)" = 0 ]; then SUDO=""; else SUDO="sudo"; fi
+as_op() { if [ "$(id -u)" = 0 ] && [ "$OP_USER" != root ]; then runuser -u "$OP_USER" -- "$@"; else "$@"; fi; }
 
 # ── [1] Prerequisites ────────────────────────────────────────────────────────
 say "[1/7] Check prerequisites"
@@ -68,8 +78,21 @@ if [ -n "$SELF_DIR" ] && [ -f "$SELF_DIR/manager/manager.py" ]; then
   SRC="$SELF_DIR"; echo "  using local clone: $SRC"
 else
   SRC="$BASE/kaim56"
-  if [ -d "$SRC/.git" ]; then (cd "$SRC" && git pull --ff-only); else git clone --depth 1 "$REPO_URL" "$SRC"; fi
+  if [ -d "$SRC/.git" ]; then [ "$RELEASE" = 1 ] || as_op git -C "$SRC" pull --ff-only
+  else as_op git clone "$REPO_URL" "$SRC"; fi
 fi
+if [ "$RELEASE" = 1 ]; then
+  # Newest release tag, never a moving branch; a clone with local changes is
+  # left alone rather than silently switched.
+  [ -d "$SRC/.git" ] || fail "--release needs a git clone at $SRC"
+  [ -z "$(as_op git -C "$SRC" status --porcelain)" ] || fail "$SRC has local changes — update it by hand"
+  as_op git -C "$SRC" fetch -q --tags origin
+  TAG="$(as_op git -C "$SRC" tag -l 'v*' --sort=-v:refname | head -1)"
+  [ -n "$TAG" ] || fail "no release tag in $SRC"
+  as_op git -C "$SRC" checkout -q "$TAG"
+  echo "  release: $TAG"
+fi
+VERSION="$(as_op git -C "$SRC" describe --tags --always 2>/dev/null || echo dev)"
 
 # ── [3] Runtime layout (repo -> working directories) ────────────────────────
 say "[3/7] Runtime layout under $BASE"
@@ -79,6 +102,7 @@ rsync -a "$SRC/manager/manager.py" "$SRC/manager/chatui.py" "$SRC/manager/webter
          "$SRC/manager/setup-nfs-host.sh" "$SRC/manager/logo.svg" \
          "$SRC/manager/mcp-catalog.json" "$SRC/manager/personas.json" \
          "$SRC/manager/secret-policy.json" "$SRC/manager/run-tests.sh" "$FC_DIR/" 2>/dev/null || true
+printf '%s\n' "$VERSION" > "$FC_DIR/VERSION"       # what the Settings tab compares with the newest release
 rsync -a "$SRC/manager/templates/" "$FC_DIR/templates/"
 rsync -a "$SRC/manager/mgr/" "$FC_DIR/mgr/"
 rsync -a "$SRC/manager/tests/" "$FC_DIR/tests/" 2>/dev/null || true
@@ -141,12 +165,12 @@ HOSTIF="$(ip route 2>/dev/null | awk '/default/{print $5; exit}')"
 # The password lives in a root-only env file the unit always references;
 # it is generated once (an update run must not drop the login).
 PASS_LINE="EnvironmentFile=-/etc/firecracker-manager.env"
-if ! sudo test -f /etc/firecracker-manager.env; then
+if ! $SUDO test -f /etc/firecracker-manager.env; then
   PW="$(head -c 24 /dev/urandom | base64 | tr -d '/+=' | head -c 20)"
-  printf 'MANAGER_PASS=%s\n' "$PW" | sudo install -m 600 -o root -g root /dev/stdin /etc/firecracker-manager.env
+  printf 'MANAGER_PASS=%s\n' "$PW" | $SUDO install -m 600 -o root -g root /dev/stdin /etc/firecracker-manager.env
   echo "  web login: admin / $PW   (changeable in /etc/firecracker-manager.env)"
 fi
-sudo tee /etc/systemd/system/firecracker-manager.service >/dev/null <<UNIT
+$SUDO tee /etc/systemd/system/firecracker-manager.service >/dev/null <<UNIT
 [Unit]
 Description=Firecracker Manager (kAIm56)
 After=network-online.target docker.service
@@ -169,17 +193,37 @@ KillMode=process
 [Install]
 WantedBy=multi-user.target
 UNIT
-sudo sysctl -qw net.ipv4.ip_forward=1
-echo net.ipv4.ip_forward=1 | sudo tee /etc/sysctl.d/99-kaim56.conf >/dev/null
-sudo systemctl daemon-reload
-sudo systemctl enable firecracker-manager >/dev/null 2>&1 || true
+$SUDO sysctl -qw net.ipv4.ip_forward=1
+echo net.ipv4.ip_forward=1 | $SUDO tee /etc/sysctl.d/99-kaim56.conf >/dev/null
+# The update unit: root, oneshot, this installer again with the same options
+# plus --release; the manager starts it from the Settings tab (/api/update)
+# and shows its log (run/update.log).
+FLAGS="--release"; [ "$WITH_VOICE" = 1 ] && FLAGS="$FLAGS --with-voice"; [ "$WITH_AGENTS" = 1 ] && FLAGS="$FLAGS --with-agents"
+$SUDO tee /etc/systemd/system/kaim56-update.service >/dev/null <<UNIT
+[Unit]
+Description=kAIm56 update (install.sh --release, started from the web UI)
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=$SRC
+Environment=KAIM56_BASE=$BASE
+Environment=KAIM56_USER=$OP_USER
+Environment=GUEST_DNS=$GUEST_DNS
+Environment=HOME=/root
+StandardOutput=append:$FC_DIR/run/update.log
+StandardError=append:$FC_DIR/run/update.log
+ExecStart=/bin/sh $SRC/install.sh $FLAGS
+UNIT
+$SUDO systemctl daemon-reload
+$SUDO systemctl enable firecracker-manager >/dev/null 2>&1 || true
 # Restart, not "start": on an update the running manager would keep the old
 # code and the old unit environment (it did on the deployment test VM).
-sudo systemctl restart firecracker-manager
+$SUDO systemctl restart firecracker-manager
 
 # iroh gateway (only if the binary was built) — the app's P2P transport.
 if [ -x "$FC_DIR/bin/iroh-gw" ]; then
-  sudo tee /etc/systemd/system/iroh-gw.service >/dev/null <<UNIT
+  $SUDO tee /etc/systemd/system/iroh-gw.service >/dev/null <<UNIT
 [Unit]
 Description=kAIm56 iroh gateway (app<->manager transport over iroh, P2P)
 After=network-online.target firecracker-manager.service
@@ -198,14 +242,14 @@ RestartSec=3
 [Install]
 WantedBy=multi-user.target
 UNIT
-  sudo systemctl daemon-reload
-  sudo systemctl enable iroh-gw >/dev/null 2>&1 || true
-  sudo systemctl restart iroh-gw
+  $SUDO systemctl daemon-reload
+  $SUDO systemctl enable iroh-gw >/dev/null 2>&1 || true
+  $SUDO systemctl restart iroh-gw
 fi
 
 # ── [7] Smoke test ───────────────────────────────────────────────────────────
 say "[6b/7] NFS server (workspace and memory folders of the VMs; needs sudo)"
-sudo AGENT_DIR="$BASE/agent" "$FC_DIR/setup-nfs-host.sh" | tail -3
+$SUDO AGENT_DIR="$BASE/agent" "$FC_DIR/setup-nfs-host.sh" | tail -3
 
 say "[7/7] Smoke test"
 sleep 3

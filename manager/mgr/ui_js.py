@@ -625,6 +625,29 @@ function saveSkill(){
 }
 async function delSkill(n){if(confirm('Delete skill '+n+'?')){await fetch('/api/skills/'+encodeURIComponent(n)+'/delete',{method:'POST'});location.reload()}}
 
+/* — version + updates: footer badge and the card in Settings; the update
+   itself is the installer, run by kaim56-update.service (root, oneshot) — */
+let UPD=null,_updT=null;
+async function loadVersion(force){
+  let v; try{v=await (await fetch('/api/version'+(force?'?force=1':''))).json()}catch(e){return}
+  UPD=v;
+  const f=document.getElementById('version');
+  if(f)f.innerHTML=esc(v.installed)+(v.available?` · <a href="${esc(v.url)}" target=_blank title="new release">${esc(v.latest)} available</a>`:'');
+  const t=document.getElementById('updtxt'),b=document.getElementById('updbtn'),l=document.getElementById('updlog');
+  if(!t)return;
+  if(v.updating){t.textContent='Updating to '+(v.latest||'the latest release')+' … the manager restarts when the installer is done';b.hidden=true;l.hidden=false;l.textContent=v.log||'(starting)';l.scrollTop=l.scrollHeight;
+    clearTimeout(_updT);_updT=setTimeout(()=>loadVersion(),5000);return}
+  if(l&&!l.hidden&&v.log){l.textContent=v.log;}   /* the log of a finished run stays visible */
+  t.innerHTML=`Installed <b>${esc(v.installed)}</b>`+(v.latest?` · latest <a href="${esc(v.url)}" target=_blank>${esc(v.latest)}</a>`:(v.error?` · <span title="${esc(v.error)}">release check failed</span>`:''))+
+    (v.available?(v.unit?' · <b>update available</b>':' · update available — run <code>install.sh --release</code> on the host (the update service is not installed yet)'):(v.latest?' · up to date':''));
+  b.hidden=!(v.available&&v.unit); b.textContent='Update to '+v.latest;
+}
+async function runUpdate(){
+  if(!UPD||!confirm('Update to '+UPD.latest+'?\\n\\nThe installer checks out the release tag, refreshes the files, rebuilds images and restarts the manager. Running instances keep running; the web UI is away for a moment.'))return;
+  const r=await (await fetch('/api/update',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();
+  if(!/started/.test(r.msg||''))alert(r.msg||'error');
+  setTimeout(()=>loadVersion(),1500);
+}
 function renderSettings(){
   // Key fields are masked via CSS (-webkit-text-security) instead of
   // type=password: a real password field makes Chrome's password manager
@@ -1222,7 +1245,7 @@ function saveSecrets(){
 }
 window.onload=()=>{
   showTab(location.hash.slice(1));
-  renderSettings();renderParams();loadMissions();loadPrompts();loadPlaybooks();renderPersonas();renderSkills();renderSecrets();renderMcps();loadKatfs();loadIroh();loadModels2();loadChangelog();loadTools();loadPlugins();loadTasks();loadPolicy();loadResources();
+  renderSettings();renderParams();loadMissions();loadPrompts();loadPlaybooks();renderPersonas();renderSkills();renderSecrets();renderMcps();loadKatfs();loadIroh();loadModels2();loadChangelog();loadTools();loadPlugins();loadTasks();loadPolicy();loadResources();loadVersion();
   refreshUsage();
   // Tasks, policy and the usage numbers used to arrive only on page load —
   // whoever left the tab open saw arbitrarily stale state (and thought a

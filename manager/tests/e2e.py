@@ -3525,6 +3525,48 @@ class ManagerHTTP(unittest.TestCase):
         for k in ("calls", "in", "out", "cost"):
             self.assertIn(k, d)
 
+    def test_version_and_update_check(self):
+        """The installed version comes from VERSION (dev without it), the newest
+        release from GitHub through a cached check whose failure is remembered,
+        and "available" only when both parse and the release is newer."""
+        m = _load("manager_e2e_ver", MANAGER_PATH)
+        tmp = tempfile.mkdtemp(prefix="e2e-ver-")
+        old = m.VERSION_FILE, m._fetch_latest_release, dict(m._update), os.environ.get("UPDATE_CHECK")
+        try:
+            os.environ.pop("UPDATE_CHECK", None)
+            m.VERSION_FILE = os.path.join(tmp, "VERSION")
+            self.assertEqual(m.installed_version(), "dev")
+            open(m.VERSION_FILE, "w").write("v1.0.0-4-gabc\n")
+            self.assertEqual(m.installed_version(), "v1.0.0-4-gabc")
+            m._fetch_latest_release = lambda: {"latest": "v1.0.1", "url": "https://x/r", "notes": "n"}
+            m._update.update(ts=0.0, latest="", url="", notes="", error="")
+            u = m.update_check()
+            self.assertEqual((u["latest"], u["error"]), ("v1.0.1", ""))
+            self.assertTrue(m.update_available("v1.0.0-4-gabc", "v1.0.1"))
+            self.assertTrue(m.update_available("1.0.0", "v1.0.1"))
+            self.assertFalse(m.update_available("v1.0.1", "v1.0.1"))
+            self.assertFalse(m.update_available("dev", "v1.0.1"))
+            self.assertFalse(m.update_available("v1.0.1", ""))
+            def boom():
+                raise OSError("offline")
+            m._fetch_latest_release = boom
+            self.assertEqual(m.update_check()["latest"], "v1.0.1")            # cached, not refetched
+            e = m.update_check(force=True)
+            self.assertEqual(e["latest"], "v1.0.1"); self.assertIn("offline", e["error"])  # kept, error noted
+            st = m.update_status()
+            for k in ("unit", "updating", "log"):
+                self.assertIn(k, st)
+            st_, txt = _http("/api/version")
+            self.assertEqual(st_, 200)
+            d = json.loads(txt)
+            for k in ("installed", "latest", "available", "unit", "updating", "log"):
+                self.assertIn(k, d)
+        finally:
+            m.VERSION_FILE, m._fetch_latest_release = old[0], old[1]
+            m._update.clear(); m._update.update(old[2])
+            if old[3] is not None:
+                os.environ["UPDATE_CHECK"] = old[3]
+
     def test_voice_health_route(self):
         st, txt = _http("/api/voice-health")
         self.assertEqual(st, 200)

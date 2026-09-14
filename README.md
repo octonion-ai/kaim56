@@ -85,7 +85,7 @@ The installer lays out the runtime tree, downloads Firecracker and the guest
 kernel (the kernel Firecracker's own CI boots; set `VMLINUX_URL` for another),
 builds the agent rootfs and the host containers, sets up the NFS server the VMs
 mount their workspaces from, installs the systemd service and runs a smoke test.
-It is idempotent: a second run updates. Afterwards: web UI on port 8700 (login
+It is idempotent: a second run updates, and the Settings tab shows when a newer release is out — its Update button runs the installer again on the newest tag (`./install.sh --release` by hand does the same). Afterwards: web UI on port 8700 (login
 printed at the end, kept in `/etc/firecracker-manager.env`), Settings tab, add an
 API key, create an instance from a template. Verified end to end on a clean
 Debian 12 VM. The Android app comes as an APK with each
