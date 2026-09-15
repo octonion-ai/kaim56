@@ -1690,6 +1690,7 @@ def report_usage(u, ms=None, ok=True, err=""):
             "cost": u.get("cost") or 0.0,
             "turn": _turn_id[0], "step": _turn_step[0], "ms": ms,
             "ok": bool(ok), "err": str(err or "")[:400],
+            "direct": bool(LLAMA_ENDPOINT),     # a local model is called directly, not through the key proxy
         }).encode()
         req = urllib.request.Request(f"{_manager_base()}/api/usage", data=payload,
                                      method="POST",
@@ -2555,6 +2556,8 @@ def or_chat_stream(messages, tools, on_token):
     the (assistant) message including any tool_calls from the stream."""
     def _build_llm_body(use_tools):
         b = {"model": OR_MODEL, "messages": _wire_messages(messages), "stream": True, "usage": {"include": True}}
+        if LLAMA_ENDPOINT:
+            b["stream_options"] = {"include_usage": True}   # llama.cpp: token counts in the last chunk
         if use_tools and tools:
             b["tools"] = tools
             b["tool_choice"] = "auto"

@@ -6,6 +6,7 @@ history — `git log -p -- manager/CHANGELOG.md` before 2026-09-08 — and in th
 commit messages.
 
 ## 2026-09-15
+- Local models: the agent's usage report counts again (calls, tokens, spans in the traces) — with the key proxy on, guest reports were ignored across the board, so a llama instance showed zero calls forever; accepted now when the report is flagged `direct` and the instance has `LLAMA_ENDPOINT`; the stream asks llama.cpp for token counts in the last chunk
 - Local models (llama backend): mid-conversation system notes ([Memory], [Playbooks], date line, deadline note) are folded into the first system message on the wire — Qwen3's chat template in llama.cpp answered HTTP 500 "System message must be at the beginning" to every turn of the `uncensored` instance since its start; `LLM_FOLD_SYSTEM=1/0` overrides; the misleading "FATAL: OPENROUTER_API_KEY fehlt" line no longer appears for a local model
 
 ## 2026-09-14

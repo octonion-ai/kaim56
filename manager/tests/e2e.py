@@ -2760,6 +2760,22 @@ class ManagerFunctions(unittest.TestCase):
         self.assertTrue(all(m.rate_ok(key, 3, 60) for _ in range(3)))
         self.assertFalse(m.rate_ok(key, 3, 60))
 
+    def test_usage_report_accepted_for_local_models_only_when_proxied(self):
+        """Key proxy on: the agent's figures are ignored — except a local model
+        (LLAMA_ENDPOINT) called directly, whose report is flagged `direct`."""
+        m = self.m
+        old = m.load_settings
+        try:
+            m.load_settings = lambda: {"LLM_KEY_PROXY": "1"}
+            llama = {"name": "u", "config": {"LLAMA_ENDPOINT": "http://10.0.0.5:8080/"}}
+            self.assertTrue(m.usage_report_accepted(llama, {"direct": True}))
+            self.assertFalse(m.usage_report_accepted(llama, {}))                       # old agent: not flagged
+            self.assertFalse(m.usage_report_accepted({"name": "o", "config": {}}, {"direct": True}))  # proxied instance
+            m.load_settings = lambda: {"LLM_KEY_PROXY": ""}
+            self.assertTrue(m.usage_report_accepted({"name": "o", "config": {}}, {}))
+        finally:
+            m.load_settings = old
+
     def test_proxy_books_upstream_usage(self):
         m = self.m
         seen = []

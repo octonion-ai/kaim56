@@ -4946,6 +4946,16 @@ def _rt_mission_admin(h):
 
 
 # ---- reports from guests: usage, audit, notify, hitl, signal, chat-log ------
+def usage_report_accepted(inst, body):
+    """Whose figures count: with the key proxy off, the agent's; with it on,
+    the proxy's — except for a local model (LLAMA_ENDPOINT in the instance
+    config), which the agent calls directly, so its own report is the only
+    one there is."""
+    if (load_settings().get("LLM_KEY_PROXY") or "") != "1":
+        return True
+    return bool(body.get("direct")) and bool((inst.get("config") or {}).get("LLAMA_ENDPOINT"))
+
+
 @ROUTER.post("/api/usage")
 def _rt_usage_report(h):
     # Only real guests: the instance comes from the source IP, not the body.
@@ -4953,7 +4963,7 @@ def _rt_usage_report(h):
     # the agent's own figures are ignored (else a quiet agent has no budget).
     inst = h._guest()
     body = h._body()
-    if inst is not None and (load_settings().get("LLM_KEY_PROXY") or "") != "1":
+    if inst is not None and usage_report_accepted(inst, body):
         usage_add(inst["name"], body.get("model", ""), body.get("prompt_tokens"),
                   body.get("completion_tokens"), body.get("cost"),
                   turn=body.get("turn", ""), ms=body.get("ms"), step=body.get("step"),
