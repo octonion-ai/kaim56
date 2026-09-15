@@ -2963,6 +2963,81 @@ class ManagerFunctions(unittest.TestCase):
         finally:
             m.sh, m.ensure_antispoof = old
 
+    def test_sandbox_through_the_task_route_and_the_queue(self):
+        """A guest's spawn_subagent/create_task with a sandbox: the route turns
+        it into {cfg, internet} and hands it to the run (wait) or stores it on
+        the queued task; a sandbox on a named target or one that widens the
+        caller's rights is refused; without a sandbox the old call shape."""
+        m = self.m
+        import mgr.store as st
+        seen = []
+        old = (m.instance_by_ip, m.load_instances, m._run_task_now, m.history_add, m.guest_may_target,
+               m._run_ephemeral, st.TASKS_FILE)
+        try:
+            caller = {"name": "orch", "config": {}}
+            m.instance_by_ip = lambda ip: caller if ip == "172.30.1.2" else None
+            m.load_instances = lambda: [caller, {"name": "hass"}]
+            m.guest_may_target = lambda inst, target: True
+            m.history_add = lambda *a, **k: None
+            m._run_task_now = lambda target, msg, model=None, timeout=600, sandbox=None: (seen.append((target, msg, sandbox)), (True, "ok"))[1]
+            def post(body):
+                h = self._post_handler("/api/task", "172.30.1.2", json.dumps(body).encode()); h._do_POST()
+                return json.loads(h.wfile.getvalue().split(b"\r\n\r\n", 1)[1])
+            d = post({"message": "x", "target": "ephemeral", "wait": True, "sandbox": {"tools": "bash", "egress": "none"}})
+            self.assertEqual(d.get("result"), "ok")
+            self.assertEqual(seen[-1], ("ephemeral", "x", {"cfg": {"AGENT_TOOLS": "bash"}, "internet": False}))
+            d = post({"message": "x", "target": "ephemeral", "wait": True})
+            self.assertEqual(seen[-1][2], None)                                                  # no cage: as before
+            self.assertIn("ephemeral targets only", post({"message": "x", "target": "hass", "wait": True, "sandbox": {"tools": "bash"}})["error"])
+            caller["config"] = {"AGENT_TOOLS": "read_file"}
+            self.assertIn("does not hold", post({"message": "x", "target": "ephemeral", "wait": True, "sandbox": {"tools": "bash"}})["error"])
+            caller["config"] = {}
+            st.TASKS_FILE = os.path.join(tempfile.mkdtemp(prefix="e2e-sbq-"), "tasks.json")
+            d = post({"message": "later", "target": "ephemeral", "sandbox": {"skill": "nope"}})
+            self.assertIn("unknown", d["error"])                                                 # refused at creation, not at 08:00
+            d = post({"message": "later", "target": "ephemeral", "sandbox": {"egress": "api.example.com"}})
+            t = next(x for x in st.load_tasks() if x["id"] == d["id"])
+            self.assertEqual(t["sandbox"], {"cfg": {"EGRESS_ALLOW": "api.example.com"}, "internet": True})
+            # the runner keeps the old call shape without a sandbox (tests and callers monkeypatch it)
+            calls = []
+            m._run_ephemeral = lambda *a, **k: (calls.append((a, k)), (True, "r"))[1]
+            m._run_task_now = old[2]
+            m._run_task_now("ephemeral", "do", None, sandbox={"cfg": {}, "internet": False})
+            m._run_task_now("ephemeral", "do")
+            self.assertEqual(len(calls[0][0]), 4); self.assertEqual(len(calls[1][0]), 3)
+        finally:
+            (m.instance_by_ip, m.load_instances, m._run_task_now, m.history_add, m.guest_may_target,
+             m._run_ephemeral, st.TASKS_FILE) = old
+
+    def test_egress_allowlist_rules(self):
+        """EGRESS_ALLOW: the chain accepts the resolved addresses and rejects
+        everything else outside the pool; a host that does not resolve is
+        skipped without opening the net."""
+        m = self.m
+        import socket as _socket
+        calls = []
+        class R:
+            def __init__(self, rc): self.returncode = rc
+        old = m.sh, m.ensure_antispoof, m.socket.getaddrinfo, m._mcp_endpoints, m._llama_endpoint
+        try:
+            m.sh = lambda *a, **k: (calls.append(a), R(1 if "-C" in a else 0))[1]
+            m.ensure_antispoof = lambda inst: None
+            m._mcp_endpoints = lambda inst: []; m._llama_endpoint = lambda inst: None
+            def gai(host, *a, **k):
+                if host == "api.example.com":
+                    return [(2, 1, 6, "", ("93.184.216.34", 0))]
+                raise OSError("no such host")
+            m.socket.getaddrinfo = gai
+            inst = {"name": "vm1", "index": 3, "config": {"EGRESS_ALLOW": "api.example.com, typo.invalid"}}
+            m.apply_internet(inst, True)
+            chain = m._fc_chain(inst)
+            self.assertIn(("iptables", "-A", chain, "-d", "93.184.216.34", "-j", "ACCEPT"), calls)
+            self.assertIn(("iptables", "-A", chain, "!", "-d", m.POOL, "-j", "REJECT"), calls)
+            self.assertNotIn(("iptables", "-A", chain, "!", "-d", m.POOL, "-j", "ACCEPT"), calls)
+            self.assertFalse(any("typo.invalid" in a for a in calls))
+        finally:
+            m.sh, m.ensure_antispoof, m.socket.getaddrinfo, m._mcp_endpoints, m._llama_endpoint = old
+
     def test_sandbox_config_only_narrows(self):
         """A sandboxed sub-agent runs in an ephemeral VM with a NARROWER policy:
         a subset of the caller's tools (never the spawning/secret ones), an
