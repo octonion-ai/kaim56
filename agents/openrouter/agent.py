@@ -2108,7 +2108,7 @@ def or_chat(messages, tools, model=None):
             elif e.code in _RETRY_CODES and attempt < LLM_RETRIES:
                 _retry_sleep(attempt); continue
             report_usage({}, ms=int((time.monotonic() - t0) * 1000), ok=False, err=last)
-            return {"content": last}
+            return {"role": "assistant", "content": last}
         except Exception as e:
             last = f"⚠️ {LLM_NAME} error: {e!r}"
             if LLAMA_ENDPOINT and _conn_dropped(e):
@@ -2116,8 +2116,8 @@ def or_chat(messages, tools, model=None):
             elif _retry_after(e, attempt):
                 _retry_sleep(attempt); continue
             report_usage({}, ms=int((time.monotonic() - t0) * 1000), ok=False, err=last)
-            return {"content": last}
-    return {"content": last}
+            return {"role": "assistant", "content": last}
+    return {"role": "assistant", "content": last}
 
 
 TOOLS = []

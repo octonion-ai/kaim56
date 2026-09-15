@@ -6,6 +6,7 @@ history — `git log -p -- manager/CHANGELOG.md` before 2026-09-08 — and in th
 commit messages.
 
 ## 2026-09-15
+- Agent: an error reply of the non-streaming LLM call carried no `role`; appended to the history it made llama.cpp reject every following turn ("Missing 'role' in message") until a reset
 - Local models, streaming: a stream that ends with nothing (llama.cpp sent the headers, then died on the image) is reported as a dropped connection instead of „(empty reply)“; images leave the history, the failed call is booked
 - Local models: when llama.cpp drops the connection (it crashed on every image input on the `uncensored` model server, then reloaded the model), the agent answers with one line, strips the images from the history so the next turn does not repeat the crash, and does not retry; a 503 while the model loads is reported the same way
 - Local models: LLM call timeout 600 s instead of 120/180 s (`LLM_TIMEOUT`, `LLM_STREAM_TIMEOUT`) and no retry after a timeout — an image question to the CPU-hosted 27B model timed out at 180 s while the model was still processing the prompt, and the retries queued behind it

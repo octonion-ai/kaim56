@@ -854,7 +854,9 @@ class AgentLogic(unittest.TestCase):
             def loading(req, timeout=None):
                 raise urllib.error.HTTPError(req.full_url, 503, "Service Unavailable", {}, io.BytesIO(b'{"error":{"message":"Loading model"}}'))
             a.urllib.request.urlopen = loading
-            self.assertIn("loading its model", a.or_chat(msgs, [])["content"])
+            r = a.or_chat(msgs, [])
+            self.assertIn("loading its model", r["content"])
+            self.assertEqual(r.get("role"), "assistant")   # the error reply lands in the history: it needs a role (llama.cpp 500 "Missing 'role'")
             self.assertEqual(slept, [])
         finally:
             a.LLAMA_ENDPOINT, a.urllib.request.urlopen, a._retry_sleep = old
