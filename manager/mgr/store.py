@@ -412,7 +412,7 @@ def with_tasks(mutator):
         return result
 
 
-def add_task(instance, message, schedule="", model=""):
+def add_task(instance, message, schedule="", model="", sandbox=None):
     schedule = (schedule or "").strip()
     t = {"id": uuid.uuid4().hex[:12], "instance": instance, "message": message,
          "schedule": schedule, "status": "scheduled" if schedule else "pending",
@@ -420,6 +420,8 @@ def add_task(instance, message, schedule="", model=""):
          "next_run": _next_run(schedule, int(time.time())) if schedule else int(time.time())}
     if (model or "").strip():
         t["model"] = str(model).strip()[:120]      # ephemeral target: VM created with it
+    if sandbox:
+        t["sandbox"] = sandbox                     # ephemeral target: the narrower cage (manager.sandbox_config)
 
     def mut(tasks):
         tasks.append(t)

@@ -606,7 +606,7 @@ HTML_BOTTOM = """
 
   <div class="card blueprint"><span class=card-title>Tasks &amp; orchestrator</span>
   <p class=card-body>Task queue with schedules (<code>every Nh</code>, <code>daily HH:MM</code>, &#8230;), editable in
-  the Tasks tab. Tasks run on a capable instance or an ephemeral VM; results land in the shared
+  the Tasks tab. Tasks run on a capable instance or an ephemeral VM &#8212; optionally <b>sandboxed</b>: <code>spawn_subagent(tools=, egress=, skill=)</code> gives the ephemeral VM a narrower policy than its caller (a subset of the caller&#8217;s tools, never spawn/secrets; an egress allowlist inside the caller&#8217;s own, or no network; one skill baked into the system prompt with file/web tools only) &#8212; the VM is the cage, the policy is the door; results land in the shared
   chat history and in <code>history.db</code> (<code>task_runs</code>), queryable by agents via
   <code>recall_tasks</code>. New user messages ping the orchestrator instance, which routes work via
   <code>create_task</code> instead of doing it itself. Only the orchestrator (env <code>TASK_ADMIN</code>)

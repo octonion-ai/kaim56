@@ -885,6 +885,22 @@ class AgentLogic(unittest.TestCase):
         finally:
             a.LLAMA_ENDPOINT, a.urllib.request.urlopen, a.report_usage = old
 
+    def test_spawn_subagent_passes_the_sandbox(self):
+        """The tool sends tools/egress/skill as one `sandbox` object, and none
+        when nothing narrows."""
+        a = self.a
+        seen = []
+        old = a._mgr
+        try:
+            a._mgr = lambda base, path, payload=None, timeout=60: seen.append((path, payload)) or '{"result": "done"}'
+            self.assertEqual(a.t_spawn_subagent("do it"), "done")
+            self.assertNotIn("sandbox", seen[-1][1])
+            a.t_spawn_subagent("do it", tools="bash,read_file", egress="none", skill="pdf-digest")
+            self.assertEqual(seen[-1][1]["sandbox"], {"tools": "bash,read_file", "egress": "none", "skill": "pdf-digest"})
+            self.assertEqual(seen[-1][1]["target"], "ephemeral")
+        finally:
+            a._mgr = old
+
     def test_auto_reset_after_idle_minutes(self):
         """AUTO_RESET_MIN: a context that idled longer than that starts over at
         the next turn; a recent turn, a fresh context or 0 leave it alone."""
@@ -2919,6 +2935,36 @@ class ManagerFunctions(unittest.TestCase):
             self.assertIn("error", hs.reflect("vm1", "q")); self.assertFalse(hs.health()[0])
         finally:
             hs._settings, hs._call, m.sem_search, m.load_settings = old
+
+    def test_sandbox_config_only_narrows(self):
+        """A sandboxed sub-agent runs in an ephemeral VM with a NARROWER policy:
+        a subset of the caller's tools (never the spawning/secret ones), an
+        egress allowlist inside the caller's own, or no network, and one
+        skill baked into the system prompt with the file/web tools only."""
+        m = self.m
+        old = m.load_skills, m.load_personas
+        try:
+            m.load_skills = lambda: [{"name": "pdf-digest", "description": "d", "content": "Read the PDF, summarise."}]
+            m.load_personas = lambda: [{"name": "assistant", "prompt": "You are helpful."}]
+            caller = {"name": "orch", "config": {}}
+            self.assertEqual(m.sandbox_config(caller, None), ({}, True, ""))
+            cfg, net, err = m.sandbox_config(caller, {"tools": "bash, read_file,spawn_subagent"})
+            self.assertEqual((cfg["AGENT_TOOLS"], net, err), ("bash,read_file", True, ""))     # spawn never inherited
+            self.assertIn("unknown tools", m.sandbox_config(caller, {"tools": ["bash", "nope"]})[2])
+            narrow = {"name": "n", "config": {"AGENT_TOOLS": "bash,read_file", "EGRESS_ALLOW": "api.example.com,cdn.example.com"}}
+            self.assertIn("does not hold", m.sandbox_config(narrow, {"tools": ["bash", "web_search"]})[2])
+            self.assertIn("outside the caller", m.sandbox_config(narrow, {"egress": "api.example.com,evil.example.org"})[2])
+            cfg, net, err = m.sandbox_config(narrow, {"egress": ["API.example.com"]})
+            self.assertEqual((cfg["EGRESS_ALLOW"], net, err), ("api.example.com", True, ""))
+            self.assertEqual(m.sandbox_config(caller, {"egress": "none"})[1], False)
+            self.assertIn("list hosts", m.sandbox_config(caller, {"egress": [" "]})[2])
+            cfg, net, err = m.sandbox_config(caller, {"skill": "pdf-digest"})
+            self.assertEqual(cfg["AGENT_TOOLS"], ",".join(sorted(m.SANDBOX_DEFAULT_TOOLS)))
+            self.assertIn("[Skill: pdf-digest]", cfg["AGENT_SYSTEM"]); self.assertTrue(cfg["AGENT_SYSTEM"].startswith("You are helpful."))
+            self.assertIn("unknown", m.sandbox_config(caller, {"skill": "ghost"})[2])
+            self.assertIn("object", m.sandbox_config(caller, "bash")[2])
+        finally:
+            m.load_skills, m.load_personas = old
 
     def test_proxy_books_upstream_usage(self):
         m = self.m

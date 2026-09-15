@@ -1208,24 +1208,91 @@ EPHEMERAL_MAX = int(os.environ.get("EPHEMERAL_MAX", "2"))
 _ephemeral_slots = threading.BoundedSemaphore(EPHEMERAL_MAX)
 
 
-def _run_ephemeral(message, model=None, timeout=600):
+# A sandboxed run: an ephemeral VM with a NARROWER policy than its caller —
+# fewer tools, an egress allowlist or no network at all, and optionally one
+# skill baked into its system prompt. The cage is the Firecracker VM as
+# always; what changes is what the agent inside may do. A caller can only
+# narrow: no tool it does not hold itself, no host outside its own allowlist.
+SANDBOX_DEFAULT_TOOLS = ["bash", "read_file", "write_file", "list_dir", "offload_read",
+                         "http_fetch", "web_search", "read_pdf"]
+SANDBOX_NEVER = {"spawn_subagent", "create_task", "send_signal", "get_secret", "list_secrets"}
+
+
+def sandbox_config(caller, sandbox):
+    """(cfg, internet, error) for an ephemeral VM from a sandbox request
+    {"tools": [...]|"a,b", "egress": [...]|"host,host"|"none", "skill": name}.
+    Empty request = the ephemeral VM as before (all tools, internet on)."""
+    sb = sandbox or {}
+    if not isinstance(sb, dict):
+        return {}, True, "sandbox must be an object"
+    ccfg = (caller or {}).get("config") or {}
+    cat = ccfg.get("AGENT_TOOLS", "")
+    caller_tools = {t.strip() for t in cat.split(",") if t.strip()} if cat else None   # None = all
+    want = sb.get("tools") or []
+    if isinstance(want, str):
+        want = want.split(",")
+    want = [str(t).strip() for t in want if str(t).strip()]
+    skill = str(sb.get("skill") or "").strip()
+    if not want and skill:
+        want = list(SANDBOX_DEFAULT_TOOLS)
+    cfg = {}
+    if want:
+        unknown = sorted(set(want) - AGENT_TOOL_NAMES)
+        if unknown:
+            return {}, True, f"unknown tools: {', '.join(unknown)}"
+        if caller_tools is not None:
+            over = sorted(set(want) - caller_tools)
+            if over:
+                return {}, True, f"the caller does not hold these tools itself: {', '.join(over)}"
+        cfg["AGENT_TOOLS"] = ",".join(sorted(set(want) - SANDBOX_NEVER))
+    internet = True
+    eg = sb.get("egress")
+    if eg is not None and eg != "":
+        if eg is False or (isinstance(eg, str) and eg.strip().lower() in ("none", "off", "no")):
+            internet = False
+        else:
+            hosts = eg.split(",") if isinstance(eg, str) else list(eg)
+            hosts = [str(x).strip().lower() for x in hosts if str(x).strip()]
+            if not hosts:
+                return {}, True, "egress: list hosts, or 'none'"
+            ceg = [x.strip().lower() for x in (ccfg.get("EGRESS_ALLOW") or "").split(",") if x.strip()]
+            if ceg:
+                over = sorted(set(hosts) - set(ceg))
+                if over:
+                    return {}, True, f"egress outside the caller's own allowlist: {', '.join(over)}"
+            cfg["EGRESS_ALLOW"] = ",".join(hosts)
+    if skill:
+        body = next((s.get("content", "") for s in load_skills() if s.get("name") == skill), None)
+        if body is None:
+            return {}, True, f"skill '{skill}' unknown"
+        base = next((p.get("prompt", "") for p in load_personas() if p.get("name") == "assistant"), "") \
+            or "You are a helpful agent with tools. Use them when needed, otherwise answer directly. Be concise."
+        cfg["AGENT_SYSTEM"] = f"{base}\n\n[Skill: {skill}] Follow this skill for the task:\n{str(body)[:20000]}"
+    return cfg, internet, ""
+
+
+def _run_ephemeral(message, model=None, timeout=600, sandbox=None):
     """Run a task in a FRESH, isolated VM that is deleted afterwards — at most
     EPHEMERAL_MAX at a time: every one is a full VM (RAM, tap, disk), and any
     guest may ask for one, so the rest queue instead of exhausting the host."""
     if not _ephemeral_slots.acquire(timeout=600):
         return (False, f"ephemeral VM slots busy ({EPHEMERAL_MAX} at a time) — try again later")
     try:
-        return _run_ephemeral_vm(message, model, timeout)
+        return _run_ephemeral_vm(message, model, timeout, sandbox)
     finally:
         _ephemeral_slots.release()
 
 
-def _run_ephemeral_vm(message, model=None, timeout=600):
+def _run_ephemeral_vm(message, model=None, timeout=600, sandbox=None):
     name = "task-" + uuid.uuid4().hex[:6]
     cfg = {"TRANSPORT": "web", "NO_SPAWN": "1"}
     if model:
         cfg["OPENROUTER_MODEL"] = model
-    msg = create_instance(name, "openrouter", cfg)
+    internet = True
+    if sandbox:                                   # {"cfg": {...}, "internet": bool} from sandbox_config
+        cfg.update(sandbox.get("cfg") or {})
+        internet = bool(sandbox.get("internet", True))
+    msg = create_instance(name, "openrouter", cfg, internet=internet)
     inst = next((i for i in load_instances() if i["name"] == name), None)
     if not inst:
         return (False, f"ephemeral VM failed: {msg}")
@@ -1289,12 +1356,14 @@ def task_target_sweep():
     return hit
 
 
-def _run_task_now(instance, message, model=None, timeout=600):
+def _run_task_now(instance, message, model=None, timeout=600, sandbox=None):
     """Run a task — on a named instance (routing to the capability) or in an
     ephemeral VM (target == 'ephemeral'). `model` applies to the ephemeral VM
     only — a named instance keeps its own configuration. `timeout` is the
     caller's patience; the worker allows TASK_TIMEOUT, a waiting guest 600 s."""
     if instance == "ephemeral":
+        if sandbox:
+            return _run_ephemeral(message, (model or "").strip()[:120] or None, timeout, sandbox)
         return _run_ephemeral(message, (model or "").strip()[:120] or None, timeout)
     return _run_named(instance, message, timeout)
 
@@ -1574,7 +1643,8 @@ def _task_worker():
                 # (bug Aug 20: exception in the follow-up -> outer except ->
                 # the task never fired again and the chat entry was missing).
                 try:
-                    ok, res = _run_task_now(t["instance"], t["message"], t.get("model"), timeout=TASK_TIMEOUT)
+                    ok, res = _run_task_now(t["instance"], t["message"], t.get("model"), timeout=TASK_TIMEOUT,
+                                            sandbox=t.get("sandbox"))
                 except Exception as e:
                     ok, res = False, f"worker-exception (run): {e!r}"
                     _wlog(f"{t['id']}: {res}")
@@ -4903,11 +4973,19 @@ def _rt_task_create_guest(h):
     if not guest_may_target(inst, target):
         return h._json({"error": f"target '{target}' not allowed for this instance "
                                  "(own name, 'ephemeral', or a DELEGATE_TARGETS entry in its config)"})
+    sandbox = None
+    if body.get("sandbox"):
+        if target != "ephemeral":
+            return h._json({"error": "sandbox applies to ephemeral targets only"})
+        scfg, sinternet, serr = sandbox_config(inst, body.get("sandbox"))
+        if serr:
+            return h._json({"error": f"sandbox: {serr}"})
+        sandbox = {"cfg": scfg, "internet": sinternet}
     if body.get("wait") and not schedule:
-        ok, res = _run_task_now(target, message, model)
+        ok, res = _run_task_now(target, message, model, sandbox=sandbox)
         history_add(target, message, res, ok, origin=inst["name"])
         return h._json({"ok": ok, "result": res})
-    t = add_task(target, message, schedule, model=model)
+    t = add_task(target, message, schedule, model=model, sandbox=sandbox)
     return h._json({"id": t["id"], "status": t["status"], "target": target})
 
 

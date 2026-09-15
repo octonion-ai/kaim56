@@ -155,7 +155,7 @@ Per-client details live next to the code: `app/README.md`, `voice-client/README.
 ### Tools
 
 - **Work**: `bash` (hard denylist always on), `read_file`, `write_file`, `list_dir`, `offload_read`, `http_fetch`, `web_search`, `read_pdf`.
-- **Delegation**: `spawn_subagent` (fresh VM, fresh context), `create_task`, `list_agents`, `recall_tasks`, `read_inbox`; the orchestrator additionally edits and deletes tasks.
+- **Delegation**: `spawn_subagent` (fresh VM, fresh context; optionally sandboxed with a subset of the caller's tools, an egress allowlist or no network, and one skill baked in), `create_task`, `list_agents`, `recall_tasks`, `read_inbox`; the orchestrator additionally edits and deletes tasks.
 - **Missions**: `mission_start`, `mission_update`, `mission_finish`, `missions`.
 - **Memory and rules**: `memory_store`, `memory_recall`, `playbook_add`, `playbooks`, `playbook_forget`, `search_sessions`.
 - **Skills**: `list_skills`, `load_skill`, `propose_skill`.

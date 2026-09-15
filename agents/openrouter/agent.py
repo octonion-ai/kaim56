@@ -551,14 +551,26 @@ def _llm_headers():
     return h
 
 
-def t_spawn_subagent(task, model=None):
+def t_spawn_subagent(task, model=None, tools=None, egress=None, skill=None):
     """Delegate a self-contained subtask to a FRESH ephemeral VM and return its
     answer. Runs over the manager's task path (create_task target=ephemeral,
     wait=true) — the manager creates, drives and deletes the VM; the guest
     never touches the admin routes (which it may not call anyway). `model`
-    picks the subagent's OpenRouter model, default: the template's."""
+    picks the subagent's OpenRouter model, default: the template's.
+    tools / egress / skill narrow the cage: a subset of this agent's tools,
+    an egress allowlist (or "none"), one skill baked into the system prompt.
+    With a skill and no tools, the sandbox gets the file/web tools only."""
     payload = {"message": str(task or "").strip(), "target": "ephemeral",
                "wait": True, "model": (model or "").strip()}
+    sb = {}
+    if tools:
+        sb["tools"] = tools if isinstance(tools, list) else str(tools)
+    if egress:
+        sb["egress"] = egress if isinstance(egress, list) else str(egress)
+    if skill:
+        sb["skill"] = str(skill).strip()
+    if sb:
+        payload["sandbox"] = sb
     if not payload["message"]:
         return "⚠️ task missing"
     try:
@@ -1092,7 +1104,10 @@ BUILTIN = {
                        "(the manager creates and deletes the VM). Optionally pick the subagent's model — "
                        "e.g. a cheap/fast one for grunt work or a strong one for hard reasoning.",
                        {"task": {"type": "string", "description": "task for the subagent (self-contained: it has no memory of this chat)"},
-                        "model": {"type": "string", "description": "optional OpenRouter model id for the subagent, e.g. google/gemini-2.5-flash"}}, ["task"]),
+                        "model": {"type": "string", "description": "optional OpenRouter model id for the subagent, e.g. google/gemini-2.5-flash"},
+                        "tools": {"type": "string", "description": "optional: comma-separated subset of your own tools the subagent may use (narrower cage), e.g. 'bash,read_file,write_file'"},
+                        "egress": {"type": "string", "description": "optional: comma-separated hosts the subagent may reach, or 'none' for no network at all"},
+                        "skill": {"type": "string", "description": "optional: a skill from list_skills baked into the subagent's system prompt; without `tools` it then gets only the file/web tools"}}, ["task"]),
     "create_task": (t_create_task,
                     "Queue a task — IMPORTANT: choose target by capability. "
                     "If the task needs a specific MCP/token (e.g. Home Assistant), "
