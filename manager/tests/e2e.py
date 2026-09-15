@@ -859,6 +859,30 @@ class AgentLogic(unittest.TestCase):
         finally:
             a.LLAMA_ENDPOINT, a.urllib.request.urlopen, a._retry_sleep = old
 
+    def test_local_model_empty_stream_after_image_counts_as_dropped(self):
+        """The streaming variant of the crash: llama.cpp sends the 200 headers,
+        dies on the image, the stream ends with nothing — that was shown as
+        "(empty reply)" and the image stayed in the history."""
+        import io
+        a = self.a
+        old = a.LLAMA_ENDPOINT, a.urllib.request.urlopen, a.report_usage
+        reported = []
+        try:
+            a.LLAMA_ENDPOINT = "http://10.0.0.5:8080/"
+            a.report_usage = lambda u, ms=None, ok=True, err="": reported.append((ok, err))
+            a.urllib.request.urlopen = lambda req, timeout=None: io.BytesIO(b"")     # 200, then nothing
+            msgs = [{"role": "system", "content": "S"},
+                    {"role": "user", "content": [{"type": "text", "text": "was siehst du?"},
+                                                 {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}}]}]
+            out = []
+            r = a.or_chat_stream(msgs, [], out.append)
+            self.assertIn("image was removed", r["content"])
+            self.assertIn("image was removed", "".join(out))
+            self.assertEqual(reported, [(False, r["content"])])
+            self.assertNotIn("image_url", json.dumps(msgs))
+        finally:
+            a.LLAMA_ENDPOINT, a.urllib.request.urlopen, a.report_usage = old
+
     def test_llm_timeouts_and_retry_policy_for_local_models(self):
         """A local model gets long timeouts and no retry after a timeout (it is
         still busy with the request that timed out); cloud backends keep the

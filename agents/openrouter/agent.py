@@ -2664,6 +2664,7 @@ def or_chat_stream(messages, tools, on_token):
                 _retry_sleep(attempt); continue
             report_usage({}, ms=int((time.monotonic() - _t0) * 1000), ok=False, err=m)
             on_token(m); return {"role": "assistant", "content": m}
+    got_usage = False
     try:
         for raw in r:
             line = raw.decode("utf-8", "replace").strip()
@@ -2677,6 +2678,7 @@ def or_chat_stream(messages, tools, on_token):
             except Exception:
                 continue
             if chunk.get("usage"):          # the last chunk carries the billing
+                got_usage = True
                 report_usage(chunk["usage"], ms=int((time.monotonic() - _t0) * 1000))
             try:
                 delta = chunk["choices"][0]["delta"]
@@ -2716,6 +2718,13 @@ def or_chat_stream(messages, tools, on_token):
         m = f"⚠️ {LLM_NAME} stream aborted: {e!r}"
         on_token(m)
         content += ("\n" + m)
+    if LLAMA_ENDPOINT and not content and not reasoning_txt and not tcs and not got_usage:
+        # llama.cpp answered 200 and then died (an image did that): the stream
+        # ends cleanly with nothing in it — not an empty reply, a dropped one.
+        m = _llama_dropped_msg(messages)
+        report_usage({}, ms=int((time.monotonic() - _t0) * 1000), ok=False, err=m)
+        on_token(m)
+        content = m
     # Some reasoning models emit EVERYTHING as thinking and leave content empty
     # -> instead of an empty answer, keep the thinking (otherwise "_(empty reply)_").
     msg = {"role": "assistant", "content": content or reasoning_txt or None}
