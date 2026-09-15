@@ -556,7 +556,7 @@ function draw(){
     if(x.role==='user')
       return `<div class="row me"><div class=body>${pic}${esc(x.content).replace(/\n/g,'<br>')}`+
         `<div class="tools tools-me"><button onclick="copyMsg(this,${i})">Copy</button></div></div></div>`;
-    const busy=x.busy?'<span class=cursor></span>':'';
+    const busy=x.busy?waitHtml(x.content):'';
     const tools=x.busy?'':`<div class=tools><button onclick="copyMsg(this,${i})">Copy</button>`+
       `<button onclick="speakMsg(${i})">Read aloud</button></div>`;
     return `<div class=row><div class=av>${IC.bot}</div><div class=body>${botHtml(x.content,false)}${busy}${tools}</div></div>`;
@@ -601,8 +601,17 @@ function botHtml(content,cursor){
   if(t.think) h+=`<details class=think ${t.open?'open':''}><summary>💡 Thinking${t.open?' …':''}</summary><div class=thinkbody>${esc(t.think).replace(/\n/g,'<br>')}</div></details>`;
   const tl=splitTools(t.ans);
   if(tl.tools.length) h+=`<details class=think><summary>🔧 Tools · ${tl.tools.length}${cursor?' · '+esc(tl.tools[tl.tools.length-1]):''}</summary><div class=thinkbody>${tl.tools.map(x=>'🔧 '+esc(x)).join('<br>')}</div></details>`;
-  h+=md(tl.rest)+(cursor?'<span class=cursor></span>':'');
+  h+=md(tl.rest)+(cursor?waitHtml(content):'');
   return h;
+}
+/* While a reply is on its way and nothing has arrived, say so with a clock:
+   a local model chews on a 6k-token prompt for half a minute before the
+   first byte, and a bare cursor reads as "dead". */
+let STREAM_T0=0,_waitT=null;
+function waitHtml(content){
+  const s=STREAM_T0?Math.floor((Date.now()-STREAM_T0)/1000):0;
+  if(content||s<3)return '<span class=cursor></span>';
+  return `<span class=cursor></span><span class=text-muted style="font-size:12px;margin-left:8px">waiting for the model · ${s} s</span>`;
 }
 function scroll(){const l=$('log');l.scrollTop=l.scrollHeight}
 function atBottom(){const l=$('log');return l.scrollHeight-l.scrollTop-l.clientHeight<80}
@@ -997,6 +1006,7 @@ async function send(fromButton){
   cur.ts=Date.now();save();draw();drawConvs();
   ctrl=new AbortController();
   $('send').textContent='■';$('send').classList.add('stop');
+  STREAM_T0=Date.now();clearInterval(_waitT);_waitT=setInterval(()=>{if(reply.busy&&!reply.content)paint();else clearInterval(_waitT)},1000);
   try{
     const r=await fetch('/api/chat/'+encodeURIComponent(agent),
       {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:ctrl.signal});
@@ -1010,7 +1020,7 @@ async function send(fromButton){
   }catch(e){
     reply.content+=(e&&e.name==='AbortError')?'\n\n_(aborted)_':'\n\n⚠️ '+e;
   }finally{
-    ctrl=null;reply.busy=false;
+    ctrl=null;reply.busy=false;clearInterval(_waitT);STREAM_T0=0;
     if(!reply.content)reply.content='_(empty reply)_';
     if(VOICE_IN){ VOICE_IN=false; speakText(splitThink(reply.content).ans); }
     $('send').textContent='➤';$('send').classList.remove('stop');
