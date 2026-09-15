@@ -2966,6 +2966,35 @@ class ManagerFunctions(unittest.TestCase):
         finally:
             m.load_skills, m.load_personas = old
 
+    def test_sandbox_reaches_the_ephemeral_vm(self):
+        """The sandbox travels from the task route into the VM's creation:
+        the narrowed tools land in its config and 'egress none' creates it
+        without internet; without a sandbox nothing changes."""
+        m = self.m
+        seen = []
+        old = m.create_instance, m.load_instances, m.wait_web, m._chat_post, m.stop, m.delete_instance
+        try:
+            m.create_instance = lambda name, tpl, cfg=None, mounts=None, internet=True: seen.append((tpl, dict(cfg or {}), internet)) or "ok"
+            m.load_instances = lambda: [{"name": n, "template": "openrouter"} for n in ["x"]] if False else [{"name": seen[-1] and "task-x", "template": "openrouter"}]
+            m.load_instances = lambda: [{"name": next((k for k in ["any"]), ""), "template": "openrouter"}]
+            m.wait_web = lambda inst, timeout=120: True
+            m._chat_post = lambda inst, message, timeout=600: "child says hi"
+            m.stop = lambda inst: None; m.delete_instance = lambda name: None
+            # load_instances must return the instance the run just created: match on prefix
+            m.load_instances = lambda: [{"name": "task-" + "".join(c for c in "0" * 6), "template": "openrouter"}]
+            real_create = m.create_instance
+            def create(name, tpl, cfg=None, mounts=None, internet=True):
+                m.load_instances = lambda: [{"name": name, "template": "openrouter", "config": dict(cfg or {}), "internet": internet}]
+                return real_create(name, tpl, cfg, mounts, internet)
+            m.create_instance = create
+            ok, res = m._run_ephemeral_vm("do", None, 60, {"cfg": {"AGENT_TOOLS": "bash", "EGRESS_ALLOW": ""}, "internet": False})
+            self.assertEqual((ok, res), (True, "child says hi"))
+            self.assertEqual(seen[-1][1]["AGENT_TOOLS"], "bash"); self.assertFalse(seen[-1][2]); self.assertEqual(seen[-1][1]["NO_SPAWN"], "1")
+            ok, res = m._run_ephemeral_vm("do", "google/gemini-2.5-flash", 60)
+            self.assertNotIn("AGENT_TOOLS", seen[-1][1]); self.assertTrue(seen[-1][2]); self.assertEqual(seen[-1][1]["OPENROUTER_MODEL"], "google/gemini-2.5-flash")
+        finally:
+            m.create_instance, m.load_instances, m.wait_web, m._chat_post, m.stop, m.delete_instance = old
+
     def test_proxy_books_upstream_usage(self):
         m = self.m
         seen = []

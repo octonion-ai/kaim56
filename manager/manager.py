@@ -1292,6 +1292,9 @@ def _run_ephemeral_vm(message, model=None, timeout=600, sandbox=None):
     if sandbox:                                   # {"cfg": {...}, "internet": bool} from sandbox_config
         cfg.update(sandbox.get("cfg") or {})
         internet = bool(sandbox.get("internet", True))
+        print(f"[ephemeral] {name}: sandbox tools={cfg.get('AGENT_TOOLS') or 'all'} "
+              f"egress={cfg.get('EGRESS_ALLOW') or ('none' if not internet else 'any')}"
+              f"{' skill' if 'AGENT_SYSTEM' in cfg else ''}", flush=True)
     msg = create_instance(name, "openrouter", cfg, internet=internet)
     inst = next((i for i in load_instances() if i["name"] == name), None)
     if not inst:
