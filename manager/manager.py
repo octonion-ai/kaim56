@@ -2191,6 +2191,15 @@ def apply_internet(inst, allow):
     if not allow:
         if have_back:
             sh("iptables", "-D", "FORWARD", *back, "-j", "ACCEPT", check=False)
+        # Explicit, not by omission: "no network" used to rely on the FORWARD
+        # policy being DROP — on a host where it is ACCEPT the switch did
+        # nothing (found by a sandboxed sub-agent that curled the internet with
+        # egress=none). The chain rejects everything outside the pool; the
+        # manager at the gateway is INPUT, not FORWARD, and stays reachable.
+        sh("iptables", "-N", chain, check=False)
+        sh("iptables", "-A", chain, "!", "-d", POOL, "-j", "REJECT", check=False)
+        sh("iptables", "-I", "FORWARD", "1", "-i", n["tap"], "-j", chain, check=False)
+        ensure_antispoof(inst)
         return
 
     sh("iptables", "-N", chain, check=False)

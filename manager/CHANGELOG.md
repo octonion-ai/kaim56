@@ -6,6 +6,7 @@ history — `git log -p -- manager/CHANGELOG.md` before 2026-09-08 — and in th
 commit messages.
 
 ## 2026-09-15
+- Security: „internet off“ for an instance is now an explicit REJECT chain on its tap — it relied on the FORWARD policy being DROP, and on this host (policy ACCEPT) an instance with internet off could still reach the internet; found by the first sandboxed sub-agent (`egress=none`) that fetched example.com
 - Sandboxed sub-agents: `spawn_subagent(tools=, egress=, skill=)` runs the ephemeral VM with a narrower policy than its caller — tool subset (spawn/secret tools never inherited), egress allowlist inside the caller's own or `none`, a skill baked into the system prompt with file/web tools only (`sandbox_config`, `/api/task` sandbox object, also for queued ephemeral tasks)
 - Web chat: while a reply has not produced a byte yet, the cursor says „waiting for the model · N s“ — a local 27B model spends 30+ s on prompt processing and a bare cursor read as dead (a `uncensored` turn was abandoned mid-way and stayed empty in the history)
 - Hindsight (vectorize.io) as an optional second memory: `mgr/hindsight.py`, container `kaim56-hindsight` (`install.sh --with-hindsight`, LLM through the key proxy from the docker bridge, booked as instance "hindsight"), on when `HINDSIGHT_URL` is set in Settings; chat turns and `memory_store` notes are retained per instance bank, recall hits merge into `/api/memory-search`, new tool `memory_reflect` → `POST /api/memory-reflect`; session panel shows it under Memory

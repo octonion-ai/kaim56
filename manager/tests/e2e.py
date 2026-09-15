@@ -2936,6 +2936,33 @@ class ManagerFunctions(unittest.TestCase):
         finally:
             hs._settings, hs._call, m.sem_search, m.load_settings = old
 
+    def test_internet_off_is_an_explicit_reject(self):
+        """internet=False must not depend on the FORWARD policy: the tap gets
+        its own chain that rejects everything outside the pool, jumped to
+        first. With internet on, the chain ends in the usual ACCEPT."""
+        m = self.m
+        calls = []
+        class R:
+            def __init__(self, rc): self.returncode = rc
+        def fake_sh(*a, **k):
+            calls.append(a)
+            return R(1 if "-C" in a else 0)
+        old = m.sh, m.ensure_antispoof
+        try:
+            m.sh = fake_sh; m.ensure_antispoof = lambda inst: None
+            inst = {"name": "vm1", "index": 3, "config": {}}
+            m.apply_internet(inst, False)
+            chain = m._fc_chain(inst)
+            self.assertIn(("iptables", "-A", chain, "!", "-d", m.POOL, "-j", "REJECT"), calls)
+            self.assertIn(("iptables", "-I", "FORWARD", "1", "-i", m.net_of(inst)["tap"], "-j", chain), calls)
+            self.assertFalse(any("ACCEPT" in a and chain in a for a in calls))
+            calls.clear()
+            m.apply_internet(inst, True)
+            self.assertIn(("iptables", "-A", chain, "!", "-d", m.POOL, "-j", "ACCEPT"), calls)
+            self.assertFalse(any(a[-1] == "REJECT" and "!" in a for a in calls))
+        finally:
+            m.sh, m.ensure_antispoof = old
+
     def test_sandbox_config_only_narrows(self):
         """A sandboxed sub-agent runs in an ephemeral VM with a NARROWER policy:
         a subset of the caller's tools (never the spawning/secret ones), an
