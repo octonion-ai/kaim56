@@ -3357,7 +3357,7 @@ class ManagerFunctions(unittest.TestCase):
             # a claude instance reports its host credential, not a key
             m.instance_by_ip = lambda ip: None
             cl = {**inst, "template": "claude", "config": {}}
-            self.assertIn(m.session_info(cl)["login"], ("ok", "missing (log in on the host)"))
+            self.assertRegex(m.session_info(cl)["login"], r"^(ok · valid \d+h \d+m|expired on the host.*|missing \(log in on the host\))$")
             self.assertNotIn("commands", m.session_info(cl))                       # the / picker lists them
         finally:
             (m.load_instances, m.is_running, m.pidfile, m.load_settings, m.secret_store, m.load_secret_policy,
@@ -3640,6 +3640,38 @@ class ManagerHTTP(unittest.TestCase):
         d = json.loads(txt)
         for k in ("calls", "in", "out", "cost"):
             self.assertIn(k, d)
+
+    def test_claude_bridge_syncs_the_host_login(self):
+        """The claude VM works from a copy of the host's OAuth login that goes
+        stale once the host rotates its refresh token. The bridge pulls the
+        host's credential before a turn when it is newer, and once by force
+        when Claude answers with the auth failure."""
+        import io
+        wb = _load("web_bridge_e2e", os.path.join(os.path.dirname(os.path.dirname(AGENT_PATH)), "claude", "web_bridge.py")
+                   if os.path.exists(os.path.join(os.path.dirname(os.path.dirname(AGENT_PATH)), "claude", "web_bridge.py"))
+                   else "/home/ulrich/claude-signal-firecracker/web_bridge.py")
+        tmp = tempfile.mkdtemp(prefix="e2e-cred-")
+        wb.CRED_PATH = os.path.join(tmp, ".claude", ".credentials.json")
+        host = {"claudeAiOauth": {"accessToken": "new", "refreshToken": "r2", "expiresAt": 2000}}
+        old_open = urllib.request.urlopen                 # the bridge shares the global module: restore it
+        wb.urllib.request.urlopen = lambda url, timeout=None: io.BytesIO(json.dumps(host).encode())
+        self.addCleanup(setattr, urllib.request, "urlopen", old_open)
+        self.assertTrue(wb._sync_credentials())                                   # no copy yet -> written
+        self.assertEqual(json.load(open(wb.CRED_PATH))["claudeAiOauth"]["accessToken"], "new")
+        self.assertEqual(oct(os.stat(wb.CRED_PATH).st_mode & 0o777), "0o600")
+        self.assertFalse(wb._sync_credentials())                                  # same age -> untouched
+        host["claudeAiOauth"] = {"accessToken": "newer", "expiresAt": 3000}
+        self.assertTrue(wb._sync_credentials())
+        host["claudeAiOauth"] = {"accessToken": "older", "expiresAt": 1000}
+        self.assertFalse(wb._sync_credentials()); self.assertTrue(wb._sync_credentials(force=True))
+        self.assertEqual(json.load(open(wb.CRED_PATH))["claudeAiOauth"]["accessToken"], "older")
+        # the turn: auth failure -> forced sync -> one retry
+        calls = []
+        wb._claude_run = lambda msg, resume, keep: calls.append(msg) or ("Failed to authenticate: OAuth session expired" if len(calls) == 1 else "hi")
+        self.assertEqual(wb._claude_once("hello", None, True), "hi")
+        self.assertEqual(len(calls), 2)
+        wb.urllib.request.urlopen = lambda url, timeout=None: (_ for _ in ()).throw(OSError("no manager"))
+        self.assertFalse(wb._sync_credentials(force=True))                         # no manager: keep the copy, no crash
 
     def test_version_and_update_check(self):
         """The installed version comes from VERSION (dev without it), the newest

@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Web transport bridge: small chat UI + /api/chat, agent-aware (claude|fabric).
+"""Web-Transport-Bridge: kleine Chat-UI + /api/chat, agent-aware (claude|fabric).
 
-Runs in the microVM on 0.0.0.0:WEB_PORT. Reached ONLY through the manager proxy
-(agents.example.com/i/<name>/), hence no auth of its own. Stdlib only.
+Laeuft in der microVM auf 0.0.0.0:WEB_PORT. Wird NUR ueber den Manager-Proxy
+(agents.kat56.de/i/<name>/) erreicht, daher keine eigene Auth. Stdlib only.
 """
 import json
 import os
 import subprocess
+import tempfile
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 AGENT = os.environ.get("AGENT", "claude")
@@ -19,45 +21,102 @@ FABRIC_DEFAULT_PATTERN = os.environ.get("FABRIC_DEFAULT_PATTERN", "ai")
 _session = None
 
 
-_model = None      # set via /model; None = the installation's default
+_model = None      # per /model gesetzt; None = Vorgabe der Installation
+
+# Die Anmeldung ist eine Kopie des Host-Credentials (guest-init holt sie beim
+# Boot). Claude Code auf dem Host erneuert seine Tokens laufend und der
+# Refresh-Token rotiert dabei — die Kopie im Gast laeuft nach Stunden ab und
+# kann sich nicht mehr selbst erneuern ("OAuth session expired and could not be
+# refreshed"). Darum vor jedem Turn nachziehen, wenn der Host ein neueres hat,
+# und bei genau dieser Fehlermeldung einmal erzwungen nachziehen + wiederholen.
+CRED_PATH = os.environ.get("CLAUDE_CRED_PATH", "/home/node/.claude/.credentials.json")
+AUTH_FAIL_MARKS = ("Failed to authenticate", "OAuth session expired", "Not logged in")
+
+
+def manager_base():
+    """Der Manager ist das Host-Gateway (.1 des /30) auf :8700."""
+    ip = ""
+    try:
+        ip = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=5).stdout.split()[0]
+    except Exception:
+        pass
+    if not ip:
+        return "http://172.30.1.1:8700"
+    return f"http://{ip.rsplit('.', 1)[0]}.1:8700"
+
+
+def _sync_credentials(force=False):
+    """Host-Credential holen; schreiben, wenn es juenger ist als die Kopie (oder
+    force). True = geschrieben. Faellt still zurueck: ohne Manager bleibt die Kopie."""
+    try:
+        with urllib.request.urlopen(f"{manager_base()}/api/claude-credentials", timeout=5) as r:
+            host = json.loads(r.read().decode()).get("claudeAiOauth") or {}
+    except Exception:
+        return False
+    if not host.get("accessToken"):
+        return False
+    try:
+        with open(CRED_PATH) as fh:
+            cur = json.load(fh)
+    except (OSError, ValueError):
+        cur = {}
+    mine = (cur.get("claudeAiOauth") or {}).get("expiresAt") or 0
+    if not force and mine >= (host.get("expiresAt") or 0):
+        return False
+    cur["claudeAiOauth"] = host
+    d = os.path.dirname(CRED_PATH)
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".cred.", dir=d)
+    with os.fdopen(fd, "w") as fh:
+        json.dump(cur, fh)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, CRED_PATH)
+    return True
 
 
 def run_claude(msg):
     global _session, _model
     m = msg.strip()
     low = m.lower()
-    # Platform slash commands: Claude Code has its OWN slash commands
-    # (/branch = git worktrees!) that only confuse here. What the bridge can
-    # do it does itself; what does not exist on Claude instances it says so
-    # honestly — instead of passing Claude Code's "isn't available in this
-    # environment" through.
+    # Plattform-Slash-Befehle: Claude Code hat EIGENE Slash-Befehle (/branch =
+    # Git-Worktrees!), die hier nur verwirren wuerden. Was die Bruecke kann,
+    # macht sie selbst; was es auf Claude-Instanzen nicht gibt, sagt sie ehrlich
+    # — statt Claude Codes "isn't available in this environment" durchzureichen.
     if low == "/reset":
         _session = None
-        return "🔄 New conversation."
+        return "🔄 Neue Unterhaltung."
     if low.startswith("/model"):
         rest = m[6:].strip()
         if not rest:
-            return f"🧠 Model: {_model or 'installation default'} · /model sonnet|opus|haiku|<id> · /model default"
+            return f"🧠 Modell: {_model or 'Vorgabe der Installation'} · /model sonnet|opus|haiku|<id> · /model default"
         _model = None if rest.lower() in ("default", "reset", "aus", "off") else rest
-        return f"🧠 Model from now on: {_model or 'installation default'}"
+        return f"🧠 Modell ab jetzt: {_model or 'Vorgabe der Installation'}"
     if low.startswith("/fresh"):
         rest = m[6:].strip()
         if not rest:
-            return "Usage: /fresh <task> — one-off request in a throwaway context."
+            return "Usage: /fresh <Auftrag> — Einmal-Anfrage im Wegwerf-Kontext."
         return _claude_once(rest, resume=None, keep_session=False)
     for known in ("/aside", "/branch", "/back", "/goal", "/steps", "/reasoning"):
         if low == known or low.startswith(known + " "):
-            return (f"ℹ️ {known} only exists on the OpenRouter agents, not on "
-                    "Claude Code instances. Available here: /reset, /fresh, /model — "
-                    "everything else goes to Claude itself as a Claude Code command.")
+            return (f"ℹ️ {known} gibt es nur auf den OpenRouter-Agenten, nicht auf "
+                    "Claude-Code-Instanzen. Hier verfuegbar: /reset, /fresh, /model — "
+                    "alles andere geht als Claude-Code-Befehl an Claude selbst.")
     return _claude_once(m, resume=_session, keep_session=True)
 
 
 def _claude_once(msg, resume, keep_session):
+    _sync_credentials()
+    out = _claude_run(msg, resume, keep_session)
+    if any(k in out for k in AUTH_FAIL_MARKS) and _sync_credentials(force=True):
+        out = _claude_run(msg, resume, keep_session)      # einmal mit frischer Anmeldung
+    return out
+
+
+def _claude_run(msg, resume, keep_session):
     global _session
     cmd = ["claude", "-p", msg, "--output-format", "json",
-           # Platform tools (memory, search, skills, notify) as a real MCP
-           # server instead of curl recipes — Claude sees them in its catalog.
+           # Plattform-Tools (Memory, Suche, Skills, Notify) als echter
+           # MCP-Server statt curl-Rezepten — Claude sieht sie im Tool-Katalog.
            "--mcp-config", "/app/kaim56-mcp.json"]
     if _model:
         cmd += ["--model", _model]
@@ -70,9 +129,9 @@ def _claude_once(msg, resume, keep_session):
         d = json.loads(p.stdout)
         if keep_session and d.get("session_id"):
             _session = d["session_id"]
-        return d.get("result") or "(empty reply)"
+        return d.get("result") or "(leere Antwort)"
     except json.JSONDecodeError:
-        return (p.stdout or p.stderr or "(no output)")[:4000]
+        return (p.stdout or p.stderr or "(keine Ausgabe)")[:4000]
 
 
 def run_fabric(msg):
@@ -83,7 +142,7 @@ def run_fabric(msg):
         body = parts[1] if len(parts) > 1 else ""
     p = subprocess.run(["fabric", "-p", pattern], input=body, capture_output=True,
                        text=True, timeout=TIMEOUT)
-    return (p.stdout or p.stderr or "(empty reply)").strip()
+    return (p.stdout or p.stderr or "(leere Antwort)").strip()
 
 
 def run(msg):

@@ -3640,6 +3640,20 @@ TEMPLATE_RUNTIME = {"openrouter": "openrouter-agent", "orcarouter": "openrouter-
                     "pi": "pi", "prime": "prime"}
 
 
+def claude_login_state():
+    """The host's Claude login as the session panel shows it: not only present,
+    but how long its access token is still valid (the VM works from a copy)."""
+    try:
+        with open(CLAUDE_CRED_SRC) as fh:
+            exp = (json.load(fh).get("claudeAiOauth") or {}).get("expiresAt") or 0
+    except (OSError, ValueError):
+        return "missing (log in on the host)"
+    left = exp / 1000 - time.time()
+    if left <= 0:
+        return "expired on the host (run claude /login there)"
+    return f"ok · valid {int(left // 3600)}h {int(left % 3600 // 60)}m"
+
+
 def session_info(inst):
     """What the chat's session panel shows for an instance: runtime, uptime,
     login state, the platform services as the agent sees them, and its MCP
@@ -3652,7 +3666,7 @@ def session_info(inst):
     except OSError:
         started = 0
     if tpl == "claude":
-        login = "ok" if os.path.isfile(CLAUDE_CRED_SRC) else "missing (log in on the host)"
+        login = claude_login_state()
     elif (load_settings().get("LLM_KEY_PROXY") or "") == "1":
         login = "key proxy"
     else:
