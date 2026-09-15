@@ -2003,7 +2003,37 @@ def _hook_before_tool(name, args):
 
 
 # --- OpenRouter chat --------------------------------------------------------
+FOLD_SYSTEM = os.environ.get("LLM_FOLD_SYSTEM", "1" if LLAMA_ENDPOINT else "0") not in ("0", "false", "False", "")
+
+
+def _wire_messages(messages):
+    """The history carries system notes mid-conversation ([Memory], [Playbooks],
+    the date line, a deadline note …). Chat templates of local models (Qwen3
+    in llama.cpp: "System message must be at the beginning") reject that, so
+    for the llama backend every later system message is folded into the first
+    one, in order; the other roles keep their places. LLM_FOLD_SYSTEM=1
+    forces it for any backend, 0 disables it."""
+    if not FOLD_SYSTEM:
+        return messages
+    first, extra, rest = None, [], []
+    for m in messages:
+        if m.get("role") == "system":
+            c = str(m.get("content", "") or "")
+            if first is None:
+                first = dict(m); first["content"] = c
+            elif c.strip():
+                extra.append(c)
+        else:
+            rest.append(m)
+    if first is None:
+        return messages
+    if extra:
+        first["content"] = "\n\n".join([first["content"]] + extra)
+    return [first] + rest
+
+
 def or_chat(messages, tools, model=None):
+    messages = _wire_messages(messages)
     _b = {"model": model or OR_MODEL, "messages": messages, "usage": {"include": True}}
     if tools:                       # do NOT send an empty tools list (400)
         _b["tools"] = tools
@@ -2524,7 +2554,7 @@ def or_chat_stream(messages, tools, on_token):
     """Like or_chat, but streaming: calls on_token(text) per delta. Reassembles
     the (assistant) message including any tool_calls from the stream."""
     def _build_llm_body(use_tools):
-        b = {"model": OR_MODEL, "messages": messages, "stream": True, "usage": {"include": True}}
+        b = {"model": OR_MODEL, "messages": _wire_messages(messages), "stream": True, "usage": {"include": True}}
         if use_tools and tools:
             b["tools"] = tools
             b["tool_choice"] = "auto"

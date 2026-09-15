@@ -826,6 +826,29 @@ class AgentLogic(unittest.TestCase):
             self.a._goal = None
 
     # --- Summarizing conversation manager -----------------------------------
+    def test_wire_messages_folds_system_notes_for_local_models(self):
+        """Qwen3's chat template in llama.cpp rejects a system message that is
+        not the first one; the agent's [Memory]/[Playbooks]/date notes are
+        such messages. For the llama backend they fold into the first system
+        message, in order; other backends get the history untouched."""
+        a = self.a
+        old = a.FOLD_SYSTEM
+        msgs = [{"role": "system", "content": "SYS"}, {"role": "user", "content": "u1"},
+                {"role": "system", "content": "[Memory] m"}, {"role": "assistant", "content": "a1"},
+                {"role": "system", "content": "   "}, {"role": "system", "content": "[Now] d"},
+                {"role": "user", "content": "u2"}]
+        try:
+            a.FOLD_SYSTEM = True
+            w = a._wire_messages(msgs)
+            self.assertEqual([m["role"] for m in w], ["system", "user", "assistant", "user"])
+            self.assertEqual(w[0]["content"], "SYS\n\n[Memory] m\n\n[Now] d")
+            self.assertEqual(msgs[0]["content"], "SYS")                           # the history itself is untouched
+            self.assertEqual(a._wire_messages([{"role": "user", "content": "x"}]), [{"role": "user", "content": "x"}])
+            a.FOLD_SYSTEM = False
+            self.assertIs(a._wire_messages(msgs), msgs)
+        finally:
+            a.FOLD_SYSTEM = old
+
     def test_summarizing_split(self):
         a = self.a
         old_sum, old_max, old_keep, old_hist = a._summarize, a.CTX_MAX_MSGS, a.CTX_PRESERVE_RECENT, list(a._history)

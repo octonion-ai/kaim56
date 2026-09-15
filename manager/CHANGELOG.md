@@ -5,6 +5,9 @@ entry (root causes, measurements, alternatives considered) lives in git
 history — `git log -p -- manager/CHANGELOG.md` before 2026-09-08 — and in the
 commit messages.
 
+## 2026-09-15
+- Local models (llama backend): mid-conversation system notes ([Memory], [Playbooks], date line, deadline note) are folded into the first system message on the wire — Qwen3's chat template in llama.cpp answered HTTP 500 "System message must be at the beginning" to every turn of the `uncensored` instance since its start; `LLM_FOLD_SYSTEM=1/0` overrides; the misleading "FATAL: OPENROUTER_API_KEY fehlt" line no longer appears for a local model
+
 ## 2026-09-14
 - install.sh reruns keep the operator's state: `mcp-catalog.json`, `personas.json`, `secret-policy.json` are seeded only when missing; unknown `Environment=` lines of an existing unit (fixed login, proxy flags) are carried over and no password is generated when the unit already sets one
 - Updates: install.sh writes `VERSION` and installs `kaim56-update.service` (root oneshot: `install.sh --release`, newest tag, same options); the manager compares with the newest GitHub release (`GET /api/version`, cached 6 h, `UPDATE_CHECK=0` disables, `UPDATE_REPO` in site.json), footer badge and a card in Settings with an Update button (`POST /api/update`) that streams `run/update.log`; the installer runs as root from the unit (sudo no-op, git as the operator)
