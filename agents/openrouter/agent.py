@@ -1708,6 +1708,25 @@ def report_usage(u, ms=None, ok=True, err=""):
 #  4) GOAL loop with judge (goal loop) + tool HOOK (interventions/HITL)
 
 LLM_RETRIES = int(os.environ.get("LLM_RETRIES", "3"))
+# Socket timeout of one LLM call (also between stream chunks): a local model
+# on a CPU may chew on a 6k-token prompt or an image for minutes before the
+# first byte, so the llama backend gets ten minutes (the manager's stream
+# timeout is 620 s); cloud backends keep the short values.
+LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "600" if LLAMA_ENDPOINT else "120"))
+LLM_STREAM_TIMEOUT = int(os.environ.get("LLM_STREAM_TIMEOUT", str(max(LLM_TIMEOUT, 180))))
+
+
+def _is_timeout(e):
+    return isinstance(e, (TimeoutError, socket.timeout)) or "timed out" in str(e).lower()
+
+
+def _retry_after(e, attempt):
+    """A retry after a timeout is only worth it against a cloud backend: a
+    local model is still busy with the request that timed out, a second one
+    would just queue behind it."""
+    if attempt >= LLM_RETRIES:
+        return False
+    return not (LLAMA_ENDPOINT and _is_timeout(e))
 _RETRY_CODES = {408, 409, 429, 500, 502, 503, 504}
 
 
@@ -2049,7 +2068,7 @@ def or_chat(messages, tools, model=None):
         req = urllib.request.Request(_llm_url(), data=body, method="POST",
                                      headers=_llm_headers())
         try:
-            r = urllib.request.urlopen(req, timeout=120)
+            r = urllib.request.urlopen(req, timeout=LLM_TIMEOUT)
             d = json.loads(r.read().decode())
             report_usage(d.get("usage"), ms=int((time.monotonic() - t0) * 1000))
             return d["choices"][0]["message"]
@@ -2067,7 +2086,7 @@ def or_chat(messages, tools, model=None):
             return {"content": last}
         except Exception as e:
             last = f"⚠️ {LLM_NAME} error: {e!r}"
-            if attempt < LLM_RETRIES:
+            if _retry_after(e, attempt):
                 _retry_sleep(attempt); continue
             report_usage({}, ms=int((time.monotonic() - t0) * 1000), ok=False, err=last)
             return {"content": last}
@@ -2580,7 +2599,7 @@ def or_chat_stream(messages, tools, on_token):
         req = urllib.request.Request(_llm_url(), data=body, method="POST",
                                      headers=_llm_headers())
         try:
-            r = urllib.request.urlopen(req, timeout=180)
+            r = urllib.request.urlopen(req, timeout=LLM_STREAM_TIMEOUT)
             break
         except urllib.error.HTTPError as e:
             err_body = e.read().decode("utf-8", "replace")[:400]
@@ -2610,7 +2629,7 @@ def or_chat_stream(messages, tools, on_token):
             on_token(m); return {"role": "assistant", "content": m}
         except Exception as e:
             m = f"⚠️ {LLM_NAME} error: {e!r}"
-            if attempt < LLM_RETRIES:
+            if _retry_after(e, attempt):
                 _retry_sleep(attempt); continue
             report_usage({}, ms=int((time.monotonic() - _t0) * 1000), ok=False, err=m)
             on_token(m); return {"role": "assistant", "content": m}

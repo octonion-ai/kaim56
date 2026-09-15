@@ -826,6 +826,24 @@ class AgentLogic(unittest.TestCase):
             self.a._goal = None
 
     # --- Summarizing conversation manager -----------------------------------
+    def test_llm_timeouts_and_retry_policy_for_local_models(self):
+        """A local model gets long timeouts and no retry after a timeout (it is
+        still busy with the request that timed out); cloud backends keep the
+        short timeouts and retry."""
+        a = self.a
+        old = a.LLAMA_ENDPOINT
+        try:
+            self.assertGreaterEqual(a.LLM_STREAM_TIMEOUT, a.LLM_TIMEOUT)
+            a.LLAMA_ENDPOINT = "http://10.0.0.5:8080/"
+            self.assertFalse(a._retry_after(TimeoutError("timed out"), 0))
+            self.assertFalse(a._retry_after(OSError("The read operation timed out"), 0))
+            self.assertTrue(a._retry_after(OSError("connection reset"), 0))
+            a.LLAMA_ENDPOINT = ""
+            self.assertTrue(a._retry_after(TimeoutError("timed out"), 0))
+            self.assertFalse(a._retry_after(TimeoutError("timed out"), a.LLM_RETRIES))
+        finally:
+            a.LLAMA_ENDPOINT = old
+
     def test_wire_messages_folds_system_notes_for_local_models(self):
         """Qwen3's chat template in llama.cpp rejects a system message that is
         not the first one; the agent's [Memory]/[Playbooks]/date notes are
