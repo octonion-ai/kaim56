@@ -929,6 +929,17 @@ def t_memory_store(key, value):
         return f"Error: {e!r}"
 
 
+def t_memory_reflect(question):
+    """A reasoned answer from the second memory (Hindsight) over everything
+    this instance has seen — chat turns and notes. Off unless the manager has
+    HINDSIGHT_URL set; then the route says so."""
+    try:
+        d = json.loads(_mgr(_manager_base(), "/api/memory-reflect", {"query": question}, timeout=150))
+        return d.get("text") or d.get("error") or "(no answer)"
+    except Exception as e:
+        return f"Error: {e!r}"
+
+
 def t_memory_recall(key=None):
     """Retrieve a stored value (without key: all entries for this instance)."""
     inst = os.environ.get("FC_INSTANCE", "default")
@@ -1221,6 +1232,11 @@ BUILTIN = {
                      {"key": {"type": "string"}, "value": {"type": "string"}}, ["key", "value"]),
     "memory_recall": (t_memory_recall, "Retrieve a stored value; without key all entries.",
                       {"key": {"type": "string"}}, []),
+    "memory_reflect": (t_memory_reflect,
+                       "Ask the long-term memory a question and get a reasoned answer over everything "
+                       "remembered (past conversations, notes). Use for 'what do we know about…', "
+                       "'what did the user say about…', preferences and history.",
+                       {"question": {"type": "string"}}, ["question"]),
     "playbook_add": (t_playbook_add,
                      "Record a permanent rule/procedure — applies ALWAYS from now on. "
                      "Use this when the user tells you HOW something is to be done, states a "

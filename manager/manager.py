@@ -53,6 +53,8 @@ from mgr import mcp as _mcp  # noqa: E402
 _mcp.configure(BASE)
 from mgr import memfs as _memfs  # noqa: E402
 _memfs.configure(BASE)
+from mgr import hindsight as _hindsight  # noqa: E402
+_hindsight.configure(lambda: load_settings(), log=print)   # load_settings is defined further down; called lazily
 from mgr import signal as _signal_mod  # noqa: E402
 _signal_mod.configure(BASE)
 BIN = os.path.join(BASE, "bin", "firecracker")
@@ -75,6 +77,7 @@ SETTINGS_SCHEMA = [
     {"key": "SIGNAL_API", "label": "Signal REST API URL"},
     {"key": "LLAMA_ENDPOINT", "label": "llama.cpp endpoint (OpenAI-compatible base URL, e.g. http://10.0.0.50:8080/v1)"},
     {"key": "LLAMA_API_KEY", "label": "llama.cpp API key (optional, only if --api-key is set)"},
+    {"key": "HINDSIGHT_URL", "label": "Hindsight memory server — optional second memory (facts from every turn, recall + reflect); blank = off, e.g. http://127.0.0.1:8888"},
     {"key": "LLM_KEY_PROXY", "label": "LLM key injection proxy (1 = keys stay on the host, VMs proxy through the manager)", "options": [
         {"value": "", "label": "— off (agent fetches key via broker) —"},
         {"value": "1", "label": "on — keys never leave the host"}]},
@@ -860,6 +863,8 @@ def chat_log_append(inst_name, sender, user_text, reply_text, kind="signal"):
         n = save_chats(chats)
     try:
         _memfs.timeline_add(inst_name, kind, user_text, reply_text)   # the agent's own timeline
+        if user_text and reply_text and not str(reply_text).lstrip().startswith("⚠️"):
+            _hindsight.retain_async(inst_name, f"User: {user_text}\n\nAssistant: {reply_text}", (kind or "chat",))
     except Exception as e:
         print(f"[quiet] memfs timeline failed: {e!r}", flush=True)
     return n
@@ -1712,6 +1717,7 @@ AGENT_TOOLS_CATALOG = [
     {"name": "load_skill", "desc": "Load a skill into the context"},
     {"name": "memory_store", "desc": "Remember a value permanently"},
     {"name": "memory_recall", "desc": "Retrieve a remembered value"},
+    {"name": "memory_reflect", "desc": "Ask the second memory (Hindsight) a question over everything it has seen"},
     {"name": "playbook_add", "desc": "Record a permanent rule/playbook (always applies)"},
     {"name": "playbooks", "desc": "List playbooks (fixed rules)"},
     {"name": "playbook_forget", "desc": "Remove a playbook by ID"},
@@ -3686,7 +3692,8 @@ def session_info(inst):
     except Exception:
         sem = 0
     platform = [
-        {"name": "Memory", "state": f"{notes} notes · {sem} semantic" if (notes or sem) else "empty", "ok": True},
+        {"name": "Memory", "state": (f"{notes} notes · {sem} semantic" if (notes or sem) else "empty")
+                            + (" · hindsight" if _hindsight.enabled() else ""), "ok": True},
         {"name": "Web search", "state": "reachable" if (load_settings().get("BRAVE_API_KEY") or "") else "DuckDuckGo fallback", "ok": True},
         {"name": "Skills", "state": f"{len(load_skills())} in catalog", "ok": True},
         {"name": "Traces", "state": f"{len(turns_read(name, limit=50))} recent turns", "ok": True},
@@ -4040,6 +4047,10 @@ class H(BaseHTTPRequestHandler):
         # and gated by the guest allow/deny lists. Without this exemption a set
         # MANAGER_PASS would lock every agent out of its own manager.
         if not PW or instance_by_ip(self.client_address[0]) is not None:
+            return True
+        # Host services (containers on the docker bridge, e.g. Hindsight) may
+        # use the key proxy without a login — only that path, only from there.
+        if self.path.startswith("/api/llm/") and self.client_address[0].startswith("172.17."):
             return True
         key = auth_client_key(self.client_address[0], self.headers.get("X-Forwarded-For", ""))
         if auth_locked(key):
@@ -4406,6 +4417,8 @@ class H(BaseHTTPRequestHandler):
             self.end_headers(); self.wfile.write(out); return
         payload = self._raw(BODY_MAX_LLM)
         ginst = instance_by_ip(self.client_address[0])
+        if ginst is None and self.client_address[0].startswith("172.17."):
+            ginst = {"name": "hindsight" if _hindsight.enabled() else "services"}   # booked, not a VM
         span = {"turn": self.headers.get("X-Kaim-Turn", "")[:16],
                 "step": self.headers.get("X-Kaim-Step", "") or None}
         _t0 = time.monotonic()
@@ -4839,6 +4852,8 @@ def _rt_memory_post(h):
             print(f"[quiet] memfs note failed: {e!r}", flush=True)
     # Also store semantically; if the embedder fails the flat memory stays.
     sem = sem_store(target, value, key) if value is not None else False
+    if value is not None:
+        _hindsight.retain_async(target, f"{key}: {value}", ("note",))     # the optional second memory
     msg += " (+semantic)" if sem else ("" if value is None else " (semantic off)")
     return h._json({"msg": msg})
 
@@ -4849,7 +4864,22 @@ def _rt_memory_search(h):
     guest = h._guest()
     target = guest["name"] if guest else (b.get("instance") or "")
     hits = sem_search(target, b.get("query", ""), b.get("k", 5)) if target else []
+    if target and _hindsight.enabled():
+        seen = {x["text"] for x in hits}
+        hits += [x for x in _hindsight.recall(target, b.get("query", ""), b.get("k", 5)) if x["text"] not in seen]
     return h._json({"hits": hits})
+
+
+@ROUTER.post("/api/memory-reflect")
+def _rt_memory_reflect(h):
+    # memory_reflect tool: a reasoned answer from the instance's Hindsight
+    # bank. Guests get their own bank only; the admin may name an instance.
+    b = h._body()
+    guest = h._guest()
+    target = guest["name"] if guest else (b.get("instance") or "")
+    if not target:
+        return h._json({"error": "instance missing"}, 400)
+    return h._json({"text": _hindsight.reflect(target, b.get("query", ""))})
 
 
 @ROUTER.post("/api/task")

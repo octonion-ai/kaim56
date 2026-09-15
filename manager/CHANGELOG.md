@@ -6,6 +6,7 @@ history — `git log -p -- manager/CHANGELOG.md` before 2026-09-08 — and in th
 commit messages.
 
 ## 2026-09-15
+- Hindsight (vectorize.io) as an optional second memory: `mgr/hindsight.py`, container `kaim56-hindsight` (`install.sh --with-hindsight`, LLM through the key proxy from the docker bridge, booked as instance "hindsight"), on when `HINDSIGHT_URL` is set in Settings; chat turns and `memory_store` notes are retained per instance bank, recall hits merge into `/api/memory-search`, new tool `memory_reflect` → `POST /api/memory-reflect`; session panel shows it under Memory
 - Auto-reset per instance: `AUTO_RESET_MIN` (template param, 0 = never) drops the conversation when the last turn is older than that many minutes — `voicecommand` paid up to 20k tokens per "radio on" for the day's history; set to 30 there; the claude bridge does the same with its session
 - Claude instances: the bridge pulls the host's OAuth login before each turn when the host has a newer one and once by force on "Failed to authenticate" — the boot-time copy went stale as the host rotated its refresh token (`claudy`: "OAuth session expired and could not be refreshed"); the rootfs build no longer bakes a credential into the image; the session panel shows how long the host login is valid (needs a claude rootfs rebuild + instance restart)
 - Agent: an error reply of the non-streaming LLM call carried no `role`; appended to the history it made llama.cpp reject every following turn ("Missing 'role' in message") until a reset

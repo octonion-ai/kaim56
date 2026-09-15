@@ -15,6 +15,9 @@
 #   --no-build         skip the Docker builds (files/service only)
 #   --with-voice       also install the voice service (STT/TTS, ~2 GB Docker build)
 #   --with-agents      also build the pi/prime/claude rootfs (large)
+#   --with-hindsight   also run Hindsight (vectorize.io) as an optional second memory
+#                      (container on 127.0.0.1:8888, LLM through the manager's key proxy;
+#                      switch it on with HINDSIGHT_URL=http://127.0.0.1:8888 in Settings)
 #   --release          update the clone to the newest release tag first (what the
 #                      Update button in the web UI runs, via kaim56-update.service)
 #   KAIM56_BASE=<dir>  target directory (default: $HOME)
@@ -33,7 +36,7 @@ REPO_URL="${REPO_URL:-https://github.com/octonion-ai/kaim56.git}"
 BASE="${KAIM56_BASE:-$HOME}"
 FC_DIR="$BASE/firecracker"
 GUEST_DNS="${GUEST_DNS:-1.1.1.1}"
-CHECK_ONLY=0; NO_BUILD=0; WITH_VOICE=0; WITH_AGENTS=0; FILES_ONLY=0; RELEASE=0
+CHECK_ONLY=0; NO_BUILD=0; WITH_VOICE=0; WITH_AGENTS=0; FILES_ONLY=0; RELEASE=0; WITH_HINDSIGHT=0
 for a in "$@"; do case "$a" in
   --check) CHECK_ONLY=1;;
   --release) RELEASE=1;;
@@ -41,6 +44,7 @@ for a in "$@"; do case "$a" in
   --no-build) NO_BUILD=1;;
   --with-voice) WITH_VOICE=1;;
   --with-agents) WITH_AGENTS=1;;
+  --with-hindsight) WITH_HINDSIGHT=1;;
   *) echo "unknown option: $a"; exit 2;;
 esac; done
 
@@ -156,6 +160,19 @@ if [ "$NO_BUILD" = "0" ]; then
   if [ "$WITH_AGENTS" = "1" ]; then
     ( cd "$BASE/claude-signal-firecracker" && FC_DIR="$FC_DIR" PATH="$PATH:/sbin:/usr/sbin" bash build-rootfs.sh )
   fi
+  if [ "$WITH_HINDSIGHT" = "1" ]; then
+    # Second memory (optional). No key in the container: its LLM calls go to the
+    # manager's key proxy on the docker bridge and are booked as "hindsight".
+    docker pull -q ghcr.io/vectorize-io/hindsight:latest && docker rm -f kaim56-hindsight 2>/dev/null
+    docker run -d --restart unless-stopped --name kaim56-hindsight \
+      -p 127.0.0.1:8888:8888 -p 127.0.0.1:9999:9999 \
+      -e HINDSIGHT_API_LLM_PROVIDER=openai \
+      -e HINDSIGHT_API_LLM_BASE_URL=http://172.17.0.1:8700/api/llm/openrouter \
+      -e HINDSIGHT_API_LLM_MODEL="${HINDSIGHT_MODEL:-google/gemini-2.5-flash}" \
+      -e HINDSIGHT_API_LLM_API_KEY=proxy \
+      -v hindsight-data:/home/hindsight/.pg0 ghcr.io/vectorize-io/hindsight:latest
+    echo "  Hindsight on 127.0.0.1:8888 (UI :9999) — enable it in Settings: HINDSIGHT_URL=http://127.0.0.1:8888"
+  fi
 else
   say "[5/7] Builds skipped (--no-build)"
 fi
@@ -207,7 +224,7 @@ echo net.ipv4.ip_forward=1 | $SUDO tee /etc/sysctl.d/99-kaim56.conf >/dev/null
 # The update unit: root, oneshot, this installer again with the same options
 # plus --release; the manager starts it from the Settings tab (/api/update)
 # and shows its log (run/update.log).
-FLAGS="--release"; [ "$WITH_VOICE" = 1 ] && FLAGS="$FLAGS --with-voice"; [ "$WITH_AGENTS" = 1 ] && FLAGS="$FLAGS --with-agents"
+FLAGS="--release"; [ "$WITH_VOICE" = 1 ] && FLAGS="$FLAGS --with-voice"; [ "$WITH_AGENTS" = 1 ] && FLAGS="$FLAGS --with-agents"; [ "$WITH_HINDSIGHT" = 1 ] && FLAGS="$FLAGS --with-hindsight"
 $SUDO tee /etc/systemd/system/kaim56-update.service >/dev/null <<UNIT
 [Unit]
 Description=kAIm56 update (install.sh --release, started from the web UI)

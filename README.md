@@ -168,6 +168,7 @@ Per-client details live next to the code: `app/README.md`, `voice-client/README.
 
 - **Short term**: the conversation in the VM; summarised on overflow, cleared by `/reset`.
 - **Semantic long term**: `memory_store` embeds every note on the host (multilingual-e5, CPU); each turn the nearest notes to the question are injected — only what fits, never the whole store.
+- **Second memory (optional)**: [Hindsight](https://github.com/vectorize-io/hindsight) as a host container (`install.sh --with-hindsight`, `HINDSIGHT_URL` in Settings): every chat turn and note is retained into a bank per instance, recall hits join the per-turn memory block, and `memory_reflect` answers questions over everything an instance has seen. Its model calls go through the key proxy and are booked like an instance.
 - **Markdown memory folder**: `memory/<instance>/` mounted at `/memory` in the VM: notes as files, a daily timeline written by the manager (trimmed after two days, weekly after two weeks), a `MEMORY.md` index the agent sees every turn, versioned in git.
 - **Playbooks**: standing rules the agent records when told how to do something; injected on every turn, editable in the Personas tab.
 - **Session search**: full-text search over every chat and task run (`search_sessions`), scoped to the calling instance.

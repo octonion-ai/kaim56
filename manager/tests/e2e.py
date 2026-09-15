@@ -2873,6 +2873,53 @@ class ManagerFunctions(unittest.TestCase):
         finally:
             m.load_settings = old
 
+    def test_hindsight_second_memory(self):
+        """Off without HINDSIGHT_URL (every call a no-op); on: retain sends the
+        text to the instance's bank, recall hits merge into the memory search
+        behind the semantic ones, reflect answers, and a dead server never
+        raises."""
+        import mgr.hindsight as hs
+        m = self.m
+        calls = []
+        old = hs._settings, hs._call, m.sem_search, m.load_settings
+        try:
+            hs.configure(lambda: {}, log=lambda *a, **k: None)
+            self.assertFalse(hs.enabled()); self.assertFalse(hs.retain("vm1", "x")); self.assertEqual(hs.recall("vm1", "q"), [])
+            self.assertIn("off", hs.reflect("vm1", "q"))
+            hs.configure(lambda: {"HINDSIGHT_URL": "http://127.0.0.1:1/"}, log=lambda *a, **k: None)
+            def fake(method, path, body=None, timeout=20):
+                calls.append((method, path, body))
+                if path.endswith("/recall"):
+                    return {"results": [{"text": "Ulrich bikes to work", "score": 0.9}, {"content": "likes radio"}, {"text": ""}]}
+                if path.endswith("/reflect"):
+                    return {"text": "He commutes by bike."}
+                return {"success": True}
+            hs._call = fake
+            self.assertTrue(hs.retain("vm 1", "User: hi\n\nAssistant: hello", ("chat",)))
+            self.assertEqual(calls[-1][1], "/v1/default/banks/vm-1/memories")
+            self.assertEqual(calls[-1][2]["items"][0]["tags"], ["chat"]); self.assertTrue(calls[-1][2]["async"])
+            hits = hs.recall("vm1", "commute")
+            self.assertEqual([h["text"] for h in hits], ["Ulrich bikes to work", "likes radio"])
+            self.assertEqual(hits[0]["source"], "hindsight")
+            self.assertEqual(hs.reflect("vm1", "how does he commute?"), "He commutes by bike.")
+            self.assertEqual(hs.bank("a/b c"), "a-b-c")
+            # merged into the manager's memory search, semantic first, no duplicates
+            m.load_settings = lambda: {"HINDSIGHT_URL": "http://127.0.0.1:1/"}
+            m._hindsight.configure(m.load_settings, log=lambda *a, **k: None); m._hindsight._call = fake
+            m.sem_search = lambda inst, q, k=5: [{"score": 0.5, "text": "likes radio"}]
+            h = self._post_handler("/api/memory-search", "10.0.0.9", json.dumps({"instance": "vm1", "query": "commute"}).encode())
+            m.instance_by_ip = lambda ip: None
+            h._do_POST()
+            d = json.loads(h.wfile.getvalue().split(b"\r\n\r\n", 1)[1])
+            self.assertEqual([x["text"] for x in d["hits"]], ["likes radio", "Ulrich bikes to work"])
+            def dead(method, path, body=None, timeout=20):
+                raise OSError("connection refused")
+            hs._call = dead
+            self.assertFalse(hs.retain("vm1", "x", wait=True)); self.assertEqual(hs.recall("vm1", "q"), [])
+            self.assertIn("error", hs.reflect("vm1", "q")); self.assertFalse(hs.health()[0])
+        finally:
+            hs._settings, hs._call, m.sem_search, m.load_settings = old
+
     def test_proxy_books_upstream_usage(self):
         m = self.m
         seen = []
