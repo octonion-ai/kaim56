@@ -3251,6 +3251,7 @@ def effective_policy(inst):
         "secrets": sorted(allowed_secret_keys(inst)),
         "mcps": mcps,
         "katfs_share": cfg.get("KATFS_SHARE", ""),
+        "auto_reset": str(cfg.get("AUTO_RESET_MIN", "") or "0"),
     }
 
 

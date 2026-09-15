@@ -123,6 +123,9 @@ async function loadPolicy(auto){
       `<div class=kv><b>Secrets</b><span>${secrets}</span></div>`+
       `<div class=kv><b>MCP</b><span style="display:flex;flex-wrap:wrap;gap:2px 14px;align-items:center">${mcps}`+
         `<button class="btn btn-primary btn-sm" onclick="savePolMcps('${esc(p.name)}')">Save MCP</button><span class=msg data-mmsg="${esc(p.name)}"></span></span></div>`+
+      `<div class=kv><b>Auto-reset</b><span style="display:flex;gap:8px;align-items:center;font-size:12.5px"><input class="input mono" type=number min=0 step=5 data-ar="${esc(p.name)}" value="${esc(p.auto_reset||'0')}" style="width:80px;font-size:12.5px">`+
+        `<span class=text-muted>min idle, then a fresh context (0 = never) · applies after a restart</span>`+
+        `<button class="btn btn-secondary btn-sm" onclick="savePolAutoReset('${esc(p.name)}')">Save</button><span class=msg data-armsg="${esc(p.name)}"></span></span></div>`+
       (p.katfs_share?`<div class=kv><b>katfs</b><span class=mono style="font-size:12px">${escT(p.katfs_share)}</span></div>`:'')+
       `<div style="margin-top:8px"><div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">`+
         `<b style="font-family:var(--font-heading);font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:color-mix(in srgb,var(--color-text) 60%,transparent)">Tools</b>`+
@@ -145,6 +148,15 @@ function savePolTools(name){
       if(ok){POL_DIRTY.delete(name); if(el)el.textContent=(d.msg||'saved')+' ✓';}
       else if(el)el.textContent='⚠️ '+(d.msg||('HTTP '+r.status));
     }).catch(e=>{const el=document.querySelector(`[data-tmsg="${CSS.escape(name)}"]`);if(el)el.textContent='⚠️ '+e;});
+}
+function savePolAutoReset(name){
+  const v=String(Math.max(0,parseInt(document.querySelector(`input[data-ar="${CSS.escape(name)}"]`).value||'0',10)));
+  fetch(`/api/instances/${name}/config`,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({key:'AUTO_RESET_MIN',value:v})}).then(async r=>{
+      let d={}; try{d=await r.json()}catch(e){}
+      const el=document.querySelector(`[data-armsg="${CSS.escape(name)}"]`);
+      if(el)el.textContent=r.ok?(d.msg||'saved')+' ✓':'⚠️ '+(d.msg||('HTTP '+r.status));
+    });
 }
 function savePolMcps(name){
   const list=[...document.querySelectorAll(`input[data-pm="${CSS.escape(name)}"]:checked`)].map(c=>c.value);
