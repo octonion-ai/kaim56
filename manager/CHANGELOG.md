@@ -6,6 +6,7 @@ history — `git log -p -- manager/CHANGELOG.md` before 2026-09-08 — and in th
 commit messages.
 
 ## 2026-09-15
+- Auto-reset per instance: `AUTO_RESET_MIN` (template param, 0 = never) drops the conversation when the last turn is older than that many minutes — `voicecommand` paid up to 20k tokens per "radio on" for the day's history; set to 30 there; the claude bridge does the same with its session
 - Claude instances: the bridge pulls the host's OAuth login before each turn when the host has a newer one and once by force on "Failed to authenticate" — the boot-time copy went stale as the host rotated its refresh token (`claudy`: "OAuth session expired and could not be refreshed"); the rootfs build no longer bakes a credential into the image; the session panel shows how long the host login is valid (needs a claude rootfs rebuild + instance restart)
 - Agent: an error reply of the non-streaming LLM call carried no `role`; appended to the history it made llama.cpp reject every following turn ("Missing 'role' in message") until a reset
 - Local models, streaming: a stream that ends with nothing (llama.cpp sent the headers, then died on the image) is reported as a dropped connection instead of „(empty reply)“; images leave the history, the failed call is booked

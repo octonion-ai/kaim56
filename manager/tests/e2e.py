@@ -885,6 +885,26 @@ class AgentLogic(unittest.TestCase):
         finally:
             a.LLAMA_ENDPOINT, a.urllib.request.urlopen, a.report_usage = old
 
+    def test_auto_reset_after_idle_minutes(self):
+        """AUTO_RESET_MIN: a context that idled longer than that starts over at
+        the next turn; a recent turn, a fresh context or 0 leave it alone."""
+        a = self.a
+        old = a.AUTO_RESET_MIN, a._last_turn[0], list(a._history)
+        try:
+            a._history[:] = [{"role": "system", "content": "S"}, {"role": "user", "content": "u"}, {"role": "assistant", "content": "a"}]
+            a.AUTO_RESET_MIN = 0; a._last_turn[0] = time.time() - 3600
+            self.assertFalse(a._auto_reset()); self.assertEqual(len(a._history), 3)
+            a.AUTO_RESET_MIN = 30; a._last_turn[0] = time.time() - 600
+            self.assertFalse(a._auto_reset()); self.assertEqual(len(a._history), 3)      # 10 min idle: keep
+            a._last_turn[0] = time.time() - 3600
+            self.assertTrue(a._auto_reset()); self.assertEqual(len(a._history), 1)       # 60 min idle: fresh
+            a._last_turn[0] = time.time() - 3600
+            self.assertFalse(a._auto_reset())                                             # already fresh: nothing to drop
+            a._last_turn[0] = 0.0; a._history.append({"role": "user", "content": "u"})
+            self.assertFalse(a._auto_reset())                                             # first turn after boot: keep
+        finally:
+            a.AUTO_RESET_MIN, a._last_turn[0] = old[0], old[1]; a._history[:] = old[2]
+
     def test_llm_timeouts_and_retry_policy_for_local_models(self):
         """A local model gets long timeouts and no retry after a timeout (it is
         still busy with the request that timed out); cloud backends keep the

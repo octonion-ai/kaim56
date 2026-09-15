@@ -2363,6 +2363,24 @@ def _trim_history():
 _steer_lock = threading.Lock()
 _steer_q = []
 _busy = [False]
+# Auto-reset: a context that idled for AUTO_RESET_MIN minutes starts over at
+# the next turn (0 = never). For a voice instance every "radio on" otherwise
+# pays for the whole day's history on each of its two model calls.
+AUTO_RESET_MIN = int(os.environ.get("AUTO_RESET_MIN", "0") or 0)
+_last_turn = [0.0]
+
+
+def _auto_reset():
+    """Called at the start of a turn, before the injections: drops the
+    conversation if the last turn is older than AUTO_RESET_MIN minutes.
+    Returns True when it did (the turn then starts on a fresh context)."""
+    now = time.time()
+    last, _last_turn[0] = _last_turn[0], now
+    if AUTO_RESET_MIN <= 0 or not last or now - last < AUTO_RESET_MIN * 60 or len(_history) <= 1:
+        return False
+    del _history[1:]
+    log(f"auto-reset: context idle for {int((now - last) // 60)} min (> {AUTO_RESET_MIN}), starting fresh")
+    return True
 
 
 def steer_push(msg):
@@ -2556,6 +2574,7 @@ def run(user_message, deadline=0.0, kind="chat", turn=None):
         finally:
             _trace_end(_outcome_of(out))
             _maybe_learn(hist, m, _outcome_of(out))
+    _auto_reset()
     _trim_history()
     _inject_playbooks()
     _inject_missions()
@@ -2772,6 +2791,7 @@ def run_stream(user_message, on_token, image=None, deadline=0.0, kind="stream", 
         on_token(_tool_loop([{"role": "system", "content": SYSTEM},
                              {"role": "user", "content": m}]))
         return
+    _auto_reset()
     _trim_history()
     _inject_playbooks()
     _inject_missions()

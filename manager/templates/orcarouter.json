@@ -9,7 +9,10 @@
       "key": "TRANSPORT",
       "label": "Transport",
       "type": "select",
-      "options": ["signal", "web"],
+      "options": [
+        "signal",
+        "web"
+      ],
       "default": "signal"
     },
     {
@@ -36,6 +39,11 @@
       "key": "MCP_CONFIG",
       "label": "MCP servers JSON (optional)",
       "default": ""
+    },
+    {
+      "key": "AUTO_RESET_MIN",
+      "label": "Auto-reset after idle (minutes, 0 = never) — a voice instance forgets the day's chatter, e.g. 30",
+      "default": "0"
     }
   ]
 }

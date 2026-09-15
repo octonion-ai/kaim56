@@ -74,8 +74,24 @@ def _sync_credentials(force=False):
     return True
 
 
+AUTO_RESET_MIN = int(os.environ.get("AUTO_RESET_MIN", "0") or 0)   # idle minutes, then a new conversation (0 = never)
+_last_turn = [0.0]
+
+
+def _auto_reset():
+    import time
+    global _session
+    now = time.time()
+    last, _last_turn[0] = _last_turn[0], now
+    if AUTO_RESET_MIN > 0 and last and _session and now - last >= AUTO_RESET_MIN * 60:
+        _session = None
+        return True
+    return False
+
+
 def run_claude(msg):
     global _session, _model
+    _auto_reset()
     m = msg.strip()
     low = m.lower()
     # Plattform-Slash-Befehle: Claude Code hat EIGENE Slash-Befehle (/branch =
