@@ -1716,6 +1716,29 @@ LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "600" if LLAMA_ENDPOINT else "12
 LLM_STREAM_TIMEOUT = int(os.environ.get("LLM_STREAM_TIMEOUT", str(max(LLM_TIMEOUT, 180))))
 
 
+def _conn_dropped(e):
+    """The server closed the connection without an answer — for llama.cpp
+    typically a crash (seen: every image input killed the server, which then
+    reloaded the model for a while)."""
+    t = str(e).lower()
+    return isinstance(e, (ConnectionResetError, BrokenPipeError)) or \
+        "closed connection" in t or "connection reset" in t or "remotedisconnected" in t
+
+
+def _llama_dropped_msg(messages):
+    """No retry against a crashed local server: it is reloading. If the
+    request carried an image, that was the trigger — the images leave the
+    history so the next turn does not kill the server again."""
+    n = _strip_history_images(messages)
+    if n:
+        return ("⚠️ the local model server dropped the connection while processing an image "
+                "(it crashes on image input) — the image was removed from the history, ask again without one")
+    return "⚠️ the local model server dropped the connection — it is probably restarting; try again in a minute"
+
+
+_LOADING_MSG = "⚠️ the local model server is loading its model — try again in a minute"
+
+
 def _is_timeout(e):
     return isinstance(e, (TimeoutError, socket.timeout)) or "timed out" in str(e).lower()
 
@@ -2080,13 +2103,17 @@ def or_chat(messages, tools, model=None):
                 body = json.dumps(_b).encode()
                 continue           # images gone -> the turn gets another chance
             last = f"⚠️ {LLM_NAME} HTTP {e.code}: {err_body[:300]}"
-            if e.code in _RETRY_CODES and attempt < LLM_RETRIES:
+            if LLAMA_ENDPOINT and e.code == 503:
+                last = _LOADING_MSG
+            elif e.code in _RETRY_CODES and attempt < LLM_RETRIES:
                 _retry_sleep(attempt); continue
             report_usage({}, ms=int((time.monotonic() - t0) * 1000), ok=False, err=last)
             return {"content": last}
         except Exception as e:
             last = f"⚠️ {LLM_NAME} error: {e!r}"
-            if _retry_after(e, attempt):
+            if LLAMA_ENDPOINT and _conn_dropped(e):
+                last = _llama_dropped_msg(messages)
+            elif _retry_after(e, attempt):
                 _retry_sleep(attempt); continue
             report_usage({}, ms=int((time.monotonic() - t0) * 1000), ok=False, err=last)
             return {"content": last}
@@ -2623,13 +2650,17 @@ def or_chat_stream(messages, tools, on_token):
                          "images removed, turn retried.\n")
                 continue
             m = f"⚠️ {LLM_NAME} HTTP {e.code}: {err_body[:300]}"
-            if e.code in _RETRY_CODES and attempt < LLM_RETRIES:
+            if LLAMA_ENDPOINT and e.code == 503:
+                m = _LOADING_MSG
+            elif e.code in _RETRY_CODES and attempt < LLM_RETRIES:
                 _retry_sleep(attempt); continue
             report_usage({}, ms=int((time.monotonic() - _t0) * 1000), ok=False, err=m)
             on_token(m); return {"role": "assistant", "content": m}
         except Exception as e:
             m = f"⚠️ {LLM_NAME} error: {e!r}"
-            if _retry_after(e, attempt):
+            if LLAMA_ENDPOINT and _conn_dropped(e):
+                m = _llama_dropped_msg(messages)
+            elif _retry_after(e, attempt):
                 _retry_sleep(attempt); continue
             report_usage({}, ms=int((time.monotonic() - _t0) * 1000), ok=False, err=m)
             on_token(m); return {"role": "assistant", "content": m}

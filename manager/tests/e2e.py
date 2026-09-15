@@ -826,6 +826,39 @@ class AgentLogic(unittest.TestCase):
             self.a._goal = None
 
     # --- Summarizing conversation manager -----------------------------------
+    def test_local_model_crash_on_image_is_not_retried_and_images_leave_history(self):
+        """llama.cpp closed the connection on every image (a crash, then a
+        model reload): no retry queue behind it, the image parts leave the
+        history so the next turn cannot trigger it again, the user gets one
+        clear line. A 503 while the model loads is answered the same way."""
+        import http.client, urllib.error
+        a = self.a
+        old = a.LLAMA_ENDPOINT, a.urllib.request.urlopen, a._retry_sleep
+        slept = []
+        try:
+            a.LLAMA_ENDPOINT = "http://10.0.0.5:8080/"
+            a._retry_sleep = lambda n: slept.append(n)
+            msgs = [{"role": "system", "content": "S"},
+                    {"role": "user", "content": [{"type": "text", "text": "was siehst du?"},
+                                                 {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}}]}]
+            def drop(req, timeout=None):
+                raise http.client.RemoteDisconnected("Remote end closed connection without response")
+            a.urllib.request.urlopen = drop
+            r = a.or_chat(msgs, [])
+            self.assertIn("image was removed", r["content"])
+            self.assertEqual(slept, [])                                              # no retry
+            self.assertFalse(any(isinstance(p, dict) and p.get("type") == "image_url"
+                                 for m in msgs if isinstance(m.get("content"), list) for p in m["content"]))
+            r = a.or_chat(msgs, [])
+            self.assertIn("probably restarting", r["content"])                      # no image any more
+            def loading(req, timeout=None):
+                raise urllib.error.HTTPError(req.full_url, 503, "Service Unavailable", {}, io.BytesIO(b'{"error":{"message":"Loading model"}}'))
+            a.urllib.request.urlopen = loading
+            self.assertIn("loading its model", a.or_chat(msgs, [])["content"])
+            self.assertEqual(slept, [])
+        finally:
+            a.LLAMA_ENDPOINT, a.urllib.request.urlopen, a._retry_sleep = old
+
     def test_llm_timeouts_and_retry_policy_for_local_models(self):
         """A local model gets long timeouts and no retry after a timeout (it is
         still busy with the request that timed out); cloud backends keep the

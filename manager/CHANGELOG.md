@@ -6,6 +6,7 @@ history — `git log -p -- manager/CHANGELOG.md` before 2026-09-08 — and in th
 commit messages.
 
 ## 2026-09-15
+- Local models: when llama.cpp drops the connection (it crashed on every image input on the `uncensored` model server, then reloaded the model), the agent answers with one line, strips the images from the history so the next turn does not repeat the crash, and does not retry; a 503 while the model loads is reported the same way
 - Local models: LLM call timeout 600 s instead of 120/180 s (`LLM_TIMEOUT`, `LLM_STREAM_TIMEOUT`) and no retry after a timeout — an image question to the CPU-hosted 27B model timed out at 180 s while the model was still processing the prompt, and the retries queued behind it
 - Local models: the agent's usage report counts again (calls, tokens, spans in the traces) — with the key proxy on, guest reports were ignored across the board, so a llama instance showed zero calls forever; accepted now when the report is flagged `direct` and the instance has `LLAMA_ENDPOINT`; the stream asks llama.cpp for token counts in the last chunk
 - Local models (llama backend): mid-conversation system notes ([Memory], [Playbooks], date line, deadline note) are folded into the first system message on the wire — Qwen3's chat template in llama.cpp answered HTTP 500 "System message must be at the beginning" to every turn of the `uncensored` instance since its start; `LLM_FOLD_SYSTEM=1/0` overrides; the misleading "FATAL: OPENROUTER_API_KEY fehlt" line no longer appears for a local model
