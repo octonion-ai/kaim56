@@ -26,6 +26,13 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.draw.alpha
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
@@ -1234,6 +1241,7 @@ fun KatAgentApp(prefs: Prefs, gemma: LocalGemma, store: ChatStore, assistCalls: 
                     } else {
                         itemsIndexed(current.messages) { i, m ->
                             Bubble(m, agentLabel, current.mode, bubbleMax,
+                                working = busy && !m.user && i == current.messages.lastIndex,
                                 speaking = speakingIdx == i,
                                 onSpeak = { t -> speakText(t, i) },
                                 onStopSpeak = { stopSpeak() },
@@ -1711,9 +1719,37 @@ fun EmptyState(agent: String, mode: String, modifier: Modifier = Modifier) {
     }
 }
 
+/** Three dots pulsing in sequence plus the seconds since the turn started —
+ *  the app's "working in the background" cue while no token has arrived yet. */
+@Composable
+fun WorkingIndicator() {
+    val t = rememberInfiniteTransition(label = "dots")
+    var secs by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) {
+        val start = System.currentTimeMillis()
+        while (true) { delay(1000); secs = ((System.currentTimeMillis() - start) / 1000).toInt() }
+    }
+    Row(verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            repeat(3) { i ->
+                val a by t.animateFloat(
+                    initialValue = 0.25f, targetValue = 1f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(900, delayMillis = i * 180, easing = LinearEasing),
+                        repeatMode = RepeatMode.Reverse), label = "dot$i")
+                Box(Modifier.size(7.dp).alpha(a).clip(RoundedCornerShape(4.dp)).background(Kat.accentText))
+            }
+        }
+        if (secs >= 2) Text("working · ${secs}s", fontSize = 11.5.sp, fontFamily = Plex, color = Kat.textSubtle)
+    }
+}
+
+
 @Composable
 fun Bubble(
     m: Msg, agentLabel: String, mode: String, maxWidth: androidx.compose.ui.unit.Dp,
+    working: Boolean = false,      // the model is still producing this reply
     speaking: Boolean = false,
     onSpeak: (String) -> Unit = {},
     onStopSpeak: () -> Unit = {},
@@ -1815,7 +1851,13 @@ fun Bubble(
                         }
                     }
                     val hasImg = m.user && m.image != null
-                    if (!hasImg || body.isNotBlank()) SelectionContainer {
+                    if (!m.user && working && body.isBlank()) {
+                        // Nothing has streamed yet: a local model chews on the
+                        // prompt for half a minute before the first token, so a
+                        // static "…" reads as dead. Animated dots + a live
+                        // elapsed counter show it is working in the background.
+                        WorkingIndicator()
+                    } else if (!hasImg || body.isNotBlank()) SelectionContainer {
                         if (m.user) Text(
                             if (hasImg) body else body.ifEmpty { "…" },
                             fontSize = 15.sp, lineHeight = 22.5.sp, fontFamily = Plex, color = Kat.onAccent,

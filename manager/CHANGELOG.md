@@ -6,6 +6,7 @@ history — `git log -p -- manager/CHANGELOG.md` before 2026-09-08 — and in th
 commit messages.
 
 ## 2026-09-16
+- App 5.36: while a reply is still forming, the bubble shows pulsing dots and a live „working · Ns“ counter instead of a static „…“ — a local model is silent for 30+ s before the first token and looked dead
 - Notifications from agents are appended to the instance's task chat („🔔 title + text“) — the place a click on the notification opens; the Saddler weekly report existed only in the notification while the chat showed „(max tool steps reached)“
 
 ## 2026-09-15
