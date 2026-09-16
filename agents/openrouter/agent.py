@@ -1618,6 +1618,11 @@ def _maybe_learn(hist, user_text, outcome):
         return False
     if str(user_text).startswith("/"):
         return False
+    # A-4: the distillation is an extra background LLM call — log it so the
+    # per-turn cost is not invisible (its usage is booked via or_chat under this
+    # turn id). SKILL_LEARN=0 in the instance config turns it off per instance.
+    log(f"skill-learn: distilling a skill proposal from this turn "
+        f"({_turn_step[0]} steps) — extra model call; set SKILL_LEARN=0 to disable")
     slice_ = _turn_slice(hist, user_text)
     threading.Thread(target=_learn_skill, args=(slice_, user_text), daemon=True).start()
     return True

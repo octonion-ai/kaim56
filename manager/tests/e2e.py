@@ -992,6 +992,32 @@ class AgentLogic(unittest.TestCase):
             a._mgr, a.MEMORY_DIR, a.RECALL_MAX_CHARS = old[0], old[2], old[3]
             a._history[:] = old[1]
 
+    def test_maybe_learn_gated_and_visible(self):
+        """A-4: skill-learning fires only on a long successful non-slash turn,
+        is off when SKILL_LEARN is false, and logs when it fires (visibility)."""
+        a = self.a
+        old = a.SKILL_LEARN, a.SKILL_LEARN_MIN_STEPS, a._turn_step[0], a.threading, a.log
+        started = []; logged = []
+        class _T:
+            def __init__(self, target=None, args=(), daemon=None): pass
+            def start(self): started.append(1)
+        try:
+            a.threading = type("x", (), {"Thread": _T})
+            a.log = lambda *m, **k: logged.append(" ".join(str(x) for x in m))
+            a.SKILL_LEARN_MIN_STEPS = 5
+            a.SKILL_LEARN = True; a._turn_step[0] = 6
+            self.assertTrue(a._maybe_learn([], "do a multi-step job", "ok")); self.assertEqual(len(started), 1)
+            self.assertTrue(any("skill-learn" in x for x in logged))
+            started.clear()
+            self.assertFalse(a._maybe_learn([], "/reset", "ok")); self.assertEqual(started, [])   # slash: no
+            self.assertFalse(a._maybe_learn([], "x", "error")); self.assertEqual(started, [])      # bad outcome: no
+            a._turn_step[0] = 2
+            self.assertFalse(a._maybe_learn([], "x", "ok")); self.assertEqual(started, [])         # too short: no
+            a._turn_step[0] = 6; a.SKILL_LEARN = False
+            self.assertFalse(a._maybe_learn([], "x", "ok")); self.assertEqual(started, [])         # disabled: no
+        finally:
+            a.SKILL_LEARN, a.SKILL_LEARN_MIN_STEPS, a._turn_step[0], a.threading, a.log = old
+
     def test_reset_clears_the_goal(self):
         """/reset drops a stale goal; otherwise every later turn runs the goal
         loop (which is what broke the uncensored instance)."""

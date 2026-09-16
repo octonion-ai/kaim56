@@ -76,6 +76,16 @@
       "key": "AUTO_RESET_MIN",
       "label": "Auto-reset after idle (minutes, 0 = never) — a voice instance forgets the day's chatter, e.g. 30",
       "default": "0"
+    },
+    {
+      "key": "SKILL_LEARN",
+      "label": "Learn skills from experience (1 = after a long successful turn the agent distils a skill proposal, one extra model call; 0 = off)",
+      "type": "select",
+      "options": [
+        "1",
+        "0"
+      ],
+      "default": "1"
     }
   ]
 }
