@@ -3010,6 +3010,33 @@ class ManagerFunctions(unittest.TestCase):
         finally:
             m.load_settings = old
 
+    def test_hindsight_retains_user_turn_only(self):
+        """A-1: the passive chat capture keeps the USER turn, never the agent's
+        own reply (no memory poisoning), and HINDSIGHT_RETAIN=0 turns retention
+        off for that instance; explicit notes obey the same switch."""
+        m = self.m
+        seen = []
+        old = (m.load_instances, m.instance_by_ip, m.save_chats, m.load_chats, m._memfs.timeline_add,
+               m._hindsight.retain_async)
+        try:
+            m._hindsight.retain_async = lambda inst, text, tags=(): seen.append((inst, text, tuple(tags)))
+            m._memfs.timeline_add = lambda *a, **k: None
+            m.load_chats = lambda: []; m.save_chats = lambda c: 1
+            m.load_instances = lambda: [{"name": "a", "config": {}}, {"name": "voice", "config": {"HINDSIGHT_RETAIN": "0"}}]
+            self.assertTrue(m.hindsight_retains("a")); self.assertFalse(m.hindsight_retains("voice"))
+            m.chat_log_append("a", "", "mach das Radio an", "Das Radio ist an.", kind="voice")
+            self.assertEqual(len(seen), 1)
+            inst, text, tags = seen[0]
+            self.assertEqual(inst, "a"); self.assertEqual(text, "mach das Radio an")   # user only
+            self.assertNotIn("Das Radio ist an", text)                                  # NOT the agent reply
+            self.assertIn("user", tags)
+            seen.clear()
+            m.chat_log_append("voice", "", "hallo", "hi", kind="voice")                 # retention off
+            self.assertEqual(seen, [])
+        finally:
+            (m.load_instances, m.instance_by_ip, m.save_chats, m.load_chats, m._memfs.timeline_add,
+             m._hindsight.retain_async) = old
+
     def test_hindsight_second_memory(self):
         """Off without HINDSIGHT_URL (every call a no-op); on: retain sends the
         text to the instance's bank, recall hits merge into the memory search

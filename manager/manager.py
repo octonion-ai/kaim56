@@ -863,8 +863,12 @@ def chat_log_append(inst_name, sender, user_text, reply_text, kind="signal"):
         n = save_chats(chats)
     try:
         _memfs.timeline_add(inst_name, kind, user_text, reply_text)   # the agent's own timeline
-        if user_text and reply_text and not str(reply_text).lstrip().startswith("⚠️"):
-            _hindsight.retain_async(inst_name, f"User: {user_text}\n\nAssistant: {reply_text}", (kind or "chat",))
+        # A-1: keep the USER turn only. The agent's own reply must NOT become a
+        # remembered "fact" — a wrong answer would otherwise feed back into
+        # recall as truth (memory poisoning). Explicit memory_store notes still
+        # go in (below); this is the passive chat capture.
+        if user_text and hindsight_retains(inst_name):
+            _hindsight.retain_async(inst_name, str(user_text), (kind or "chat", "user"))
     except Exception as e:
         print(f"[quiet] memfs timeline failed: {e!r}", flush=True)
     return n
@@ -3319,6 +3323,14 @@ def audit_append(inst_name, tool, target, ok, err="", result="", turn="", ms=Non
         print(f"[quiet] audit trim for {inst_name} failed: {e!r}", flush=True)
 
 
+def hindsight_retains(inst_name):
+    """A-1: whether the second memory (Hindsight) keeps this instance's turns.
+    Default on; HINDSIGHT_RETAIN=0 in the instance config turns it off entirely
+    (a chatty voice agent should not fill its bank)."""
+    inst = next((i for i in load_instances() if i.get("name") == inst_name), None)
+    return ((inst or {}).get("config") or {}).get("HINDSIGHT_RETAIN", "1") != "0"
+
+
 def tool_allowed(inst, name):
     """A-2: enforce the per-instance AGENT_TOOLS allowlist at the HOST, not only
     in the guest. Empty allowlist = all tools (no behaviour change for the many
@@ -4947,7 +4959,8 @@ def _rt_memory_post(h):
     # Also store semantically; if the embedder fails the flat memory stays.
     sem = sem_store(target, value, key) if value is not None else False
     if value is not None:
-        _hindsight.retain_async(target, f"{key}: {value}", ("note",))     # the optional second memory
+        if hindsight_retains(target):
+            _hindsight.retain_async(target, f"{key}: {value}", ("note",))  # explicit note -> second memory
     msg += " (+semantic)" if sem else ("" if value is None else " (semantic off)")
     return h._json({"msg": msg})
 

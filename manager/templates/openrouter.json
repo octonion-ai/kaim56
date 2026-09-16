@@ -53,6 +53,16 @@
         "0"
       ],
       "default": "1"
+    },
+    {
+      "key": "HINDSIGHT_RETAIN",
+      "label": "Keep turns in the second memory (Hindsight) — 1 = the user's messages and notes are retained; 0 = off (e.g. a high-volume voice agent). Only matters when HINDSIGHT_URL is set.",
+      "type": "select",
+      "options": [
+        "1",
+        "0"
+      ],
+      "default": "1"
     }
   ]
 }

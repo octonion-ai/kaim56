@@ -6,6 +6,7 @@ history — `git log -p -- manager/CHANGELOG.md` before 2026-09-08 — and in th
 commit messages.
 
 ## 2026-09-16
+- A-1: the second memory (Hindsight) keeps only the USER turn and explicit `memory_store` notes, never the agent's own reply (a wrong answer could otherwise feed back as a remembered fact); per-instance switch `HINDSIGHT_RETAIN` (1/0) turns retention off, e.g. for a high-volume voice agent
 - A-4: the after-turn skill-learning call logs when it fires (its extra model cost was invisible) and is now a per-instance template param `SKILL_LEARN` (1/0) — off it for high-volume voice agents
 - A-5: the local-model wire transform now guarantees strict user/assistant alternation (adjacent user messages merge too, not only assistant), asserted by an invariant test — tool_call/tool sequences stay intact
 - run-tests.sh refuses to run when tests/e2e.py has fewer than 150 test methods — an accidentally emptied test file had passed silently as „OK“ (0 tests) through several commits; the suite file is restored
