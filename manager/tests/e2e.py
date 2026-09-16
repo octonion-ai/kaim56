@@ -1396,6 +1396,16 @@ class ManagerFunctions(unittest.TestCase):
                             "messages": [{"user": True, "text": "edit"}]}])
             self.assertTrue(has())                                       # aufersteht
             self.assertNotIn("x", m.load_tombstones())                   # Tombstone weg
+            # A bogus far-future timestamp (leaked sync fixture, year 2286) must
+            # still be deletable — it must not beat the deletion.
+            m.merge_chats([{"id": "y", "updatedAt": 10000000000001,
+                            "messages": [{"user": True, "text": "SYNC"}]}])
+            self.assertTrue(any(c.get("id") == "y" for c in m.load_chats()))
+            m.merge_chats({"chats": [], "tombstones": {"y": NOW}})       # delete now
+            self.assertFalse(any(c.get("id") == "y" for c in m.load_chats()))
+            m.merge_chats([{"id": "y", "updatedAt": 10000000000001,      # re-push the future chat
+                            "messages": [{"user": True, "text": "SYNC"}]}])
+            self.assertFalse(any(c.get("id") == "y" for c in m.load_chats()))   # stays deleted
         finally:
             m.CHATS_FILE, m.TOMBSTONES_FILE = oc, ot
 

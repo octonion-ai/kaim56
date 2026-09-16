@@ -1141,11 +1141,20 @@ def merge_chats(incoming):
             if cur is None or c.get("updatedAt", 0) >= cur.get("updatedAt", 0):
                 by_id[cid] = c
 
-        # Apply tombstones
+        # Apply tombstones. A chat only resurrects when it was GENUINELY edited
+        # after the deletion. A bogus far-future updatedAt (seen: a leaked sync
+        # test fixture dated year 2286, updatedAt 1e13) must NOT beat a real
+        # deletion, or the chat becomes undeletable. A real ms timestamp will
+        # not reach the year-2100 ceiling for ~75 years, so anything past it is
+        # garbage and cannot resurrect.
+        TS_CEIL = 4102444800000             # 2100-01-01 in ms
         for cid, dat in list(tombs.items()):
             c = by_id.get(cid)
-            if c is not None and c.get("updatedAt", 0) > dat:
-                tombs.pop(cid, None)        # chat is newer -> resurrection ok
+            eff = c.get("updatedAt", 0) if c is not None else 0
+            if eff > TS_CEIL:
+                eff = 0                     # implausible timestamp -> not a real edit
+            if c is not None and eff > dat:
+                tombs.pop(cid, None)        # chat genuinely newer -> resurrection ok
             else:
                 by_id.pop(cid, None)        # deleted stays deleted
 
