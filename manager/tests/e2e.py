@@ -939,6 +939,46 @@ class AgentLogic(unittest.TestCase):
         finally:
             a.LLAMA_ENDPOINT = old
 
+    def test_wire_messages_never_leaves_adjacent_assistant(self):
+        """The goal loop appends assistant answers with a note between them;
+        folding the notes for a local model must not leave two assistant
+        messages adjacent (Qwen: HTTP 400 "2 or more assistant messages")."""
+        a = self.a
+        old = a.FOLD_SYSTEM
+        try:
+            a.FOLD_SYSTEM = True
+            msgs = [{"role": "system", "content": "S"}, {"role": "user", "content": "u"},
+                    {"role": "assistant", "content": "first"},
+                    {"role": "system", "content": "critique"},          # folded away
+                    {"role": "assistant", "content": "second"}]
+            w = a._wire_messages(msgs)
+            roles = [m["role"] for m in w]
+            self.assertEqual(roles, ["system", "user", "assistant"])     # the two answers merged
+            self.assertIn("first", w[-1]["content"]); self.assertIn("second", w[-1]["content"])
+            # a tool-call assistant is never merged away
+            msgs2 = [{"role": "system", "content": "S"}, {"role": "user", "content": "u"},
+                     {"role": "assistant", "content": "", "tool_calls": [{"id": "1"}]},
+                     {"role": "tool", "tool_call_id": "1", "content": "r"},
+                     {"role": "assistant", "content": "done"}]
+            self.assertEqual([m["role"] for m in a._wire_messages(msgs2)],
+                             ["system", "user", "assistant", "tool", "assistant"])
+        finally:
+            a.FOLD_SYSTEM = old
+
+    def test_reset_clears_the_goal(self):
+        """/reset drops a stale goal; otherwise every later turn runs the goal
+        loop (which is what broke the uncensored instance)."""
+        a = self.a
+        old = a._goal
+        try:
+            a._goal = "write a file to the host"
+            out = []
+            a.run_stream("/reset", out.append)
+            self.assertIsNone(a._goal)
+            self.assertIn("reset", "".join(out).lower())
+        finally:
+            a._goal = old
+
     def test_wire_messages_folds_system_notes_for_local_models(self):
         """Qwen3's chat template in llama.cpp rejects a system message that is
         not the first one; the agent's [Memory]/[Playbooks]/date notes are

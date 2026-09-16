@@ -2021,7 +2021,7 @@ def _run_goal(hist, question):
         meets, fb = _judge(_goal, question, answer)
         if meets:
             break
-        hist.append({"role": "system", "content":
+        hist.append({"role": "user", "content":
                      f"Your last answer does not yet meet the goal: {_goal}. "
                      f"Critique: {fb}. Improve the answer accordingly."})
         answer = _tool_loop(hist)
@@ -2103,7 +2103,18 @@ def _wire_messages(messages):
         return messages
     if extra:
         first["content"] = "\n\n".join([first["content"]] + extra)
-    return [first] + rest
+    out = [first]
+    for m in rest:
+        # Two adjacent messages of the same role break strict-alternation chat
+        # templates (llama.cpp/Qwen: "2 or more assistant messages at the end").
+        # Merge plain text ones; never touch a message carrying tool_calls/tool.
+        if (out and out[-1].get("role") == m.get("role") == "assistant"
+                and not out[-1].get("tool_calls") and not m.get("tool_calls")
+                and isinstance(out[-1].get("content"), str) and isinstance(m.get("content"), str)):
+            out[-1] = {**out[-1], "content": (out[-1]["content"] + "\n\n" + m["content"]).strip()}
+        else:
+            out.append(m)
+    return out
 
 
 def or_chat(messages, tools, model=None):
@@ -2573,6 +2584,7 @@ def run(user_message, deadline=0.0, kind="chat", turn=None):
     user_message = _expand_prompt(user_message)
     if user_message.strip() == "/reset":
         del _history[1:]
+        globals()["_goal"] = None      # a stale goal would drive the goal loop on every later turn
         return "🔄 Context reset."
     if user_message.startswith("/reasoning"):
         return _set_reasoning(user_message)
@@ -2792,6 +2804,7 @@ def run_stream(user_message, on_token, image=None, deadline=0.0, kind="stream", 
     user_message = _expand_prompt(user_message)
     if user_message.strip() == "/reset":
         del _history[1:]
+        globals()["_goal"] = None      # a stale goal would drive the goal loop on every later turn
         on_token("🔄 Context reset.")
         return
     if user_message.startswith("/reasoning"):
