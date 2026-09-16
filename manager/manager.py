@@ -1215,7 +1215,7 @@ _ephemeral_slots = threading.BoundedSemaphore(EPHEMERAL_MAX)
 # narrow: no tool it does not hold itself, no host outside its own allowlist.
 SANDBOX_DEFAULT_TOOLS = ["bash", "read_file", "write_file", "list_dir", "offload_read",
                          "http_fetch", "web_search", "read_pdf"]
-SANDBOX_NEVER = {"spawn_subagent", "create_task", "send_signal", "get_secret", "list_secrets"}
+SANDBOX_NEVER = {"spawn_subagent", "create_task", "send_signal", "notify", "get_secret", "list_secrets"}
 
 
 def sandbox_config(caller, sandbox):
@@ -5175,7 +5175,9 @@ def _rt_notify(h):
         # agent sent only via notify (the Saddler review) was nowhere to be
         # found after the click: the chat held "(max tool steps reached)".
         try:
-            chat_log_append(nm, "", "", f"🔔 {str(body.get('title') or '').strip()[:120]}\n\n{str(text)[:4000]}", kind="task")
+            rtitle = _gateway.redact_secrets(str(body.get("title") or "").strip()[:120])[0]
+            rtext = _gateway.redact_secrets(str(text)[:4000])[0]
+            chat_log_append(nm, "", "", f"🔔 {rtitle}\n\n{rtext}", kind="task")
         except Exception as e:
             print(f"[quiet] notify -> task chat failed: {e!r}", flush=True)
     try:
