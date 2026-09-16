@@ -6,6 +6,7 @@ history — `git log -p -- manager/CHANGELOG.md` before 2026-09-08 — and in th
 commit messages.
 
 ## 2026-09-16
+- Fix (from the review of the persona work): a web persona save (name+prompt only) no longer wipes the persona's recommended tools/model — they are kept unless an explicit value replaces or clears them; and an explicit `spawn_subagent(model=…)` now wins over a persona's model
 - Personas & skills from ECC (MIT, attributed in NOTICE): 6 review/architecture personas (code-reviewer, code-architect, code-explorer, code-simplifier, silent-failure-hunter, security-reviewer) and 6 skills (ADR, error-handling, coding-standards, git-workflow, verification-loop, agent-architecture-audit)
 - Prompt-defense baseline prepended to every instance's system prompt (untrusted-content / no-secret-exfil rules; `DEFENSE_BASELINE=0` disables)
 - A persona may carry a recommended tool subset and model, pre-filled when an instance is created from it (`/api/personas` upsert keeps `tools`/`model`)

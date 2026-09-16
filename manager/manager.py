@@ -1310,12 +1310,12 @@ def _run_ephemeral(message, model=None, timeout=600, sandbox=None):
 def _run_ephemeral_vm(message, model=None, timeout=600, sandbox=None):
     name = "task-" + uuid.uuid4().hex[:6]
     cfg = {"TRANSPORT": "web", "NO_SPAWN": "1"}
-    if model:
-        cfg["OPENROUTER_MODEL"] = model
     internet = True
     if sandbox:                                   # {"cfg": {...}, "internet": bool} from sandbox_config
         cfg.update(sandbox.get("cfg") or {})
         internet = bool(sandbox.get("internet", True))
+    if model:
+        cfg["OPENROUTER_MODEL"] = model           # an explicit model wins over a persona's model
         print(f"[ephemeral] {name}: sandbox tools={cfg.get('AGENT_TOOLS') or 'all'} "
               f"egress={cfg.get('EGRESS_ALLOW') or ('none' if not internet else 'any')}"
               f"{' skill' if 'AGENT_SYSTEM' in cfg else ''}", flush=True)
@@ -2917,15 +2917,26 @@ def upsert_persona(name, prompt, tools=None, model=None):
     name = re.sub(r"[^a-z0-9_-]", "", (name or "").lower())
     if not name:
         return "invalid name (only a-z 0-9 _ -)"
+    prev = next((p for p in load_personas() if p.get("name") == name), {})
     items = [p for p in load_personas() if p.get("name") != name]
     ent = {"name": name, "prompt": prompt or ""}
     # A persona may recommend a tool subset and a model, pre-filled when an
-    # instance is created from it (empty/None keeps the create-form defaults).
-    tools = [t.strip() for t in (tools or []) if str(t).strip()] if isinstance(tools, (list, tuple)) else \
-            [t.strip() for t in str(tools or "").split(",") if t.strip()]
-    if tools:
-        ent["tools"] = [t for t in tools if t in AGENT_TOOL_NAMES]
-    if (model or "").strip():
+    # instance is created from it. None = "not provided" -> keep the existing
+    # values (a web save posts only name+prompt); an explicit value replaces,
+    # an explicit empty clears.
+    if tools is None:
+        if prev.get("tools"):
+            ent["tools"] = prev["tools"]
+    else:
+        tl = [t.strip() for t in tools if str(t).strip()] if isinstance(tools, (list, tuple)) else \
+             [t.strip() for t in str(tools).split(",") if t.strip()]
+        keep = [t for t in tl if t in AGENT_TOOL_NAMES]
+        if keep:
+            ent["tools"] = keep
+    if model is None:
+        if prev.get("model"):
+            ent["model"] = prev["model"]
+    elif str(model).strip():
         ent["model"] = str(model).strip()[:120]
     items.append(ent)
     save_personas(items)

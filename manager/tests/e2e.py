@@ -3266,6 +3266,17 @@ class ManagerFunctions(unittest.TestCase):
             saved.clear()
             m.upsert_persona("plain", "hi")
             self.assertNotIn("tools", saved[-1][0]); self.assertNotIn("model", saved[-1][0])
+            # regression: a web save (name+prompt only, tools/model = None) must
+            # NOT wipe an existing persona's tools/model.
+            saved.clear()
+            m.load_personas = lambda: [{"name": "rev", "prompt": "old", "tools": ["bash"], "model": "m/x"}]
+            m.upsert_persona("rev", "new prompt")                    # tools=None, model=None
+            ent = saved[-1][0]
+            self.assertEqual(ent["prompt"], "new prompt")
+            self.assertEqual(ent["tools"], ["bash"]); self.assertEqual(ent["model"], "m/x")   # kept
+            saved.clear()
+            m.upsert_persona("rev", "p", tools=[])                   # explicit empty -> clear
+            self.assertNotIn("tools", saved[-1][0])
         finally:
             m.load_personas, m.save_personas = old
 
@@ -3297,6 +3308,21 @@ class ManagerFunctions(unittest.TestCase):
             # an explicit tools list still overrides the persona's, and must stay a subset
             cfg2, _, err2 = m.sandbox_config(caller, {"persona": "code-reviewer", "tools": "read_file"})
             self.assertEqual((cfg2["AGENT_TOOLS"], err2), ("read_file", ""))
+            # an explicit model must win over the persona's model in the VM config
+            seen = []
+            old2 = m.create_instance, m.load_instances, m.wait_web, m._chat_post, m.stop, m.delete_instance
+            try:
+                def create(name, tpl, cfg=None, mounts=None, internet=True):
+                    seen.append(dict(cfg or {}))
+                    m.load_instances = lambda: [{"name": name, "template": "openrouter"}]
+                    return "ok"
+                m.create_instance = create; m.wait_web = lambda i, timeout=120: True
+                m._chat_post = lambda i, msg, timeout=600: "r"; m.stop = lambda i: None; m.delete_instance = lambda n: None
+                sb = {"cfg": {"OPENROUTER_MODEL": "persona/model", "AGENT_SYSTEM": "You review."}, "internet": True}
+                m._run_ephemeral_vm("do", "explicit/model", 60, sb)
+                self.assertEqual(seen[-1]["OPENROUTER_MODEL"], "explicit/model")
+            finally:
+                m.create_instance, m.load_instances, m.wait_web, m._chat_post, m.stop, m.delete_instance = old2
         finally:
             m.load_personas, m.load_skills = old
 
