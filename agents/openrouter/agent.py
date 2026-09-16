@@ -2171,6 +2171,7 @@ _history = [{"role": "system", "content": SYSTEM}]
 # _history (this conversation), long-term lives semantically in the manager.
 RECALL_TAG = "[Memory]"
 RECALL_K = 4
+RECALL_MAX_CHARS = int(os.environ.get("RECALL_MAX_CHARS", "1200"))   # A-3: token budget for the injected recall block
 # Threshold for multilingual-e5: relevant hits sit ~0.82+, thematically
 # unrelated ones ~0.76. 0.78 separates cleanly. Tunable if too strict/loose.
 RECALL_MIN = 0.78
@@ -2191,10 +2192,25 @@ def _recall(user_message):
                 if h.get("score", 0) >= RECALL_MIN]
     except Exception:
         hits = []
-    if hits:
+    # A-3: don't repeat what the model already has this turn. The memory index
+    # (MEMORY.md head) and the playbooks are injected too and often carry the
+    # same note; drop a recall hit whose text is already there, drop exact
+    # duplicates between hits, and cap the block by a char/token budget.
+    already = "\n".join(str(m.get("content", "")) for m in _history
+                        if m.get("role") == "system"
+                        and str(m.get("content", "")).startswith((MEMINDEX_TAG, PLAYBOOK_TAG)))
+    lines, seen, used = [], set(), 0
+    for h in hits:
+        t = str(h.get("text", "")).strip()
+        key = " ".join(t.lower().split())
+        if not t or key in seen or key in " ".join(already.lower().split()):
+            continue
+        if used + len(t) > RECALL_MAX_CHARS:
+            break
+        seen.add(key); used += len(t); lines.append(f"- {t}")
+    if lines:
         block = (RECALL_TAG + " Relevant notes from earlier sessions "
-                 "(use them when they fit the question):\n"
-                 + "\n".join(f"- {h['text']}" for h in hits))
+                 "(use them when they fit the question):\n" + "\n".join(lines))
         _history.append({"role": "system", "content": block})
 
 

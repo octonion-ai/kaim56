@@ -59,4 +59,13 @@ if [ -d "$VC" ] && [ -x "$GO" ]; then
         || { echo "voice-client (go) FAILED:"; (cd "$VC" && "$GO" vet ./... && "$GO" test ./...); exit 1; }
 fi
 
+# Floor guard: an empty/truncated e2e.py runs 0 tests and unittest exits 0 —
+# that once let an accidentally-emptied test file pass silently through several
+# commits. Refuse to run if the suite has fewer than this many test methods.
+MIN_TESTS=150
+have=$(grep -c "def test_" tests/e2e.py 2>/dev/null || echo 0)
+if [ "$have" -lt "$MIN_TESTS" ]; then
+    echo "ABORT: tests/e2e.py has only $have test methods (< $MIN_TESTS) — the file looks truncated"; exit 1
+fi
+
 exec python3 tests/e2e.py "$@"
