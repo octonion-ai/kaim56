@@ -1006,6 +1006,34 @@ class AgentLogic(unittest.TestCase):
         finally:
             a._goal = old
 
+    def test_wire_strict_alternation_invariant(self):
+        """A-5: after wiring for a local model, no two adjacent messages share a
+        role (user OR assistant), and tool_calls/tool sequences are untouched."""
+        a = self.a
+        old = a.FOLD_SYSTEM
+        try:
+            a.FOLD_SYSTEM = True
+            msgs = [{"role": "system", "content": "S"},
+                    {"role": "user", "content": "u1"},
+                    {"role": "user", "content": "u2 (steer)"},          # two users -> must merge
+                    {"role": "assistant", "content": "a1"},
+                    {"role": "system", "content": "note"},              # folded away
+                    {"role": "assistant", "content": "a2"},             # two assistants -> merge
+                    {"role": "assistant", "content": "", "tool_calls": [{"id": "1"}]},
+                    {"role": "tool", "tool_call_id": "1", "content": "r"},
+                    {"role": "assistant", "content": "done"}]
+            w = a._wire_messages(msgs)
+            roles = [m["role"] for m in w]
+            for i in range(1, len(roles)):
+                self.assertFalse(roles[i] == roles[i-1] and roles[i] in ("user", "assistant")
+                                 and not w[i].get("tool_calls") and not w[i-1].get("tool_calls"),
+                                 f"adjacent {roles[i]} at {i}: {roles}")
+            self.assertIn("u1", w[1]["content"]); self.assertIn("u2", w[1]["content"])
+            self.assertEqual(roles.count("tool"), 1)                    # tool sequence intact
+            self.assertEqual(roles[-1], "assistant"); self.assertEqual(w[-1]["content"], "done")
+        finally:
+            a.FOLD_SYSTEM = old
+
     def test_wire_messages_folds_system_notes_for_local_models(self):
         """Qwen3's chat template in llama.cpp rejects a system message that is
         not the first one; the agent's [Memory]/[Playbooks]/date notes are

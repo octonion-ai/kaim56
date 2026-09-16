@@ -6,6 +6,7 @@ history — `git log -p -- manager/CHANGELOG.md` before 2026-09-08 — and in th
 commit messages.
 
 ## 2026-09-16
+- A-5: the local-model wire transform now guarantees strict user/assistant alternation (adjacent user messages merge too, not only assistant), asserted by an invariant test — tool_call/tool sequences stay intact
 - run-tests.sh refuses to run when tests/e2e.py has fewer than 150 test methods — an accidentally emptied test file had passed silently as „OK“ (0 tests) through several commits; the suite file is restored
 - A-3 context assembly: the per-turn [Memory] recall drops hits already present in the memory index or playbooks, drops duplicates, and is capped by RECALL_MAX_CHARS (default 1200) — less duplicated context and wasted tokens each turn
 - A-2 tool discipline: the per-instance AGENT_TOOLS allowlist is enforced at the host for the outward-reaching capability routes (send_signal, notify, web_search, ha_control, ha_learn_alias), not only inside the guest; empty allowlist = all (no change for most instances)

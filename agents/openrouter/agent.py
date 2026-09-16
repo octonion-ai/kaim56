@@ -2105,13 +2105,16 @@ def _wire_messages(messages):
         first["content"] = "\n\n".join([first["content"]] + extra)
     out = [first]
     for m in rest:
-        # Two adjacent messages of the same role break strict-alternation chat
-        # templates (llama.cpp/Qwen: "2 or more assistant messages at the end").
-        # Merge plain text ones; never touch a message carrying tool_calls/tool.
-        if (out and out[-1].get("role") == m.get("role") == "assistant"
-                and not out[-1].get("tool_calls") and not m.get("tool_calls")
-                and isinstance(out[-1].get("content"), str) and isinstance(m.get("content"), str)):
-            out[-1] = {**out[-1], "content": (out[-1]["content"] + "\n\n" + m["content"]).strip()}
+        # A-5: strict user/assistant alternation. Two adjacent messages of the
+        # same role break local chat templates (llama.cpp/Qwen: "2 or more
+        # assistant messages at the end"). Merge adjacent plain-text user OR
+        # assistant messages; never touch one carrying tool_calls, and never a
+        # tool message (it must follow its tool_calls assistant).
+        prev = out[-1] if out else None
+        if (prev is not None and prev.get("role") == m.get("role") in ("user", "assistant")
+                and not prev.get("tool_calls") and not m.get("tool_calls")
+                and isinstance(prev.get("content"), str) and isinstance(m.get("content"), str)):
+            out[-1] = {**prev, "content": (prev["content"] + "\n\n" + m["content"]).strip()}
         else:
             out.append(m)
     return out
