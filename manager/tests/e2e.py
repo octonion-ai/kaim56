@@ -3248,6 +3248,58 @@ class ManagerFunctions(unittest.TestCase):
         finally:
             m.instance_by_ip, m.notify_add, m.audit_append, m.chat_log_append = old
 
+    def test_persona_carries_tools_and_model(self):
+        """Feature 3: a persona keeps an optional recommended tool subset and
+        model across save; unknown tools are dropped; empty stays absent."""
+        m = self.m
+        import mgr.store as st
+        old = m.load_personas, m.save_personas
+        saved = []
+        try:
+            m.load_personas = lambda: []
+            m.save_personas = lambda items: saved.append(items)
+            m.upsert_persona("rev", "You review.", tools="read_file, bash, nope_tool", model=" google/gemini-2.5-flash ")
+            ent = saved[-1][0]
+            self.assertEqual(ent["name"], "rev")
+            self.assertEqual(set(ent["tools"]), {"read_file", "bash"})     # unknown dropped
+            self.assertEqual(ent["model"], "google/gemini-2.5-flash")
+            saved.clear()
+            m.upsert_persona("plain", "hi")
+            self.assertNotIn("tools", saved[-1][0]); self.assertNotIn("model", saved[-1][0])
+        finally:
+            m.load_personas, m.save_personas = old
+
+    def test_defense_baseline_prepended(self):
+        """Feature 2: every instance's system prompt carries the prompt-defense
+        baseline (untrusted-content rule) by default."""
+        ag = _load("agent_defense", AGENT_PATH, {"OPENROUTER_API_KEY": "dummy"})
+        self.assertIn("untrusted", ag.SYSTEM.lower())
+        self.assertIn("outrank", ag.SYSTEM.lower())
+
+    def test_sandbox_config_persona(self):
+        """Feature 4: spawn_subagent(persona=) bakes the persona prompt, uses its
+        recommended tools when none are requested, sets its model, and refuses an
+        unknown persona."""
+        m = self.m
+        old = m.load_personas, m.load_skills
+        try:
+            m.load_personas = lambda: [{"name": "assistant", "prompt": "You are helpful."},
+                                       {"name": "code-reviewer", "prompt": "You review code.",
+                                        "tools": ["bash", "read_file"], "model": "google/gemini-2.5-flash"}]
+            m.load_skills = lambda: []
+            caller = {"name": "orch", "config": {}}
+            cfg, net, err = m.sandbox_config(caller, {"persona": "code-reviewer"})
+            self.assertEqual(err, "")
+            self.assertEqual(cfg["AGENT_TOOLS"], "bash,read_file")          # persona's tools
+            self.assertEqual(cfg["AGENT_SYSTEM"], "You review code.")       # persona's prompt
+            self.assertEqual(cfg["OPENROUTER_MODEL"], "google/gemini-2.5-flash")
+            self.assertIn("unknown", m.sandbox_config(caller, {"persona": "ghost"})[2])
+            # an explicit tools list still overrides the persona's, and must stay a subset
+            cfg2, _, err2 = m.sandbox_config(caller, {"persona": "code-reviewer", "tools": "read_file"})
+            self.assertEqual((cfg2["AGENT_TOOLS"], err2), ("read_file", ""))
+        finally:
+            m.load_personas, m.load_skills = old
+
     def test_sandbox_config_only_narrows(self):
         """A sandboxed sub-agent runs in an ephemeral VM with a NARROWER policy:
         a subset of the caller's tools (never the spawning/secret ones), an

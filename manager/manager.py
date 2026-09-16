@@ -1233,7 +1233,7 @@ SANDBOX_NEVER = {"spawn_subagent", "create_task", "send_signal", "notify", "get_
 
 def sandbox_config(caller, sandbox):
     """(cfg, internet, error) for an ephemeral VM from a sandbox request
-    {"tools": [...]|"a,b", "egress": [...]|"host,host"|"none", "skill": name}.
+    {"tools": …, "egress": …, "skill": name, "persona": name}.
     Empty request = the ephemeral VM as before (all tools, internet on)."""
     sb = sandbox or {}
     if not isinstance(sb, dict):
@@ -1246,6 +1246,12 @@ def sandbox_config(caller, sandbox):
         want = want.split(",")
     want = [str(t).strip() for t in want if str(t).strip()]
     skill = str(sb.get("skill") or "").strip()
+    persona = str(sb.get("persona") or "").strip()
+    pobj = next((p for p in load_personas() if p.get("name") == persona), None) if persona else None
+    if persona and pobj is None:
+        return {}, True, f"persona '{persona}' unknown"
+    if not want and pobj and pobj.get("tools"):
+        want = list(pobj["tools"])          # the persona's recommended tool subset
     if not want and skill:
         want = list(SANDBOX_DEFAULT_TOOLS)
     cfg = {}
@@ -1274,13 +1280,18 @@ def sandbox_config(caller, sandbox):
                 if over:
                     return {}, True, f"egress outside the caller's own allowlist: {', '.join(over)}"
             cfg["EGRESS_ALLOW"] = ",".join(hosts)
+    base = (pobj.get("prompt") if pobj else None) \
+        or next((p.get("prompt", "") for p in load_personas() if p.get("name") == "assistant"), "") \
+        or "You are a helpful agent with tools. Use them when needed, otherwise answer directly. Be concise."
+    if pobj and pobj.get("model") and "OPENROUTER_MODEL" not in cfg:
+        cfg["OPENROUTER_MODEL"] = str(pobj["model"])[:120]
     if skill:
         body = next((s.get("content", "") for s in load_skills() if s.get("name") == skill), None)
         if body is None:
             return {}, True, f"skill '{skill}' unknown"
-        base = next((p.get("prompt", "") for p in load_personas() if p.get("name") == "assistant"), "") \
-            or "You are a helpful agent with tools. Use them when needed, otherwise answer directly. Be concise."
         cfg["AGENT_SYSTEM"] = f"{base}\n\n[Skill: {skill}] Follow this skill for the task:\n{str(body)[:20000]}"
+    elif pobj:
+        cfg["AGENT_SYSTEM"] = base
     return cfg, internet, ""
 
 
@@ -2902,12 +2913,21 @@ def save_personas(items):
         return -1
 
 
-def upsert_persona(name, prompt):
+def upsert_persona(name, prompt, tools=None, model=None):
     name = re.sub(r"[^a-z0-9_-]", "", (name or "").lower())
     if not name:
         return "invalid name (only a-z 0-9 _ -)"
     items = [p for p in load_personas() if p.get("name") != name]
-    items.append({"name": name, "prompt": prompt or ""})
+    ent = {"name": name, "prompt": prompt or ""}
+    # A persona may recommend a tool subset and a model, pre-filled when an
+    # instance is created from it (empty/None keeps the create-form defaults).
+    tools = [t.strip() for t in (tools or []) if str(t).strip()] if isinstance(tools, (list, tuple)) else \
+            [t.strip() for t in str(tools or "").split(",") if t.strip()]
+    if tools:
+        ent["tools"] = [t for t in tools if t in AGENT_TOOL_NAMES]
+    if (model or "").strip():
+        ent["model"] = str(model).strip()[:120]
+    items.append(ent)
     save_personas(items)
     return f"persona '{name}' saved"
 
@@ -5708,7 +5728,7 @@ def _rt_mcps_delete(h):
 @_msg_route("POST", "/api/personas")
 def _rt_personas_upsert(h):
     b = h._body()
-    return upsert_persona(b.get("name", ""), b.get("prompt", ""))
+    return upsert_persona(b.get("name", ""), b.get("prompt", ""), b.get("tools"), b.get("model"))
 
 
 @_msg_route("POST", "/api/personas/", prefix=True)

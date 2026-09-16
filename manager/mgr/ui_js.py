@@ -812,7 +812,9 @@ function create(){
   if(!n)return alert('Name?');
   const cfg={};document.querySelectorAll('#params [data-k]').forEach(i=>cfg[i.dataset.k]=i.value);
   const pn=document.getElementById('persona').value;
-  if(pn){const p=PERSONAS.find(x=>x.name===pn);if(p)cfg.AGENT_SYSTEM=p.prompt;}
+  if(pn){const p=PERSONAS.find(x=>x.name===pn);if(p){cfg.AGENT_SYSTEM=p.prompt;
+    if(p.tools&&p.tools.length)cfg.AGENT_TOOLS=p.tools.join(',');   // persona's recommended tool subset
+    if(p.model)cfg.OPENROUTER_MODEL=p.model;}}
   const ks=document.getElementById('katfsshare').value;
   if(ks)cfg.KATFS_SHARE=ks;
   const mcps=[...document.querySelectorAll('#mcp-pick input[type=checkbox]:checked')].map(c=>c.value);
