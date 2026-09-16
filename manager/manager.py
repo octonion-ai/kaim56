@@ -3319,6 +3319,16 @@ def audit_append(inst_name, tool, target, ok, err="", result="", turn="", ms=Non
         print(f"[quiet] audit trim for {inst_name} failed: {e!r}", flush=True)
 
 
+def tool_allowed(inst, name):
+    """A-2: enforce the per-instance AGENT_TOOLS allowlist at the HOST, not only
+    in the guest. Empty allowlist = all tools (no behaviour change for the many
+    instances that set none). A restricted instance is refused a capability it
+    did not list — the allowlist becomes a real boundary, not a display hint."""
+    at = ((inst or {}).get("config") or {}).get("AGENT_TOOLS", "")
+    allow = {t.strip() for t in at.split(",") if t.strip()}
+    return (not allow) or name in allow
+
+
 def effective_policy(inst):
     """Everything an instance IS ALLOWED to do in one place: network, tools,
     secrets, MCP servers, model. Pulls the scattered controls (instance config,
@@ -4006,6 +4016,8 @@ def _rt_websearch(h):
     # guest: the key's quota is shared by every instance.
     from mgr import websearch
     g = h._guest()
+    if g is not None and not tool_allowed(g, "web_search"):
+        return h._json({"error": "web_search not allowed for this instance"}, 403)
     if g is not None and not rate_ok(("websearch", g["name"]), 30, 300):
         return h._json({"error": "rate limit: 30 searches per 5 minutes"}, 429)
     q = urllib.parse.parse_qs(h.path.partition("?")[2])
@@ -5166,6 +5178,8 @@ def _rt_audit_report(h):
 def _rt_notify(h):
     body = h._body()
     inst = h._guest()
+    if inst is not None and not tool_allowed(inst, "notify"):
+        return h._json({"error": "notify not allowed for this instance"}, 403)
     nm = inst["name"] if inst else "admin"
     text = body.get("body") or body.get("message", "")
     nid, note = notify_add(nm, body.get("title", ""), text, link=("chat:" + nm) if inst else "")
@@ -5209,8 +5223,10 @@ def _rt_signal_send(h):
     # Recipient checked against ALLOWED_SENDERS, bot number from settings —
     # the VM knows neither.
     body = h._body()
-    ok, note = signal_send(body.get("text") or body.get("message"), body.get("to"))
     inst = h._guest()
+    if inst is not None and not tool_allowed(inst, "send_signal"):
+        return h._json({"ok": False, "note": "send_signal not allowed for this instance"}, 403)
+    ok, note = signal_send(body.get("text") or body.get("message"), body.get("to"))
     try:
         audit_append(inst["name"] if inst else "admin", "send_signal", (body.get("to") or "default"), ok)
     except Exception:
@@ -5750,6 +5766,9 @@ def _rt_skills_delete(h):
 @_msg_route("POST", "/api/ha-alias", admin=False)
 def _rt_ha_alias(h):
     # Guest teaches HA a spoken-name alias; the HA token stays on the host.
+    g = h._guest()
+    if g is not None and not tool_allowed(g, "ha_learn_alias"):
+        return "ha_learn_alias not allowed for this instance"
     b = h._body()
     return _haalias.learn_alias(b.get("spoken", ""), b.get("entity", ""))
 
@@ -5757,6 +5776,9 @@ def _rt_ha_alias(h):
 @_msg_route("POST", "/api/ha-control", admin=False)
 def _rt_ha_control(h):
     # Deterministic voice control: matched server-side, no LLM in the loop.
+    g = h._guest()
+    if g is not None and not tool_allowed(g, "ha_control"):
+        return "ha_control not allowed for this instance"
     b = h._body()
     return _haalias.control(b.get("spoken", ""), b.get("action", ""))
 
