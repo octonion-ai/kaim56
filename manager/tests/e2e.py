@@ -3038,6 +3038,27 @@ class ManagerFunctions(unittest.TestCase):
         finally:
             m.sh, m.ensure_antispoof, m.socket.getaddrinfo, m._mcp_endpoints, m._llama_endpoint = old
 
+    def test_notification_text_lands_in_the_task_chat(self):
+        """A guest's notification is also appended to the instance's task chat
+        — the place a click on the notification opens; an admin notification
+        touches no chat."""
+        m = self.m
+        seen = []
+        old = m.instance_by_ip, m.notify_add, m.chat_log_append, m.audit_append
+        try:
+            m.instance_by_ip = lambda ip: {"name": "orch"} if ip == "172.30.1.2" else None
+            m.notify_add = lambda inst, title, body, link="": ("id1", "")
+            m.chat_log_append = lambda inst, sender, u, r, kind="signal": seen.append((inst, u, r, kind)) or 1
+            m.audit_append = lambda *a, **k: None
+            h = self._post_handler("/api/notify", "172.30.1.2", json.dumps({"title": "Saddler weekly", "message": "Failures 67 (was 20)"}).encode())
+            h._do_POST()
+            self.assertEqual(seen, [("orch", "", "🔔 Saddler weekly\n\nFailures 67 (was 20)", "task")])
+            h = self._post_handler("/api/notify", "10.0.0.9", json.dumps({"title": "t", "message": "m"}).encode())
+            h._do_POST()
+            self.assertEqual(len(seen), 1)
+        finally:
+            m.instance_by_ip, m.notify_add, m.chat_log_append, m.audit_append = old
+
     def test_sandbox_config_only_narrows(self):
         """A sandboxed sub-agent runs in an ephemeral VM with a NARROWER policy:
         a subset of the caller's tools (never the spawning/secret ones), an

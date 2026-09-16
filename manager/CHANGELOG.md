@@ -5,6 +5,9 @@ entry (root causes, measurements, alternatives considered) lives in git
 history — `git log -p -- manager/CHANGELOG.md` before 2026-09-08 — and in the
 commit messages.
 
+## 2026-09-16
+- Notifications from agents are appended to the instance's task chat („🔔 title + text“) — the place a click on the notification opens; the Saddler weekly report existed only in the notification while the chat showed „(max tool steps reached)“
+
 ## 2026-09-15
 - Tests for the sandbox: route + queue (cage object, refusal on named targets and widening, unknown skill refused at creation), the runner's call shape, the egress allowlist rules (resolved hosts accepted, unresolvable skipped, final REJECT) and internet-off as explicit REJECT
 - Security: „internet off“ for an instance is now an explicit REJECT chain on its tap — it relied on the FORWARD policy being DROP, and on this host (policy ACCEPT) an instance with internet off could still reach the internet; found by the first sandboxed sub-agent (`egress=none`) that fetched example.com

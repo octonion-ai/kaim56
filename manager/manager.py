@@ -5167,8 +5167,17 @@ def _rt_notify(h):
     body = h._body()
     inst = h._guest()
     nm = inst["name"] if inst else "admin"
-    nid, note = notify_add(nm, body.get("title", ""), body.get("body") or body.get("message", ""),
-                           link=("chat:" + nm) if inst else "")
+    text = body.get("body") or body.get("message", "")
+    nid, note = notify_add(nm, body.get("title", ""), text, link=("chat:" + nm) if inst else "")
+    if nid and inst:
+        # The click on a notification lands in the instance's task chat — so
+        # the notification's own text goes there too. Until now a report an
+        # agent sent only via notify (the Saddler review) was nowhere to be
+        # found after the click: the chat held "(max tool steps reached)".
+        try:
+            chat_log_append(nm, "", "", f"🔔 {str(body.get('title') or '').strip()[:120]}\n\n{str(text)[:4000]}", kind="task")
+        except Exception as e:
+            print(f"[quiet] notify -> task chat failed: {e!r}", flush=True)
     try:
         # The WHY travels along ("empty" / "rate limit: …").
         audit_append(nm, "notify", (body.get("title") or "")[:60], bool(nid), err="" if nid else str(note))
