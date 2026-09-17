@@ -484,7 +484,7 @@ ARCH_SVG = """<svg id="archsvg" viewBox="0 0 960 672" style="width:100%;height:a
       <text class="tt" x="60" y="556">Firecracker microVMs &#8212; one per agent</text>
       <text class="ss" x="60" y="580">&#183; tap fcN &#183; 172.30.N.2/30 &#183; NAT egress via host uplink</text>
       <text class="ss" x="60" y="600">&#183; private rootfs copy per start (sparse, removed on stop)</text>
-      <text class="ss" x="60" y="620">&#183; guest: agent.py tool loop &#183; web_bridge :8080 &#183; webterm :7682</text>
+      <text class="ss" x="60" y="620">&#183; guest: agent package tool loop &#183; web_bridge :8080 &#183; webterm :7682</text>
       <text class="ss" x="60" y="640">&#183; MCP via manager &#8594; hub (no LAN, no tokens in guest)</text>
       <path class="ln" d="M320 488 L320 532"/>
       <path class="ln" d="M340 532 L340 488"/>
@@ -537,8 +537,8 @@ HTML_BOTTOM = """
   durable state lives centrally. A small read-only config disk carries the non-secret instance
   settings into the guest.</p></div>
 
-  <div class="card blueprint"><span class=card-title>Agent runtime (agent.py)</span>
-  <p class=card-body>Tool-calling loop against an OpenAI-compatible backend inside each VM
+  <div class="card blueprint"><span class=card-title>Agent runtime (the <code>agent/</code> package)</span>
+  <p class=card-body>One concern per module (config, mgrclient, observe, tools_local, tools_manager, tools, mcp, offload, llm, context, learn, loop; map in <code>agent/__init__.py</code>), shipped to every VM on the harness drive. Tool-calling loop against an OpenAI-compatible backend inside each VM
   (templates: openrouter, <b>orcarouter</b>, pi, prime; the claude template runs Claude Code headless
   instead). The same agent code drives OpenRouter, <b>OrcaRouter</b> (gateway,
   <code>api.orcarouter.ai</code> or self-hosted OrcaRouter-Lite) and a local llama.cpp &#8212; the

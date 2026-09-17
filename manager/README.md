@@ -183,13 +183,13 @@ request only as long as **exactly one** share is active — with several it name
 the ids instead of guessing.
 
 The **node-id** is something different and is **not** a per-instance value: the agent
-derives its node from its own IP (`_katfs_base()` in `openrouter-agent/agent.py`
+derives its node from its own IP (`_katfs_base()` in `openrouter-agent/agent/tools_manager.py`
 → `http://<gateway>:8790`); the node-id only tells the sharing *browser* where
 to connect. If an instance should use a *different* node, it needs
 an address: `KATFS_URL` in the instance config (e.g. `http://10.0.0.10:8790`).
 
 ⚠️ `KATFS_SHARE`/`KATFS_URL` is only evaluated by a **freshly built openrouter rootfs**
-(`agent.py` is baked into the image). The node itself is built with
+(the `agent/` package is baked into the image). The node itself is built with
 `iroh-fs/node/build.sh` (Docker, no local Rust needed).
 
 ## Agent folder (NFS live share)

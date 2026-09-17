@@ -3433,6 +3433,22 @@ class ManagerFunctions(unittest.TestCase):
         finally:
             m._personas.load_personas, m._personas.save_personas = old
 
+    def test_agent_package_invariants(self):
+        """The agent package after the split: the root only imports the
+        modules; a sibling is used as a module (`from . import x as _x`),
+        never as an imported name — the tests rely on patching one place."""
+        import ast as _ast
+        pkg = os.path.dirname(AGENT_PATH)
+        root = _ast.parse(open(AGENT_PATH).read())
+        self.assertFalse([n for n in root.body if isinstance(n, (_ast.FunctionDef, _ast.ClassDef))],
+                         "code in agent/__init__.py")
+        for f in sorted(os.listdir(pkg)):
+            if not f.endswith(".py"):
+                continue
+            for n in _ast.walk(_ast.parse(open(os.path.join(pkg, f)).read())):
+                if isinstance(n, _ast.ImportFrom) and n.level >= 1:
+                    self.assertIsNone(n.module, f"agent/{f}: `from .{n.module} import …` — use the module")
+
     def test_defense_baseline_prepended(self):
         """Feature 2: every instance's system prompt carries the prompt-defense
         baseline (untrusted-content rule) by default."""
