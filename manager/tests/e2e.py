@@ -428,7 +428,7 @@ class AgentLogic(unittest.TestCase):
                 "<h1>Die gr&ouml;&szlig;ten Medizintechnik-Firmen</h1>"
                 "<ul><li>Alpha GmbH &amp; Co.</li><li>Beta AG</li></ul>"
                 "<p>Umsatz: 3&nbsp;Mio.</p></body></html>")
-        t = a._html_to_text(html)
+        t = a._tools_local._html_to_text(html)
         self.assertNotIn("<", t)                       # no tags survive
         self.assertNotIn("var a=1", t)                 # scripts gone
         self.assertIn("Die größten Medizintechnik-Firmen", t)
@@ -442,26 +442,26 @@ class AgentLogic(unittest.TestCase):
         tool turned that into "no results" and the model concluded the thing
         searched for does not exist. A dead backend must be NAMED."""
         a = self.a
-        old_d, old_b = a._ddg_search, a._bing_search
+        old_d, old_b = a._tools_local._ddg_search, a._tools_local._bing_search
         try:
-            a._ddg_search = lambda q, c: None                # challenge
-            a._bing_search = lambda q, c: (_ for _ in ()).throw(OSError("net down"))
-            out = a.t_web_search("anything")
+            a._tools_local._ddg_search = lambda q, c: None                # challenge
+            a._tools_local._bing_search = lambda q, c: (_ for _ in ()).throw(OSError("net down"))
+            out = a._tools_local.t_web_search("anything")
             self.assertIn("unavailable", out)
             self.assertIn("duckduckgo: blocked", out)
             self.assertIn("bing", out)
             self.assertIn("NOT an empty result", out)
             # A backend that answers with an EMPTY list is a real empty result.
-            a._ddg_search = lambda q, c: []
-            self.assertEqual(a.t_web_search("gibberishquery"), "no results")
+            a._tools_local._ddg_search = lambda q, c: []
+            self.assertEqual(a._tools_local.t_web_search("gibberishquery"), "no results")
             # And the fallback chain: DDG blocked, Bing delivers.
-            a._ddg_search = lambda q, c: None
-            a._bing_search = lambda q, c: [("Titel", "https://x.de", "Schnipsel")]
-            out = a.t_web_search("x")
+            a._tools_local._ddg_search = lambda q, c: None
+            a._tools_local._bing_search = lambda q, c: [("Titel", "https://x.de", "Schnipsel")]
+            out = a._tools_local.t_web_search("x")
             self.assertIn("Titel", out)
             self.assertIn("https://x.de", out)
         finally:
-            a._ddg_search, a._bing_search = old_d, old_b
+            a._tools_local._ddg_search, a._tools_local._bing_search = old_d, old_b
 
     def test_bing_redirect_urls_are_decoded(self):
         import base64
@@ -469,9 +469,9 @@ class AgentLogic(unittest.TestCase):
         target = "https://de.wikipedia.org/wiki/Unternehmen"
         b64 = base64.urlsafe_b64encode(target.encode()).decode().rstrip("=")
         href = f"https://www.bing.com/ck/a?!&amp;&amp;p=xyz&amp;u=a1{b64}&amp;ntb=1"
-        self.assertEqual(a._bing_real_url(href), target)
+        self.assertEqual(a._tools_local._bing_real_url(href), target)
         # Without the redirect wrapper the URL passes through untouched.
-        self.assertEqual(a._bing_real_url("https://example.org/x"), "https://example.org/x")
+        self.assertEqual(a._tools_local._bing_real_url("https://example.org/x"), "https://example.org/x")
 
     def test_rejected_history_image_is_stripped_and_counted(self):
         """A provider that rejects an image the history has long carried kills
@@ -1032,22 +1032,22 @@ class AgentLogic(unittest.TestCase):
         the Markdown-subset parser are pure; without the libs the tools say so
         instead of crashing (the libs live in the rootfs, not on the host)."""
         a = self.a
-        self.assertEqual(a._rows_norm([["a", "b"], [1, 2]]), [["a", "b"], [1, 2]])
-        self.assertEqual(a._rows_norm([{"firma": "X", "ort": "K"}, {"firma": "Y", "link": "u"}]),
+        self.assertEqual(a._tools_local._rows_norm([["a", "b"], [1, 2]]), [["a", "b"], [1, 2]])
+        self.assertEqual(a._tools_local._rows_norm([{"firma": "X", "ort": "K"}, {"firma": "Y", "link": "u"}]),
                          [["firma", "ort", "link"], ["X", "K", ""], ["Y", "", "u"]])
-        self.assertEqual(a._rows_norm('[["h"],["v"]]'), [["h"], ["v"]])
+        self.assertEqual(a._tools_local._rows_norm('[["h"],["v"]]'), [["h"], ["v"]])
         with self.assertRaises(ValueError):
-            a._rows_norm({"not": "a list"})
-        blocks = a._md_blocks("# Titel\n\nErster Absatz\nzweite Zeile\n\n- eins\n- **zwei**\n\n## Sub\nText")
+            a._tools_local._rows_norm({"not": "a list"})
+        blocks = a._tools_local._md_blocks("# Titel\n\nErster Absatz\nzweite Zeile\n\n- eins\n- **zwei**\n\n## Sub\nText")
         self.assertEqual(blocks, [("h", 1, "Titel"), ("p", "Erster Absatz zweite Zeile"),
                                   ("li", "eins"), ("li", "**zwei**"), ("h", 2, "Sub"), ("p", "Text")])
         import importlib
         have_x = importlib.util.find_spec("openpyxl") is not None
         have_d = importlib.util.find_spec("docx") is not None
         if not have_x:
-            self.assertIn("openpyxl", a.t_write_xlsx("t.xlsx", [["a"]]))
+            self.assertIn("openpyxl", a._tools_local.t_write_xlsx("t.xlsx", [["a"]]))
         if not have_d:
-            self.assertIn("python-docx", a.t_write_docx("t.docx", "# x"))
+            self.assertIn("python-docx", a._tools_local.t_write_docx("t.docx", "# x"))
         self.assertIn("write_xlsx", a.BUILTIN); self.assertIn("write_docx", a.BUILTIN)   # registered tools
 
     def test_reset_clears_the_goal(self):
