@@ -44,6 +44,7 @@ WEB_GUEST_PORT = 8080   # port of the web bridge in the microVM
 TERM_GUEST_PORT = 7682  # port of the webterm (browser terminal) in the microVM
 
 from mgr import paths as _paths  # noqa: E402
+from mgr import auth as _auth  # noqa: E402
 from mgr import host as _host  # noqa: E402
 from mgr import util as _util  # noqa: E402
 from mgr import models as _models  # noqa: E402
@@ -118,80 +119,7 @@ LLM_PROXY_UPSTREAMS = {
 }
 POOL = "172.30.0.0/16"
 
-_trusted_cache = {"ts": 0.0, "hosts": set()}
-
-
-def trusted_hosts():
-    """Hosts a browser may present as Origin: the site's public name(s),
-    localhost and the host's own addresses (refreshed every minute), plus
-    site.json TRUSTED_HOSTS for a reverse proxy under another name."""
-    now = time.time()
-    if now - _trusted_cache["ts"] > 60:
-        hosts = {_settings.PUBLIC_HOST, "localhost", "127.0.0.1", "::1"}
-        hosts.update(str(x) for x in (_settings.SITE.get("TRUSTED_HOSTS") or []) if x)
-        try:
-            r = subprocess.run(["ip", "-4", "-o", "addr", "show"], capture_output=True, text=True, timeout=5)
-            hosts.update(re.findall(r"inet (\d+\.\d+\.\d+\.\d+)", r.stdout))
-        except (OSError, subprocess.SubprocessError):
-            pass
-        _trusted_cache.update(ts=now, hosts={h.lower() for h in hosts})
-    return _trusted_cache["hosts"]
-
-
-def origin_allowed(origin):
-    """CSRF guard for state-changing requests. Browsers send Origin on every
-    POST; the app, the desktop client and curl do not (empty = fine). A page
-    on another site — or a DNS-rebound name — carries a foreign Origin and is
-    refused, so it cannot export a folder into a VM or create an instance."""
-    o = (origin or "").strip()
-    if not o:
-        return True
-    try:
-        host = (urllib.parse.urlsplit(o).hostname or "").lower()
-    except ValueError:
-        return False
-    return bool(host) and host in trusted_hosts()
 _mcp.HUB_TZ = _host.HOST_TZ          # hub processes (caldav-mcp …) format dates in this zone
-USER = os.environ.get("MANAGER_USER", "admin")
-PW = os.environ.get("MANAGER_PASS", "")   # empty => no auth (only behind Traefik!)
-
-# Failed logins per client: after AUTH_FAILS_MAX within AUTH_FAIL_WINDOW the
-# client is refused for AUTH_LOCK seconds, right password or not.
-AUTH_FAILS_MAX, AUTH_FAIL_WINDOW, AUTH_LOCK = 10, 900, 900
-_auth_fails, _auth_lock = {}, threading.Lock()
-_PROXY_PEERS = ("127.0.0.1", "::1", "172.17.")
-
-
-def auth_client_key(peer, xff=""):
-    """Who is knocking: the socket peer — or, when that is a proxy on this
-    host (Traefik on loopback/docker), the first X-Forwarded-For hop."""
-    if xff and (peer in _PROXY_PEERS or peer.startswith(_PROXY_PEERS[2])):
-        return xff.split(",")[0].strip() or peer
-    return peer
-
-
-def auth_locked(key, now=None):
-    now = now or time.time()
-    with _auth_lock:
-        fails = [t for t in _auth_fails.get(key, []) if now - t < AUTH_FAIL_WINDOW]
-        _auth_fails[key] = fails
-        return len(fails) >= AUTH_FAILS_MAX and now - fails[-1] < AUTH_LOCK
-
-
-def auth_failed(key, now=None):
-    """Record a failure; True when this one closed the door."""
-    now = now or time.time()
-    with _auth_lock:
-        fails = [t for t in _auth_fails.get(key, []) if now - t < AUTH_FAIL_WINDOW]
-        fails.append(now)
-        _auth_fails[key] = fails
-        return len(fails) == AUTH_FAILS_MAX
-
-
-def auth_succeeded(key):
-    with _auth_lock:
-        _auth_fails.pop(key, None)
-
 # ---- NFS / host folders ----------------------------------------------------
 # Every export is per instance and per guest IP: the workspace
 # AGENT_ROOT/<instance> and the host folders bind-mounted under
@@ -3759,28 +3687,28 @@ class H(BaseHTTPRequestHandler):
         # Guests (VMs) carry no credentials: they are identified by source IP
         # and gated by the guest allow/deny lists. Without this exemption a set
         # MANAGER_PASS would lock every agent out of its own manager.
-        if not PW or instance_by_ip(self.client_address[0]) is not None:
+        if not _auth.PW or instance_by_ip(self.client_address[0]) is not None:
             return True
         # Host services (containers on the docker bridge, e.g. Hindsight) may
         # use the key proxy without a login — only that path, only from there.
         if self.path.startswith("/api/llm/") and self.client_address[0].startswith("172.17."):
             return True
-        key = auth_client_key(self.client_address[0], self.headers.get("X-Forwarded-For", ""))
-        if auth_locked(key):
+        key = _auth.auth_client_key(self.client_address[0], self.headers.get("X-Forwarded-For", ""))
+        if _auth.auth_locked(key):
             self._send(b'{"error":"too many failed logins, try again later"}', "application/json", 429)
             return False
         hdr = self.headers.get("Authorization", "")
         if hdr.startswith("Basic "):
             try:
                 u, p = base64.b64decode(hdr[6:]).decode().split(":", 1)
-                if hmac.compare_digest(u.encode(), str(USER).encode()) and \
-                        hmac.compare_digest(p.encode(), str(PW).encode()):
-                    auth_succeeded(key)
+                if hmac.compare_digest(u.encode(), str(_auth.USER).encode()) and \
+                        hmac.compare_digest(p.encode(), str(_auth.PW).encode()):
+                    _auth.auth_succeeded(key)
                     return True
             except Exception:
                 pass
-            if auth_failed(key):
-                print(f"[auth] {key}: {AUTH_FAILS_MAX} failed logins, locked for {AUTH_LOCK // 60} min", flush=True)
+            if _auth.auth_failed(key):
+                print(f"[auth] {key}: {_auth.AUTH_FAILS_MAX} failed logins, locked for {_auth.AUTH_LOCK // 60} min", flush=True)
         self.send_response(401)
         self.send_header("WWW-Authenticate", 'Basic realm="kAIm56"')
         self.end_headers()
@@ -3868,7 +3796,7 @@ class H(BaseHTTPRequestHandler):
             # require it to be ours (the empty-Origin allowance of origin_allowed
             # is for curl/app POSTs, not for this path).
             origin = (self.headers.get("Origin") or "").strip()
-            if not origin or not origin_allowed(origin):
+            if not origin or not _auth.origin_allowed(origin):
                 self.send_response(403)
                 self.send_header("Content-Type", "text/plain; charset=utf-8")
                 self.end_headers()
@@ -4236,7 +4164,7 @@ class H(BaseHTTPRequestHandler):
             return
         p = self.path.split("?", 1)[0]
         guest = instance_by_ip(self.client_address[0])
-        if guest is None and not origin_allowed(self.headers.get("Origin", "")):
+        if guest is None and not _auth.origin_allowed(self.headers.get("Origin", "")):
             return self._json({"error": "cross-site request refused"}, 403)
         if guest is not None and not (
                 p in GUEST_POST_PATHS or p.startswith(GUEST_POST_PREFIXES)):
@@ -5627,7 +5555,7 @@ def harden_files(base=None):
 
 
 if __name__ == "__main__":
-    print(f"kAIm56 on http://{_host.LISTEN[0]}:{_host.LISTEN[1]}  (auth={'on' if PW else 'OFF'})",
+    print(f"kAIm56 on http://{_host.LISTEN[0]}:{_host.LISTEN[1]}  (auth={'on' if _auth.PW else 'OFF'})",
           flush=True)
     os.umask(0o077)                  # new files are root's; the few others read get a mode below
     harden_files()

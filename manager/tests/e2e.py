@@ -2974,10 +2974,10 @@ class ManagerFunctions(unittest.TestCase):
         """A body over the cap is answered 413 without being read; a bad or
         negative Content-Length is an empty body, not a hang."""
         m = self.m
-        old = m.instance_by_ip, m.PW
+        old = m.instance_by_ip, m._auth.PW
         try:
             m.instance_by_ip = lambda ip: None
-            m.PW = ""
+            m._auth.PW = ""
             h = self._post_handler("/api/settings", "10.0.0.5", b"{}")
             h.headers.replace_header("Content-Length", str(m.BODY_MAX + 1))
             h.do_POST()
@@ -2991,23 +2991,23 @@ class ManagerFunctions(unittest.TestCase):
             with self.assertRaises(m._util.BodyTooLarge):
                 h.headers.replace_header("Content-Length", str(m.BODY_MAX_AUDIO + 1)); h._raw(m.BODY_MAX_AUDIO)
         finally:
-            m.instance_by_ip, m.PW = old
+            m.instance_by_ip, m._auth.PW = old
 
     def test_cross_site_post_is_refused(self):
         """CSRF: a browser on another site (or a DNS-rebound name) sends its
         Origin and is refused; our own origins pass; clients without an Origin
         (app, desktop, curl) are untouched. Guests never carry one."""
         m = self.m
-        old = m.instance_by_ip, m.PW, dict(m._trusted_cache)
+        old = m.instance_by_ip, m._auth.PW, dict(m._auth._trusted_cache)
         try:
             m.instance_by_ip = lambda ip: None
-            m.PW = ""
-            m._trusted_cache.update(ts=time.time() + 3600, hosts={"agents.example.com", "localhost", "192.168.1.10"})
-            self.assertTrue(m.origin_allowed(""))
-            self.assertTrue(m.origin_allowed("https://agents.example.com"))
-            self.assertTrue(m.origin_allowed("http://192.168.1.10:8700"))
-            self.assertFalse(m.origin_allowed("https://evil.example.org"))
-            self.assertFalse(m.origin_allowed("null"))
+            m._auth.PW = ""
+            m._auth._trusted_cache.update(ts=time.time() + 3600, hosts={"agents.example.com", "localhost", "192.168.1.10"})
+            self.assertTrue(m._auth.origin_allowed(""))
+            self.assertTrue(m._auth.origin_allowed("https://agents.example.com"))
+            self.assertTrue(m._auth.origin_allowed("http://192.168.1.10:8700"))
+            self.assertFalse(m._auth.origin_allowed("https://evil.example.org"))
+            self.assertFalse(m._auth.origin_allowed("null"))
             h = self._post_handler("/api/settings", "10.0.0.5", b"{}", origin="https://evil.example.org")
             h.do_POST()
             self.assertEqual(self._status(h), 403)
@@ -3016,8 +3016,8 @@ class ManagerFunctions(unittest.TestCase):
             h.do_POST()
             self.assertEqual(self._status(h), 404)          # passed the guard, no such route
         finally:
-            m.instance_by_ip, m.PW = old[:2]
-            m._trusted_cache.update(old[2])
+            m.instance_by_ip, m._auth.PW = old[:2]
+            m._auth._trusted_cache.update(old[2])
 
     def test_responses_carry_hardening_headers(self):
         m = self.m
@@ -3598,29 +3598,29 @@ class ManagerFunctions(unittest.TestCase):
         password included; a success clears the counter. Behind the local proxy
         the client is the first X-Forwarded-For hop, not the proxy."""
         m = self.m
-        old = m.instance_by_ip, m.PW, m.USER
+        old = m.instance_by_ip, m._auth.PW, m._auth.USER
         try:
             m.instance_by_ip = lambda ip: None
-            m.PW, m.USER = "s3cret", "admin"
-            m._auth_fails.clear()
+            m._auth.PW, m._auth.USER = "s3cret", "admin"
+            m._auth._auth_fails.clear()
             good = "Basic " + base64.b64encode(b"admin:s3cret").decode()
             bad = "Basic " + base64.b64encode(b"admin:nope").decode()
-            for i in range(m.AUTH_FAILS_MAX):
+            for i in range(m._auth.AUTH_FAILS_MAX):
                 h = self._handler("/api/agents", "10.0.0.9", auth=bad)
                 self.assertFalse(h._auth()); self.assertEqual(self._status(h), 401)
             h = self._handler("/api/agents", "10.0.0.9", auth=good)
             self.assertFalse(h._auth()); self.assertEqual(self._status(h), 429)     # locked
             h = self._handler("/api/agents", "10.0.0.10", auth=good)
             self.assertTrue(h._auth())                                                # another client
-            m._auth_fails.clear()
+            m._auth._auth_fails.clear()
             h = self._handler("/api/agents", "10.0.0.9", auth=good)
             self.assertTrue(h._auth())
-            self.assertEqual(m.auth_client_key("127.0.0.1", "203.0.113.5, 10.0.0.1"), "203.0.113.5")
-            self.assertEqual(m.auth_client_key("172.17.0.3", "203.0.113.5"), "203.0.113.5")
-            self.assertEqual(m.auth_client_key("192.168.1.20", "203.0.113.5"), "192.168.1.20")   # LAN client: XFF ignored
+            self.assertEqual(m._auth.auth_client_key("127.0.0.1", "203.0.113.5, 10.0.0.1"), "203.0.113.5")
+            self.assertEqual(m._auth.auth_client_key("172.17.0.3", "203.0.113.5"), "203.0.113.5")
+            self.assertEqual(m._auth.auth_client_key("192.168.1.20", "203.0.113.5"), "192.168.1.20")   # LAN client: XFF ignored
         finally:
-            m.instance_by_ip, m.PW, m.USER = old
-            m._auth_fails.clear()
+            m.instance_by_ip, m._auth.PW, m._auth.USER = old
+            m._auth._auth_fails.clear()
 
     def test_instance_json_is_operator_readable(self):
         """save_instance leaves the JSON at 0640 whatever the umask; the tests
@@ -3685,17 +3685,17 @@ class ManagerFunctions(unittest.TestCase):
         'admin/notify empty' line in the live audit each time (138 of them
         looked like a misbehaving admin instance)."""
         m = self.m
-        old = m.instance_by_ip, m.audit_append, m.PW
+        old = m.instance_by_ip, m.audit_append, m._auth.PW
         try:
             m.instance_by_ip = lambda ip: None
             m.audit_append = lambda *a, **k: None
-            m.PW = ""
+            m._auth.PW = ""
             h = self._post_handler("/api/notify", "10.0.0.5", b'{"title": "", "message": ""}')
             h.do_POST()
             self.assertEqual(self._status(h), 429)
             self.assertIsNone(json.loads(h.wfile.getvalue().split(b"\r\n\r\n", 1)[1]).get("id"))
         finally:
-            m.instance_by_ip, m.audit_append, m.PW = old
+            m.instance_by_ip, m.audit_append, m._auth.PW = old
 
     def test_task_runs_carry_a_deadline_and_the_worker_timeout(self):
         """The bridge call carries deadline = now + timeout - margin; the worker
@@ -3820,14 +3820,14 @@ class ManagerFunctions(unittest.TestCase):
                 if n is None:
                     out, self.pos = self.body[self.pos:], len(self.body); return out
                 out = self.body[self.pos:self.pos + n]; self.pos += len(out); return out
-        old = m.urllib.request.urlopen, m.load_instances, m.is_running, m.net_of, m.instance_by_ip, m.PW
+        old = m.urllib.request.urlopen, m.load_instances, m.is_running, m.net_of, m.instance_by_ip, m._auth.PW
         try:
             inst = {"name": "vm1", "index": 4, "config": {"TRANSPORT": "web"}}
             m.load_instances = lambda: [inst]
             m.is_running = lambda i: True
             m.net_of = lambda i: {"guest": "172.30.4.2"}
             m.instance_by_ip = lambda ip: None
-            m.PW = ""
+            m._auth.PW = ""
             m.urllib.request.urlopen = lambda req, timeout=None: _R(b"Hallo", "text/plain; charset=utf-8", "t0ken001")
             h = self._post_handler("/i/vm1/api/chat/stream", "10.0.0.5", b'{"message":"hi"}')
             h._proxy("POST")
@@ -3844,7 +3844,7 @@ class ManagerFunctions(unittest.TestCase):
             h = self._handler("/i/vm1/", "10.0.0.5"); h._proxy("GET")
             self.assertNotIn(b"X-Kaim-Turn", h.wfile.getvalue())                # nothing to forward
         finally:
-            m.urllib.request.urlopen, m.load_instances, m.is_running, m.net_of, m.instance_by_ip, m.PW = old
+            m.urllib.request.urlopen, m.load_instances, m.is_running, m.net_of, m.instance_by_ip, m._auth.PW = old
 
     def test_task_run_now(self):
         """The Tasks tab's play button: a scheduled task runs at the next tick
@@ -3853,7 +3853,7 @@ class ManagerFunctions(unittest.TestCase):
         import mgr.store as st
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-runnow-")
-        old = st.TASKS_FILE, m.instance_by_ip, m.PW
+        old = st.TASKS_FILE, m.instance_by_ip, m._auth.PW
         try:
             st.TASKS_FILE = os.path.join(tmp, "tasks.json")
             later = int(time.time()) + 86400
@@ -3875,11 +3875,11 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual(ts["o1"]["status"], "pending")
             self.assertEqual(ts["r1"]["status"], "running")
             # the route
-            m.instance_by_ip = lambda ip: None; m.PW = ""
+            m.instance_by_ip = lambda ip: None; m._auth.PW = ""
             h = self._post_handler("/api/tasks/o1/run", "10.0.0.5", b"{}"); h.do_POST()
             self.assertIn(b"queued", h.wfile.getvalue())
         finally:
-            st.TASKS_FILE, m.instance_by_ip, m.PW = old
+            st.TASKS_FILE, m.instance_by_ip, m._auth.PW = old
 
     def test_skill_proposals_wait_for_approval(self):
         """An agent's skill proposal is linted, stored, announced, and enters
@@ -3887,7 +3887,7 @@ class ManagerFunctions(unittest.TestCase):
         with the same name replaces the pending one; admins cannot file."""
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-skprop-")
-        old = m.SKILL_PROPOSALS_FILE, m.SKILLS_FILE, m.notify_add, m.instance_by_ip, m.PW
+        old = m.SKILL_PROPOSALS_FILE, m.SKILLS_FILE, m.notify_add, m.instance_by_ip, m._auth.PW
         notes = []
         try:
             m.SKILL_PROPOSALS_FILE = os.path.join(tmp, "p.json"); m.SKILLS_FILE = os.path.join(tmp, "s.json")
@@ -3912,7 +3912,7 @@ class ManagerFunctions(unittest.TestCase):
             h = self._post_handler("/api/skill-proposals", "10.0.0.5", json.dumps(good).encode()); h.do_POST()
             self.assertEqual(self._status(h), 403)                                     # guests only
             self.assertEqual([x["name"] for x in m.load_skills()], [])                 # nothing in the catalog yet
-            m.PW = ""
+            m._auth.PW = ""
             h = self._post_handler(f"/api/skill-proposals/{pending[0]['id']}/approve", "10.0.0.5", b"{}"); h.do_POST()
             self.assertIn(b"saved", h.wfile.getvalue())
             self.assertEqual([x["name"] for x in m.load_skills()], ["job-search-nrw"])
@@ -3923,7 +3923,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertTrue(pid); self.assertTrue(next(p for p in m.load_proposals() if p["id"] == pid)["update"])
             self.assertIn("discarded", m.proposal_decide(pid, False))
         finally:
-            m.SKILL_PROPOSALS_FILE, m.SKILLS_FILE, m.notify_add, m.instance_by_ip, m.PW = old
+            m.SKILL_PROPOSALS_FILE, m.SKILLS_FILE, m.notify_add, m.instance_by_ip, m._auth.PW = old
 
     def test_sessions_fulltext_search_scoped_per_guest(self):
         """FTS5 over chats and task runs: exact words find the session, guests
@@ -3973,7 +3973,7 @@ class ManagerFunctions(unittest.TestCase):
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-session-")
         old = (m.load_instances, m.is_running, m.pidfile, m._settings.load_settings, m.secret_store, m.load_secret_policy,
-               m.load_mcps, m.load_skills, m._paths.RUN_DIR, m.instance_by_ip, m.PW, st.HISTORY_DB, m.image_state)
+               m.load_mcps, m.load_skills, m._paths.RUN_DIR, m.instance_by_ip, m._auth.PW, st.HISTORY_DB, m.image_state)
         try:
             inst = {"name": "vm1", "index": 3, "template": "openrouter", "rootfs": "instances/openrouter-rootfs.ext4",
                     "config": {"OPENROUTER_MODEL": "x/y", "MCP_SERVERS": "caldav,homeassistant"}}
@@ -3991,7 +3991,7 @@ class ManagerFunctions(unittest.TestCase):
             m.load_mcps = lambda: [{"name": "caldav", "command": "c", "env": {"CALDAV_PASSWORD": "${CALDAV_PASSWORD}"}},
                                    {"name": "homeassistant", "command": "h", "args": ["Bearer ${HA_TOKEN}"]}]
             m.load_skills = lambda: [{"name": "a"}, {"name": "b"}]
-            m.instance_by_ip = lambda ip: None; m.PW = ""
+            m.instance_by_ip = lambda ip: None; m._auth.PW = ""
             d = m.session_info(inst)
             self.assertEqual((d["runtime"], d["login"], d["model"]), ("openrouter-agent", "key proxy", "x/y"))
             self.assertTrue(7400 < d["uptime"] < 7700)
@@ -4016,7 +4016,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertNotIn("commands", m.session_info(cl))                       # the / picker lists them
         finally:
             (m.load_instances, m.is_running, m.pidfile, m._settings.load_settings, m.secret_store, m.load_secret_policy,
-             m.load_mcps, m.load_skills, m._paths.RUN_DIR, m.instance_by_ip, m.PW, st.HISTORY_DB, m.image_state) = old
+             m.load_mcps, m.load_skills, m._paths.RUN_DIR, m.instance_by_ip, m._auth.PW, st.HISTORY_DB, m.image_state) = old
 
     def test_chat_page_carries_panel_and_search(self):
         """The rendered chat page has the session panel, the search bar and
@@ -4052,7 +4052,7 @@ class ManagerFunctions(unittest.TestCase):
         file stays 0600, values never come back through /api/secret-keys."""
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-secstore-")
-        old = m.SECRETS_FILE, m._settings.load_settings, m.instance_by_ip, m.PW
+        old = m.SECRETS_FILE, m._settings.load_settings, m.instance_by_ip, m._auth.PW
         try:
             m.SECRETS_FILE = os.path.join(tmp, "secrets.env")
             with open(m.SECRETS_FILE, "w") as fh:
@@ -4070,7 +4070,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual(m.secret_delete("MRMUSIC_TOKEN"), "MRMUSIC_TOKEN deleted")
             self.assertEqual(m.secret_delete("MRMUSIC_TOKEN"), "MRMUSIC_TOKEN not in the store")
             self.assertEqual(set(m.load_secrets_file()), {"HA_TOKEN", "CALDAV_PASSWORD"})
-            m.instance_by_ip = lambda ip: None; m.PW = ""
+            m.instance_by_ip = lambda ip: None; m._auth.PW = ""
             h = self._handler("/api/secret-keys", "10.0.0.5"); h._do_GET()
             body = json.loads(h.wfile.getvalue().split(b"\r\n\r\n", 1)[1])
             self.assertEqual(body["sources"], {"CALDAV_PASSWORD": "store", "HA_TOKEN": "store", "OPENROUTER_API_KEY": "settings"})
@@ -4084,7 +4084,7 @@ class ManagerFunctions(unittest.TestCase):
             h = self._post_handler("/api/secret-store", "172.30.3.2", b'{"name": "X_KEY", "value": "v"}'); h.do_POST()
             self.assertEqual(self._status(h), 403)                                       # guests: never
         finally:
-            m.SECRETS_FILE, m._settings.load_settings, m.instance_by_ip, m.PW = old
+            m.SECRETS_FILE, m._settings.load_settings, m.instance_by_ip, m._auth.PW = old
 
     def test_guest_get_denylist_covers_ui_proxy_and_terminal(self):
         """GET /i/<other>/term opened the shell of every other VM — only POST
@@ -4103,10 +4103,10 @@ class ManagerFunctions(unittest.TestCase):
         401. Denied GET paths answer 403 before any handler runs."""
         m = self.m
         guest = {"name": "hass", "index": 7, "config": {}}
-        old_ibi, old_pw = m.instance_by_ip, m.PW
+        old_ibi, old_pw = m.instance_by_ip, m._auth.PW
         try:
             m.instance_by_ip = lambda ip: guest if ip == "172.30.7.2" else None
-            m.PW = "secret"
+            m._auth.PW = "secret"
             for p in ("/i/orchestrator/term", "/", "/chat", "/katfs/", "/api/inbox",
                       "/no/such/page"):
                 h = self._handler(p, "172.30.7.2")
@@ -4117,10 +4117,10 @@ class ManagerFunctions(unittest.TestCase):
             self.assertFalse(h._auth())
             self.assertIn(b" 401 ", h.wfile.getvalue().split(b"\r\n", 1)[0])
             h = self._handler("/", "192.168.1.5", auth="Basic " + base64.b64encode(
-                f"{m.USER}:secret".encode()).decode())
+                f"{m._auth.USER}:secret".encode()).decode())
             self.assertTrue(h._auth())
         finally:
-            m.instance_by_ip, m.PW = old_ibi, old_pw
+            m.instance_by_ip, m._auth.PW = old_ibi, old_pw
 
     def test_guest_task_target_policy(self):
         """A guest may task itself or an ephemeral VM; other instances only via
