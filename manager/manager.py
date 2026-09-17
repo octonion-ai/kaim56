@@ -10,13 +10,13 @@ library, no extra packages. Instances are stored as JSON under
 instances/<name>.json; the network is derived per instance from 'index':
   host  172.30.<index>.1/30   guest 172.30.<index>.2/30   tap fc<index>
 """
-import json
 import os
 import threading
 from http.server import ThreadingHTTPServer
 
 
 from mgr import paths as _paths  # noqa: E402
+from mgr import startup as _startup  # noqa: E402
 from mgr import httpd as _httpd  # noqa: E402
 from mgr import guestproxy as _guestproxy  # noqa: E402,F401  (tests reach it as m._x)
 # The route modules register their functions in mgr.routes.ROUTER when imported.
@@ -137,105 +137,18 @@ def _ha_ws_target():
 from mgr import haalias as _haalias  # noqa: E402
 _haalias.configure(_ha_ws_target, lambda: _secrets.secret_store().get("HA_TOKEN"))
 
-def migrate_mcp_config_out_of_instances():
-    """MCP_CONFIG contained the substituted secrets in plain text. The server
-    names are its keys, so they can be lifted losslessly into MCP_SERVERS; the
-    secrets needed for that are granted to the instance specifically, so nothing
-    that worked before stops working."""
-    pol = _secrets.load_secret_policy()
-    by_inst = pol.setdefault("by_instance", {})
-    touched = False
-    for inst in _instances.load_instances():
-        cfg = inst.get("config") or {}
-        if "MCP_CONFIG" not in cfg:
-            continue
-        blob = cfg.get("MCP_CONFIG")
-        try:
-            servers = json.loads(blob).get("mcpServers", {})
-            names = sorted(servers.keys())
-        except (ValueError, AttributeError):
-            names = []
-        if not blob:
-            names = []          # empty remnant from old setups — just clean up
-        if names:
-            cfg["MCP_SERVERS"] = ",".join(names)
-            need = _mcp.mcp_required_secrets(names)
-            if need:
-                cur = set(by_inst.get(inst["name"], []))
-                if need - cur:
-                    by_inst[inst["name"]] = sorted(cur | need)
-                    touched = True
-        cfg.pop("MCP_CONFIG", None)
-        try:
-            _instances.save_instance(inst)
-            print(f"[migrate] {inst['name']}: MCP_CONFIG -> MCP_SERVERS={','.join(names) or '-'}"
-                  f"{' + Policy ' + ','.join(sorted(_mcp.mcp_required_secrets(names))) if names else ''}",
-                  flush=True)
-        except OSError as e:
-            print(f"[migrate] {inst['name']}: {e}", flush=True)
-    if touched:
-        _secrets.save_secret_policy(pol)
-
-
-def migrate_secrets_out_of_instances():
-    """One-time cleanup of the legacy state: instance JSONs that still carry an
-    API key lose it here. Since the rework the agent fetches it via the broker;
-    a key in the instance file would only be a copy that travels onto every
-    config disk. Runs as root, who owns the files."""
-    for inst in _instances.load_instances():
-        cfg = inst.get("config") or {}
-        hit = [k for k in _settings.SECRET_PARAMS if k in cfg]
-        if not hit:
-            continue
-        for k in hit:
-            cfg.pop(k)
-        try:
-            _instances.save_instance(inst)
-            print(f"[migrate] {inst['name']}: {', '.join(hit)} removed", flush=True)
-        except OSError as e:
-            print(f"[migrate] {inst['name']}: {e}", flush=True)
-
-
-def harden_files(base=None):
-    """Chats, audit, missions, tasks, history: written by root, readable by
-    root. Nothing else on the host needs them (the operator reads through
-    the UI); the guests' folders keep their own owner and mode."""
-    base = base or _paths.BASE
-    n = 0
-    try:
-        for f in os.listdir(base):
-            p = os.path.join(base, f)
-            if os.path.isfile(p) and f.endswith((".json", ".jsonl", ".db", ".db-wal", ".db-shm", ".txt")):
-                os.chmod(p, 0o600); n += 1
-        idir = os.path.join(base, "instances")       # instance JSONs: operator-readable
-        if os.path.isdir(idir):
-            for f in os.listdir(idir):
-                if f.endswith(".json"):
-                    os.chmod(os.path.join(idir, f), 0o640)
-                    if os.geteuid() == 0:
-                        os.chown(os.path.join(idir, f), 0, _host.ADMIN_GID)
-        ad = os.path.join(base, "audit")
-        if os.path.isdir(ad):
-            os.chmod(ad, 0o700)
-            for f in os.listdir(ad):
-                os.chmod(os.path.join(ad, f), 0o600); n += 1
-    except OSError as e:
-        print(f"[quiet] harden_files: {e!r}", flush=True)
-    return n
-
-
 if __name__ == "__main__":
     print(f"kAIm56 on http://{_host.LISTEN[0]}:{_host.LISTEN[1]}  (auth={'on' if _auth.PW else 'OFF'})",
           flush=True)
     os.umask(0o077)                  # new files are root's; the few others read get a mode below
-    harden_files()
+    _startup.harden_files()
     if _mounts.ensure_guest_user():
         _memfs.OWNER = (_mounts.GUEST_UID, _host.ADMIN_GID)
         _mounts.own_guest_dir(_mounts.AGENT_ROOT, 0o755)
         _mounts.own_guest_dir(_mounts.FCMNT_ROOT, 0o755)
     _mounts.retire_root_export()
-    migrate_secrets_out_of_instances()
-    migrate_mcp_config_out_of_instances()
+    _startup.migrate_secrets_out_of_instances()
+    _startup.migrate_mcp_config_out_of_instances()
     threading.Thread(target=_tasks._task_worker, daemon=True).start()
     threading.Thread(target=_signal_mod._signal_receiver, daemon=True).start()
     ThreadingHTTPServer(_host.LISTEN, _httpd.H).serve_forever()

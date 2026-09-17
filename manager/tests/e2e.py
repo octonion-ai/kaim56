@@ -3638,7 +3638,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual(m._instances.load_instances()[0]["name"], "x")
             os.chmod(os.path.join(tmp, "x.json"), 0o600)
             os.makedirs(os.path.join(tmp, "instances")); os.rename(os.path.join(tmp, "x.json"), os.path.join(tmp, "instances", "x.json"))
-            m.harden_files(tmp)
+            m._startup.harden_files(tmp)
             self.assertEqual(os.stat(os.path.join(tmp, "instances", "x.json")).st_mode & 0o777, 0o640)
         finally:
             m._paths.INST_DIR = old[0]; os.umask(old[1])
@@ -3651,7 +3651,7 @@ class ManagerFunctions(unittest.TestCase):
             with open(os.path.join(tmp, f), "w") as fh:
                 fh.write("{}")
             os.chmod(os.path.join(tmp, f), 0o644)
-        n = m.harden_files(tmp)
+        n = m._startup.harden_files(tmp)
         self.assertEqual(n, 4)
         for f in ("chats.json", "missions.json", "history.db", "audit/hass.jsonl"):
             self.assertEqual(os.stat(os.path.join(tmp, f)).st_mode & 0o777, 0o600, f)
