@@ -12,6 +12,7 @@ import os
 import subprocess
 
 from mgr import settings as _settings
+from mgr import paths as _paths
 
 
 def _uplink_iface():
@@ -61,3 +62,6 @@ def _host_tz():
 
 
 HOST_TZ = os.environ.get("GUEST_TZ") or _host_tz()
+
+
+ADMIN_GID = os.stat(_paths.BASE).st_gid      # the operator's group: may read what the guests write

@@ -124,9 +124,6 @@ EXPORTS_D = "/etc/exports.d"
 FCMNT_ROOT = os.path.join(AGENT_ROOT, ".fcmnt")
 GUEST_USER = os.environ.get("GUEST_USER", "kaim56-guest")
 GUEST_UID = GUEST_GID = 1000          # until ensure_guest_user() resolved the user
-ADMIN_GID = os.stat(_paths.BASE).st_gid      # the operator's group: may read what the guests write
-
-
 def ensure_guest_user():
     """Resolve (root: create) the squash user. False when it does not exist
     and cannot be created — exports then fall back to uid 1000, as before."""
@@ -151,7 +148,7 @@ def own_guest_dir(path, mode=0o2750):
     try:
         os.makedirs(path, exist_ok=True)
         if os.geteuid() == 0:
-            os.chown(path, GUEST_UID, ADMIN_GID)
+            os.chown(path, GUEST_UID, _host.ADMIN_GID)
         os.chmod(path, mode)
     except OSError as e:
         print(f"[quiet] own_guest_dir {path}: {e!r}", flush=True)
@@ -181,7 +178,7 @@ def save_instance(inst):
     try:
         os.chmod(p, 0o640)
         if os.geteuid() == 0:
-            os.chown(p, 0, ADMIN_GID)
+            os.chown(p, 0, _host.ADMIN_GID)
     except OSError:
         pass
 
@@ -2135,7 +2132,7 @@ def start(inst):
     sock = os.path.join(_paths.RUN_DIR, f"{inst['name']}.sock")
     log = open(os.path.join(_paths.RUN_DIR, f"{inst['name']}.log"), "ab")
     try:                                  # the operator may tail the console (root:operator, 0640)
-        os.chmod(log.name, 0o640); os.chown(log.name, 0, ADMIN_GID)
+        os.chmod(log.name, 0o640); os.chown(log.name, 0, _host.ADMIN_GID)
     except OSError:
         pass
     if os.path.exists(sock):
@@ -4914,7 +4911,7 @@ def harden_files(base=None):
                 if f.endswith(".json"):
                     os.chmod(os.path.join(idir, f), 0o640)
                     if os.geteuid() == 0:
-                        os.chown(os.path.join(idir, f), 0, ADMIN_GID)
+                        os.chown(os.path.join(idir, f), 0, _host.ADMIN_GID)
         ad = os.path.join(base, "audit")
         if os.path.isdir(ad):
             os.chmod(ad, 0o700)
@@ -4931,7 +4928,7 @@ if __name__ == "__main__":
     os.umask(0o077)                  # new files are root's; the few others read get a mode below
     harden_files()
     if ensure_guest_user():
-        _memfs.OWNER = (GUEST_UID, ADMIN_GID)
+        _memfs.OWNER = (GUEST_UID, _host.ADMIN_GID)
         own_guest_dir(AGENT_ROOT, 0o755)
         own_guest_dir(FCMNT_ROOT, 0o755)
     retire_root_export()
