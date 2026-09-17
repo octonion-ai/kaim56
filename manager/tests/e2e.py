@@ -3227,21 +3227,21 @@ class ManagerFunctions(unittest.TestCase):
         def fake_sh(*a, **k):
             calls.append(a)
             return R(1 if "-C" in a else 0)
-        old = m._util.sh, m.ensure_antispoof
+        old = m._util.sh, m._netfw.ensure_antispoof
         try:
-            m._util.sh = fake_sh; m.ensure_antispoof = lambda inst: None
+            m._util.sh = fake_sh; m._netfw.ensure_antispoof = lambda inst: None
             inst = {"name": "vm1", "index": 3, "config": {}}
-            m.apply_internet(inst, False)
-            chain = m._fc_chain(inst)
-            self.assertIn(("iptables", "-A", chain, "!", "-d", m.POOL, "-j", "REJECT"), calls)
+            m._netfw.apply_internet(inst, False)
+            chain = m._netfw._fc_chain(inst)
+            self.assertIn(("iptables", "-A", chain, "!", "-d", m._netfw.POOL, "-j", "REJECT"), calls)
             self.assertIn(("iptables", "-I", "FORWARD", "1", "-i", m._instances.net_of(inst)["tap"], "-j", chain), calls)
             self.assertFalse(any("ACCEPT" in a and chain in a for a in calls))
             calls.clear()
-            m.apply_internet(inst, True)
-            self.assertIn(("iptables", "-A", chain, "!", "-d", m.POOL, "-j", "ACCEPT"), calls)
+            m._netfw.apply_internet(inst, True)
+            self.assertIn(("iptables", "-A", chain, "!", "-d", m._netfw.POOL, "-j", "ACCEPT"), calls)
             self.assertFalse(any(a[-1] == "REJECT" and "!" in a for a in calls))
         finally:
-            m._util.sh, m.ensure_antispoof = old
+            m._util.sh, m._netfw.ensure_antispoof = old
 
     def test_sandbox_through_the_task_route_and_the_queue(self):
         """A guest's spawn_subagent/create_task with a sandbox: the route turns
@@ -3298,25 +3298,25 @@ class ManagerFunctions(unittest.TestCase):
         calls = []
         class R:
             def __init__(self, rc): self.returncode = rc
-        old = m._util.sh, m.ensure_antispoof, m.socket.getaddrinfo, m._mcp_endpoints, m._llama_endpoint
+        old = m._util.sh, m._netfw.ensure_antispoof, m.socket.getaddrinfo, m._netfw._mcp_endpoints, m._netfw._llama_endpoint
         try:
             m._util.sh = lambda *a, **k: (calls.append(a), R(1 if "-C" in a else 0))[1]
-            m.ensure_antispoof = lambda inst: None
-            m._mcp_endpoints = lambda inst: []; m._llama_endpoint = lambda inst: None
+            m._netfw.ensure_antispoof = lambda inst: None
+            m._netfw._mcp_endpoints = lambda inst: []; m._netfw._llama_endpoint = lambda inst: None
             def gai(host, *a, **k):
                 if host == "api.example.com":
                     return [(2, 1, 6, "", ("93.184.216.34", 0))]
                 raise OSError("no such host")
             m.socket.getaddrinfo = gai
             inst = {"name": "vm1", "index": 3, "config": {"EGRESS_ALLOW": "api.example.com, typo.invalid"}}
-            m.apply_internet(inst, True)
-            chain = m._fc_chain(inst)
+            m._netfw.apply_internet(inst, True)
+            chain = m._netfw._fc_chain(inst)
             self.assertIn(("iptables", "-A", chain, "-d", "93.184.216.34", "-j", "ACCEPT"), calls)
-            self.assertIn(("iptables", "-A", chain, "!", "-d", m.POOL, "-j", "REJECT"), calls)
-            self.assertNotIn(("iptables", "-A", chain, "!", "-d", m.POOL, "-j", "ACCEPT"), calls)
+            self.assertIn(("iptables", "-A", chain, "!", "-d", m._netfw.POOL, "-j", "REJECT"), calls)
+            self.assertNotIn(("iptables", "-A", chain, "!", "-d", m._netfw.POOL, "-j", "ACCEPT"), calls)
             self.assertFalse(any("typo.invalid" in a for a in calls))
         finally:
-            m._util.sh, m.ensure_antispoof, m.socket.getaddrinfo, m._mcp_endpoints, m._llama_endpoint = old
+            m._util.sh, m._netfw.ensure_antispoof, m.socket.getaddrinfo, m._netfw._mcp_endpoints, m._netfw._llama_endpoint = old
 
     def test_notification_text_lands_in_the_task_chat(self):
         """A guest's notification is also appended to the instance's task chat
@@ -3539,7 +3539,7 @@ class ManagerFunctions(unittest.TestCase):
             m._mounts.EXPORTS_D = os.path.join(tmp, "exports.d"); m._mounts.AGENT_EXPORTS = os.path.join(m._mounts.EXPORTS_D, "agent.exports")
             os.makedirs(m._mounts.EXPORTS_D)
             with open(m._mounts.AGENT_EXPORTS, "w") as fh:
-                fh.write(f"{m._mounts.AGENT_ROOT} {m.POOL}(rw,fsid=0,crossmnt)\n")
+                fh.write(f"{m._mounts.AGENT_ROOT} {m._netfw.POOL}(rw,fsid=0,crossmnt)\n")
             m._util.sh = lambda *a, check=True: (calls.append(a), types.SimpleNamespace(returncode=0, stdout="", stderr=""))[1]
             m._mounts.GUEST_UID, m._mounts.GUEST_GID = 4242, 4243
             m._mounts.ensure_guest_user = lambda: True
@@ -3554,14 +3554,14 @@ class ManagerFunctions(unittest.TestCase):
             ws = os.path.join(m._mounts.AGENT_ROOT, "vm1")
             self.assertIn(f"{ws} 172.30.7.2(rw,sync,no_subtree_check,all_squash,anonuid=4242,anongid=4243,fsid={4000 + 7 * 16 + 14})", ex)
             self.assertIn(f"{m._mounts.FCMNT_ROOT}/vm1/0 172.30.7.2(ro,", ex)
-            self.assertNotIn(m.POOL, ex)                                   # nothing for the whole pool
+            self.assertNotIn(m._netfw.POOL, ex)                                   # nothing for the whole pool
             self.assertTrue(os.path.isdir(ws))
             self.assertFalse(os.path.exists(m._mounts.AGENT_EXPORTS))              # root export retired …
             self.assertTrue(os.path.exists(m._mounts.AGENT_EXPORTS + ".bak"))      # … with a backup
             self.assertFalse(m._mounts.retire_root_export())                       # idempotent
             self.assertEqual(m.guest_env(inst)["AGENT_EXPORT"], ws)
             self.assertEqual(m.guest_env(inst)["MEMORY_DIR"], "/memory")
-            self.assertEqual(m.guest_env(inst)["GUEST_DNS"], m.GUEST_DNS)
+            self.assertEqual(m.guest_env(inst)["GUEST_DNS"], m._netfw.GUEST_DNS)
             # real mount_specs: absolute host paths as NFS subpaths, fsid slots 0..13 for folders
             m._mounts.mount_specs = old[5]
             sp = m._mounts.mount_specs({**inst, "index": 3, "template": "claude", "rootfs": "instances/claude-rootfs.ext4"})
@@ -4185,15 +4185,15 @@ class ManagerFunctions(unittest.TestCase):
         try:
             # every -C fails -> "rule missing" -> everything gets inserted
             m._util.sh = lambda *a, check=True: (calls.append(a), types.SimpleNamespace(returncode=1))[1]
-            m.ensure_guest_input_rules()
+            m._netfw.ensure_guest_input_rules()
             ins = [c for c in calls if c[1] == "-I"]
             self.assertEqual(ins[0][2:], ("INPUT", "1", "-i", "fc+", "-j", "DROP"))
             ports = {c[c.index("--dport") + 1] for c in ins if "--dport" in c}
             self.assertEqual(ports, {str(m._host.LISTEN[1]), "2049"})
             self.assertTrue(any("ESTABLISHED,RELATED" in c for c in ins))
-            self.assertTrue(all(c[2] == "INPUT" and ("fc+" in c or m.POOL in c) for c in ins))
+            self.assertTrue(all(c[2] == "INPUT" and ("fc+" in c or m._netfw.POOL in c) for c in ins))
             # a pool source on the LAN interface is forged: dropped before any by-IP check
-            self.assertIn(("iptables", "-I", "INPUT", "1", "-i", m._host.HOSTIF, "-s", m.POOL, "-j", "DROP"), ins)
+            self.assertIn(("iptables", "-I", "INPUT", "1", "-i", m._host.HOSTIF, "-s", m._netfw.POOL, "-j", "DROP"), ins)
             # an ACCEPT that already exists (maybe below the DROP) is removed and re-inserted on top
             calls.clear()
             state = {"nfs": 1}      # one stray copy of the NFS rule
@@ -4203,12 +4203,12 @@ class ManagerFunctions(unittest.TestCase):
                     state["nfs"] -= 1; return types.SimpleNamespace(returncode=0)
                 return types.SimpleNamespace(returncode=1)
             m._util.sh = sh2
-            m.ensure_guest_input_rules()
+            m._netfw.ensure_guest_input_rules()
             nfs = [c for c in calls if "2049" in c]
             self.assertEqual([c[1] for c in nfs], ["-D", "-D", "-I"])      # delete until gone, then insert at 1
             self.assertEqual(nfs[-1][2:4], ("INPUT", "1"))
             calls.clear()
-            m.ensure_antispoof({"name": "hass", "index": 7})
+            m._netfw.ensure_antispoof({"name": "hass", "index": 7})
             spec = ("-i", "fc7", "!", "-s", "172.30.7.2", "-j", "DROP")
             self.assertEqual({c[2] for c in calls if c[1] == "-I"}, {"INPUT", "FORWARD"})
             for c in calls:
