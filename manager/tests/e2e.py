@@ -2469,13 +2469,13 @@ class ManagerFunctions(unittest.TestCase):
         m = self.m
         import mgr.store as st
         seen = []
-        old_eph, old_named, old_file = m._run_ephemeral, m._run_named, st.TASKS_FILE
+        old_eph, old_named, old_file = m._tasks._run_ephemeral, m._tasks._run_named, st.TASKS_FILE
         try:
-            m._run_ephemeral = lambda msg, model=None, timeout=600: (seen.append(("eph", msg, model)), (True, "r"))[1]
-            m._run_named = lambda inst, msg, timeout=600: (seen.append(("named", inst, msg)), (True, "r"))[1]
-            m._run_task_now("ephemeral", "do", "google/gemini-2.5-flash")
-            m._run_task_now("ephemeral", "do")
-            m._run_task_now("hass", "do", "google/gemini-2.5-flash")
+            m._tasks._run_ephemeral = lambda msg, model=None, timeout=600: (seen.append(("eph", msg, model)), (True, "r"))[1]
+            m._tasks._run_named = lambda inst, msg, timeout=600: (seen.append(("named", inst, msg)), (True, "r"))[1]
+            m._tasks._run_task_now("ephemeral", "do", "google/gemini-2.5-flash")
+            m._tasks._run_task_now("ephemeral", "do")
+            m._tasks._run_task_now("hass", "do", "google/gemini-2.5-flash")
             self.assertEqual(seen, [("eph", "do", "google/gemini-2.5-flash"), ("eph", "do", None),
                                     ("named", "hass", "do")])
             st.TASKS_FILE = os.path.join(tempfile.mkdtemp(prefix="e2e-taskmodel-"), "tasks.json")
@@ -2484,7 +2484,7 @@ class ManagerFunctions(unittest.TestCase):
             t2 = st.add_task("ephemeral", "plain", "")
             self.assertNotIn("model", next(x for x in st.load_tasks() if x["id"] == t2["id"]))
         finally:
-            m._run_ephemeral, m._run_named, st.TASKS_FILE = old_eph, old_named, old_file
+            m._tasks._run_ephemeral, m._tasks._run_named, st.TASKS_FILE = old_eph, old_named, old_file
 
     def test_task_target_resolved_and_validated(self):
         """'@orchestrator' (an agent's typo) failed daily with 'instance unknown'
@@ -2495,12 +2495,12 @@ class ManagerFunctions(unittest.TestCase):
         old_load, old_file = m._instances.load_instances, st.TASKS_FILE
         try:
             m._instances.load_instances = lambda: [{"name": "orchestrator"}, {"name": "hass"}]
-            self.assertEqual(m.resolve_task_target("@orchestrator"), ("orchestrator", ""))
-            self.assertEqual(m.resolve_task_target(" hass "), ("hass", ""))
-            self.assertEqual(m.resolve_task_target(""), ("ephemeral", ""))
-            self.assertEqual(m.resolve_task_target(None), ("ephemeral", ""))
-            self.assertEqual(m.resolve_task_target("@")[0], "ephemeral")
-            name, err = m.resolve_task_target("orchestartor")
+            self.assertEqual(m._tasks.resolve_task_target("@orchestrator"), ("orchestrator", ""))
+            self.assertEqual(m._tasks.resolve_task_target(" hass "), ("hass", ""))
+            self.assertEqual(m._tasks.resolve_task_target(""), ("ephemeral", ""))
+            self.assertEqual(m._tasks.resolve_task_target(None), ("ephemeral", ""))
+            self.assertEqual(m._tasks.resolve_task_target("@")[0], "ephemeral")
+            name, err = m._tasks.resolve_task_target("orchestartor")
             self.assertEqual(name, "")
             self.assertIn("unknown", err)
             tmp = tempfile.mkdtemp(prefix="e2e-tasktarget-")
@@ -2516,11 +2516,11 @@ class ManagerFunctions(unittest.TestCase):
             old_notify = m._notify.notify_add
             m._notify.notify_add = lambda *a, **k: pushes.append(a)
             try:
-                hit = m.task_target_sweep()
+                hit = m._tasks.task_target_sweep()
                 self.assertEqual([h[1] for h in hit], ["@orchestrator"])
                 self.assertEqual(len(pushes), 1)
                 self.assertIn("@orchestrator", pushes[0][2])
-                self.assertEqual(m.task_target_sweep(), [])          # not again
+                self.assertEqual(m._tasks.task_target_sweep(), [])          # not again
                 bad = next(t for t in st.load_tasks() if t["instance"] == "@orchestrator")
                 st.update_task(bad["id"], instance="orchestrator")   # fixed -> mark gone
                 self.assertNotIn("target_warned", next(t for t in st.load_tasks() if t["id"] == bad["id"]))
@@ -2623,20 +2623,20 @@ class ManagerFunctions(unittest.TestCase):
               "next_run": 0}
         tasks = [hb]
         skipped, throttled = [], []
-        dirty, claimed = m.worker_claim(tasks, now, lambda t: True, skipped, throttled)
+        dirty, claimed = m._tasks.worker_claim(tasks, now, lambda t: True, skipped, throttled)
         self.assertTrue(dirty, "Skip mutiert next_run — MUSS dirty melden")
         self.assertIsNone(claimed)
         self.assertEqual(skipped, ["hb1"])
         self.assertGreater(hb["next_run"], now, "next_run muss vorruecken")
         # Zweiter Zyklus auf dem (nun gespeicherten) Stand: nichts mehr faellig.
         skipped2 = []
-        dirty2, claimed2 = m.worker_claim(tasks, now + 5, lambda t: True, skipped2, [])
+        dirty2, claimed2 = m._tasks.worker_claim(tasks, now + 5, lambda t: True, skipped2, [])
         self.assertFalse(dirty2)
         self.assertIsNone(claimed2)
         self.assertEqual(skipped2, [], "5 s spaeter darf NICHT erneut geskippt werden")
         # Nicht-idle (hb_idle False): der Task wird normal geclaimt.
         hb["next_run"] = 0
-        dirty3, claimed3 = m.worker_claim(tasks, now, lambda t: False, [], [])
+        dirty3, claimed3 = m._tasks.worker_claim(tasks, now, lambda t: False, [], [])
         self.assertTrue(dirty3)
         self.assertEqual(claimed3["id"], "hb1")
         self.assertEqual(hb["status"], "running")
@@ -2649,19 +2649,19 @@ class ManagerFunctions(unittest.TestCase):
         tmp = tempfile.mkdtemp(prefix="e2e-mi5-")
         import mgr.missions as mmod
         old_file, old_notify = mmod.MISSIONS_FILE, mmod.notify_add
-        old_run, old_load, old_win = m._run_named, m._instances.load_instances, m.MISSION_COLLECT_SECS
+        old_run, old_load, old_win = m._tasks._run_named, m._instances.load_instances, m._tasks.MISSION_COLLECT_SECS
         pushes = []
         done = threading.Event()
         try:
             mmod.MISSIONS_FILE = os.path.join(tmp, "missions.json")
             mmod.notify_add = lambda *a, **k: ("x", "ok")
             m._instances.load_instances = lambda: [{"name": "owner-a"}]
-            m._run_named = lambda inst, msg: (pushes.append((inst, msg)), done.set(), (True, "ok"))[-1]
-            m.MISSION_COLLECT_SECS = 0.3
+            m._tasks._run_named = lambda inst, msg: (pushes.append((inst, msg)), done.set(), (True, "ok"))[-1]
+            m._tasks.MISSION_COLLECT_SECS = 0.3
             mid, _ = m._missions.mission_start("owner-a", "burst goal", ["s1", "s2", "s3"])
             for n, tid in ((1, "t-b1"), (2, "t-b2"), (3, "t-b3")):
                 m._missions.mission_update("owner-a", mid, step=n, status="doing", task_id=tid)
-                m._mission_advance_fire(tid)
+                m._tasks._mission_advance_fire(tid)
             self.assertTrue(done.wait(5), "no push fired")
             time.sleep(0.4)                            # window fully drained
             self.assertEqual(len(pushes), 1, f"expected ONE push, got {len(pushes)}")
@@ -2671,8 +2671,8 @@ class ManagerFunctions(unittest.TestCase):
                 self.assertIn(tid, msg)
         finally:
             mmod.MISSIONS_FILE, mmod.notify_add = old_file, old_notify
-            m._run_named, m._instances.load_instances = old_run, old_load
-            m.MISSION_COLLECT_SECS = old_win
+            m._tasks._run_named, m._instances.load_instances = old_run, old_load
+            m._tasks.MISSION_COLLECT_SECS = old_win
 
     def test_mission_advance_fires_at_owner(self):
         """Regression guard: the push after a finished task goes to the mission's
@@ -2683,31 +2683,31 @@ class ManagerFunctions(unittest.TestCase):
         tmp = tempfile.mkdtemp(prefix="e2e-mi4-")
         import mgr.missions as mmod
         old_file, old_notify = mmod.MISSIONS_FILE, mmod.notify_add
-        old_run, old_load, old_win = m._run_named, m._instances.load_instances, m.MISSION_COLLECT_SECS
+        old_run, old_load, old_win = m._tasks._run_named, m._instances.load_instances, m._tasks.MISSION_COLLECT_SECS
         fired = []
         done = threading.Event()
         try:
             mmod.MISSIONS_FILE = os.path.join(tmp, "missions.json")
             mmod.notify_add = lambda *a, **k: ("x", "ok")
-            m.MISSION_COLLECT_SECS = 0.2
+            m._tasks.MISSION_COLLECT_SECS = 0.2
             m._instances.load_instances = lambda: [{"name": "jobresearcher"}, {"name": "orchestrator"}]
-            m._run_named = lambda inst, msg: (fired.append(inst), done.set(), (True, "ok"))[-1]
+            m._tasks._run_named = lambda inst, msg: (fired.append(inst), done.set(), (True, "ok"))[-1]
             mid, _ = m._missions.mission_start("jobresearcher", "owned elsewhere", ["s1"])
             m._missions.mission_update("jobresearcher", mid, step=1, status="doing",
                              task_id="t-y1", target="hass")
-            m._mission_advance_fire("t-y1")
+            m._tasks._mission_advance_fire("t-y1")
             self.assertTrue(done.wait(5), "no advance push fired")
             self.assertEqual(fired, ["jobresearcher"])
             # Owner gone -> no push (the TTL sweep pauses the mission instead).
             fired.clear(); done.clear()
             m._instances.load_instances = lambda: [{"name": "orchestrator"}]
-            m._mission_advance_fire("t-y1")
+            m._tasks._mission_advance_fire("t-y1")
             self.assertFalse(done.wait(0.6))
             self.assertEqual(fired, [])
         finally:
             mmod.MISSIONS_FILE, mmod.notify_add = old_file, old_notify
-            m._run_named, m._instances.load_instances = old_run, old_load
-            m.MISSION_COLLECT_SECS = old_win
+            m._tasks._run_named, m._instances.load_instances = old_run, old_load
+            m._tasks.MISSION_COLLECT_SECS = old_win
 
     def test_mission_caps(self):
         m = self.m
@@ -2829,7 +2829,7 @@ class ManagerFunctions(unittest.TestCase):
             st.save_tasks([{"id": "a", "status": "running", "schedule": "daily 07:00"},
                            {"id": "b", "status": "running"},          # einmalig
                            {"id": "c", "status": "done"}])
-            m.reclaim_stuck_tasks()
+            m._tasks.reclaim_stuck_tasks()
             by = {t["id"]: t["status"] for t in st.load_tasks()}
             self.assertEqual(by["a"], "scheduled")   # geplant -> scheduled
             self.assertEqual(by["b"], "pending")      # einmalig -> pending
@@ -3251,15 +3251,15 @@ class ManagerFunctions(unittest.TestCase):
         m = self.m
         import mgr.store as st
         seen = []
-        old = (m._guests.instance_by_ip, m._instances.load_instances, m._run_task_now, m._store.history_add, m._guests.guest_may_target,
-               m._run_ephemeral, st.TASKS_FILE)
+        old = (m._guests.instance_by_ip, m._instances.load_instances, m._tasks._run_task_now, m._store.history_add, m._guests.guest_may_target,
+               m._tasks._run_ephemeral, st.TASKS_FILE)
         try:
             caller = {"name": "orch", "config": {}}
             m._guests.instance_by_ip = lambda ip: caller if ip == "172.30.1.2" else None
             m._instances.load_instances = lambda: [caller, {"name": "hass"}]
             m._guests.guest_may_target = lambda inst, target: True
             m._store.history_add = lambda *a, **k: None
-            m._run_task_now = lambda target, msg, model=None, timeout=600, sandbox=None: (seen.append((target, msg, sandbox)), (True, "ok"))[1]
+            m._tasks._run_task_now = lambda target, msg, model=None, timeout=600, sandbox=None: (seen.append((target, msg, sandbox)), (True, "ok"))[1]
             def post(body):
                 h = self._post_handler("/api/task", "172.30.1.2", json.dumps(body).encode()); h._do_POST()
                 return json.loads(h.wfile.getvalue().split(b"\r\n\r\n", 1)[1])
@@ -3280,14 +3280,14 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual(t["sandbox"], {"cfg": {"EGRESS_ALLOW": "api.example.com"}, "internet": True})
             # the runner keeps the old call shape without a sandbox (tests and callers monkeypatch it)
             calls = []
-            m._run_ephemeral = lambda *a, **k: (calls.append((a, k)), (True, "r"))[1]
-            m._run_task_now = old[2]
-            m._run_task_now("ephemeral", "do", None, sandbox={"cfg": {}, "internet": False})
-            m._run_task_now("ephemeral", "do")
+            m._tasks._run_ephemeral = lambda *a, **k: (calls.append((a, k)), (True, "r"))[1]
+            m._tasks._run_task_now = old[2]
+            m._tasks._run_task_now("ephemeral", "do", None, sandbox={"cfg": {}, "internet": False})
+            m._tasks._run_task_now("ephemeral", "do")
             self.assertEqual(len(calls[0][0]), 4); self.assertEqual(len(calls[1][0]), 3)
         finally:
-            (m._guests.instance_by_ip, m._instances.load_instances, m._run_task_now, m._store.history_add, m._guests.guest_may_target,
-             m._run_ephemeral, st.TASKS_FILE) = old
+            (m._guests.instance_by_ip, m._instances.load_instances, m._tasks._run_task_now, m._store.history_add, m._guests.guest_may_target,
+             m._tasks._run_ephemeral, st.TASKS_FILE) = old
 
     def test_egress_allowlist_rules(self):
         """EGRESS_ALLOW: the chain accepts the resolved addresses and rejects
@@ -3432,19 +3432,19 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual((cfg2["AGENT_TOOLS"], err2), ("read_file", ""))
             # an explicit model must win over the persona's model in the VM config
             seen = []
-            old2 = m._instances.create_instance, m._instances.load_instances, m._guestchat.wait_web, m._chat_post, m._vm.stop, m._instances.delete_instance
+            old2 = m._instances.create_instance, m._instances.load_instances, m._guestchat.wait_web, m._tasks._chat_post, m._vm.stop, m._instances.delete_instance
             try:
                 def create(name, tpl, cfg=None, mounts=None, internet=True):
                     seen.append(dict(cfg or {}))
                     m._instances.load_instances = lambda: [{"name": name, "template": "openrouter"}]
                     return "ok"
                 m._instances.create_instance = create; m._guestchat.wait_web = lambda i, timeout=120: True
-                m._chat_post = lambda i, msg, timeout=600: "r"; m._vm.stop = lambda i: None; m._instances.delete_instance = lambda n: None
+                m._tasks._chat_post = lambda i, msg, timeout=600: "r"; m._vm.stop = lambda i: None; m._instances.delete_instance = lambda n: None
                 sb = {"cfg": {"OPENROUTER_MODEL": "persona/model", "AGENT_SYSTEM": "You review."}, "internet": True}
-                m._run_ephemeral_vm("do", "explicit/model", 60, sb)
+                m._tasks._run_ephemeral_vm("do", "explicit/model", 60, sb)
                 self.assertEqual(seen[-1]["OPENROUTER_MODEL"], "explicit/model")
             finally:
-                m._instances.create_instance, m._instances.load_instances, m._guestchat.wait_web, m._chat_post, m._vm.stop, m._instances.delete_instance = old2
+                m._instances.create_instance, m._instances.load_instances, m._guestchat.wait_web, m._tasks._chat_post, m._vm.stop, m._instances.delete_instance = old2
         finally:
             m._personas.load_personas, m._skills.load_skills = old
 
@@ -3485,13 +3485,13 @@ class ManagerFunctions(unittest.TestCase):
         without internet; without a sandbox nothing changes."""
         m = self.m
         seen = []
-        old = m._instances.create_instance, m._instances.load_instances, m._guestchat.wait_web, m._chat_post, m._vm.stop, m._instances.delete_instance
+        old = m._instances.create_instance, m._instances.load_instances, m._guestchat.wait_web, m._tasks._chat_post, m._vm.stop, m._instances.delete_instance
         try:
             m._instances.create_instance = lambda name, tpl, cfg=None, mounts=None, internet=True: seen.append((tpl, dict(cfg or {}), internet)) or "ok"
             m._instances.load_instances = lambda: [{"name": n, "template": "openrouter"} for n in ["x"]] if False else [{"name": seen[-1] and "task-x", "template": "openrouter"}]
             m._instances.load_instances = lambda: [{"name": next((k for k in ["any"]), ""), "template": "openrouter"}]
             m._guestchat.wait_web = lambda inst, timeout=120: True
-            m._chat_post = lambda inst, message, timeout=600: "child says hi"
+            m._tasks._chat_post = lambda inst, message, timeout=600: "child says hi"
             m._vm.stop = lambda inst: None; m._instances.delete_instance = lambda name: None
             # load_instances must return the instance the run just created: match on prefix
             m._instances.load_instances = lambda: [{"name": "task-" + "".join(c for c in "0" * 6), "template": "openrouter"}]
@@ -3500,13 +3500,13 @@ class ManagerFunctions(unittest.TestCase):
                 m._instances.load_instances = lambda: [{"name": name, "template": "openrouter", "config": dict(cfg or {}), "internet": internet}]
                 return real_create(name, tpl, cfg, mounts, internet)
             m._instances.create_instance = create
-            ok, res = m._run_ephemeral_vm("do", None, 60, {"cfg": {"AGENT_TOOLS": "bash", "EGRESS_ALLOW": ""}, "internet": False})
+            ok, res = m._tasks._run_ephemeral_vm("do", None, 60, {"cfg": {"AGENT_TOOLS": "bash", "EGRESS_ALLOW": ""}, "internet": False})
             self.assertEqual((ok, res), (True, "child says hi"))
             self.assertEqual(seen[-1][1]["AGENT_TOOLS"], "bash"); self.assertFalse(seen[-1][2]); self.assertEqual(seen[-1][1]["NO_SPAWN"], "1")
-            ok, res = m._run_ephemeral_vm("do", "google/gemini-2.5-flash", 60)
+            ok, res = m._tasks._run_ephemeral_vm("do", "google/gemini-2.5-flash", 60)
             self.assertNotIn("AGENT_TOOLS", seen[-1][1]); self.assertTrue(seen[-1][2]); self.assertEqual(seen[-1][1]["OPENROUTER_MODEL"], "google/gemini-2.5-flash")
         finally:
-            m._instances.create_instance, m._instances.load_instances, m._guestchat.wait_web, m._chat_post, m._vm.stop, m._instances.delete_instance = old
+            m._instances.create_instance, m._instances.load_instances, m._guestchat.wait_web, m._tasks._chat_post, m._vm.stop, m._instances.delete_instance = old
 
     def test_proxy_books_upstream_usage(self):
         m = self.m
@@ -3703,7 +3703,7 @@ class ManagerFunctions(unittest.TestCase):
         as a timeout, not as a stack trace."""
         m = self.m
         sent = []
-        old = m.urllib.request.urlopen, m._instances.net_of, m._instances.load_instances, m._instances.is_running, m._run_named
+        old = m.urllib.request.urlopen, m._instances.net_of, m._instances.load_instances, m._instances.is_running, m._tasks._run_named
 
         class _R:
             def __init__(self, body): self.body = body
@@ -3717,22 +3717,22 @@ class ManagerFunctions(unittest.TestCase):
                 return _R(b'{"reply": "done"}')
             m.urllib.request.urlopen = fake_open
             inst = {"name": "vm1", "index": 9}
-            self.assertEqual(m._chat_post(inst, "hi", timeout=1800), "done")
+            self.assertEqual(m._tasks._chat_post(inst, "hi", timeout=1800), "done")
             body, to = sent[-1]
             self.assertEqual(to, 1800)
             self.assertAlmostEqual(body["deadline"], time.time() + 1770, delta=5)
             m._instances.load_instances = lambda: [inst]
             m._instances.is_running = lambda i: True
-            ok, res = m._run_named("vm1", "hi", timeout=5)
+            ok, res = m._tasks._run_named("vm1", "hi", timeout=5)
             self.assertFalse(ok); self.assertIn("no answer within 5 s", res)
             got = []
-            m._run_named = lambda instance, message, timeout=600: (got.append(timeout), (True, "x"))[1]
-            m._run_task_now("vm1", "hi", None, timeout=m.TASK_TIMEOUT)
-            m._run_task_now("vm1", "hi")
-            self.assertEqual(got, [m.TASK_TIMEOUT, 600])
-            self.assertGreaterEqual(m.TASK_TIMEOUT, 1800)
+            m._tasks._run_named = lambda instance, message, timeout=600: (got.append(timeout), (True, "x"))[1]
+            m._tasks._run_task_now("vm1", "hi", None, timeout=m._tasks.TASK_TIMEOUT)
+            m._tasks._run_task_now("vm1", "hi")
+            self.assertEqual(got, [m._tasks.TASK_TIMEOUT, 600])
+            self.assertGreaterEqual(m._tasks.TASK_TIMEOUT, 1800)
         finally:
-            m.urllib.request.urlopen, m._instances.net_of, m._instances.load_instances, m._instances.is_running, m._run_named = old
+            m.urllib.request.urlopen, m._instances.net_of, m._instances.load_instances, m._instances.is_running, m._tasks._run_named = old
 
     def test_trace_stitches_turn_llm_and_tool_spans(self):
         """One turn = one span tree. The agent sends a start marker, its LLM
@@ -3863,10 +3863,10 @@ class ManagerFunctions(unittest.TestCase):
                            {"id": "o1", "instance": "vm1", "message": "once", "schedule": "",
                             "status": "error", "result": "error: x"},
                            {"id": "r1", "instance": "vm1", "message": "busy", "schedule": "", "status": "running"}], fh)
-            self.assertIn("queued", m.run_task_now("s1"))
-            self.assertIn("queued", m.run_task_now("o1"))
-            self.assertIn("running already", m.run_task_now("r1"))
-            self.assertEqual(m.run_task_now("nope"), "unknown")
+            self.assertIn("queued", m._tasks.run_task_now("s1"))
+            self.assertIn("queued", m._tasks.run_task_now("o1"))
+            self.assertIn("running already", m._tasks.run_task_now("r1"))
+            self.assertEqual(m._tasks.run_task_now("nope"), "unknown")
             ts = {t["id"]: t for t in st.load_tasks()}
             self.assertEqual(ts["s1"]["status"], "scheduled")
             self.assertLessEqual(ts["s1"]["next_run"], int(time.time()))
