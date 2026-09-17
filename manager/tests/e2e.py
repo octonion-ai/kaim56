@@ -2000,8 +2000,8 @@ class ManagerFunctions(unittest.TestCase):
         settings toggle must appear in the schema."""
         m = self.m
         self.assertIn("/api/llm/", m.GUEST_POST_PREFIXES)
-        self.assertEqual(set(m.LLM_PROXY_UPSTREAMS), {"openrouter", "orcarouter"})
-        for url, keyname in m.LLM_PROXY_UPSTREAMS.values():
+        self.assertEqual(set(m._llmproxy.LLM_PROXY_UPSTREAMS), {"openrouter", "orcarouter"})
+        for url, keyname in m._llmproxy.LLM_PROXY_UPSTREAMS.values():
             self.assertTrue(url.endswith("/chat/completions"), url)
             self.assertIn(keyname, m._settings.SECRET_PARAMS)
         self.assertIn("LLM_KEY_PROXY", [s["key"] for s in m._settings.SETTINGS_SCHEMA])
@@ -2853,13 +2853,13 @@ class ManagerFunctions(unittest.TestCase):
         m = self.m
         inst = {"name": "e2e-guard-r", "config": {"LLM_RATE_MIN": "2", "BUDGET_TOKENS": "0"}}
         import mgr.store  # loaded just to be safe
-        r1 = m._guard_check(inst)[0]
-        r2 = m._guard_check(inst)[0]
-        r3, why = m._guard_check(inst)
+        r1 = m._llmproxy._guard_check(inst)[0]
+        r2 = m._llmproxy._guard_check(inst)[0]
+        r3, why = m._llmproxy._guard_check(inst)
         self.assertTrue(r1 and r2)
         self.assertFalse(r3)
         self.assertIn("rate", why)
-        self.assertTrue(m._guard_check(None)[0])   # Admin/Host immer frei
+        self.assertTrue(m._llmproxy._guard_check(None)[0])   # Admin/Host immer frei
 
     def test_usage_for_shape(self):
         m = self.m
@@ -3515,10 +3515,10 @@ class ManagerFunctions(unittest.TestCase):
         try:
             m._store.usage_add = lambda *a, **kw: seen.append(a)
             inst = {"name": "vm1"}
-            m._proxy_usage(inst, "openrouter", b'{"model":"x/y","usage":{"prompt_tokens":10,"completion_tokens":5,"cost":0.001}}')
-            m._proxy_usage(inst, "openrouter", b'data: {"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":2}}\n')
-            m._proxy_usage(inst, "openrouter", b'data: [DONE]\n')
-            m._proxy_usage(None, "openrouter", b'{"usage":{"prompt_tokens":10}}')
+            m._llmproxy._proxy_usage(inst, "openrouter", b'{"model":"x/y","usage":{"prompt_tokens":10,"completion_tokens":5,"cost":0.001}}')
+            m._llmproxy._proxy_usage(inst, "openrouter", b'data: {"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":2}}\n')
+            m._llmproxy._proxy_usage(inst, "openrouter", b'data: [DONE]\n')
+            m._llmproxy._proxy_usage(None, "openrouter", b'{"usage":{"prompt_tokens":10}}')
             self.assertEqual(seen, [("vm1", "x/y", 10, 5, 0.001), ("vm1", "openrouter", 1, 2, None)])
         finally:
             m._store.usage_add = old

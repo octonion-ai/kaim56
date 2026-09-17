@@ -41,6 +41,7 @@ WEB_GUEST_PORT = 8080   # port of the web bridge in the microVM
 TERM_GUEST_PORT = 7682  # port of the webterm (browser terminal) in the microVM
 
 from mgr import paths as _paths  # noqa: E402
+from mgr import llmproxy as _llmproxy  # noqa: E402
 from mgr import ui as _ui  # noqa: E402
 from mgr import routes as _routes  # noqa: E402
 from mgr import katfs as _katfs  # noqa: E402
@@ -111,16 +112,6 @@ def guest_get_blocked(path):
     if p != "/" and p.endswith("/") and p[:-1] in GUEST_GET_DENIED_EXACT:
         p = p[:-1]
     return p in GUEST_GET_DENIED_EXACT or p.startswith(GUEST_GET_DENIED_PREFIXES)
-# Credential injection gateway (OneCLI pattern): the agent sends its chat
-# requests to /api/llm/<backend>/chat/completions instead of directly to the
-# router; when forwarding, the manager appends the Authorization header from
-# the settings. This way the LLM keys NEVER leave the host: a compromised VM
-# can at most call models through the manager (visible, throttleable), but
-# cannot exfiltrate a key and reuse it outside the system.
-LLM_PROXY_UPSTREAMS = {
-    "openrouter": ("https://openrouter.ai/api/v1/chat/completions", "OPENROUTER_API_KEY"),
-    "orcarouter": ("https://api.orcarouter.ai/v1/chat/completions", "ORCAROUTER_API_KEY"),
-}
 POOL = "172.30.0.0/16"
 
 _mcp.HUB_TZ = _host.HOST_TZ          # hub processes (caldav-mcp …) format dates in this zone
@@ -2519,7 +2510,7 @@ def load_secret_policy():
                                for v in (p.get(grp) or {}).values() if isinstance(v, list)
                                for k in v if isinstance(k, str)})
                 if (_settings.load_settings().get("LLM_KEY_PROXY") or "") == "1":
-                    seed = [k for k in seed if k not in {kn for _, kn in LLM_PROXY_UPSTREAMS.values()}]
+                    seed = [k for k in seed if k not in {kn for _, kn in _llmproxy.LLM_PROXY_UPSTREAMS.values()}]
                 p["guest_readable"] = seed
                 save_secret_policy(p)
                 print(f"[secrets] guest_readable seeded from existing releases: {', '.join(seed) or '-'}", flush=True)
@@ -2896,63 +2887,6 @@ def guest_stream(inst, message, image, on_token, timeout=620):
     tail = dec.decode(b"", True)
     if tail:
         on_token(tail)
-
-
-# ---- Guardrails: budget + rate limit for LLM calls --------------------------
-# Enforcement at the key injection proxy: all of the VMs' router calls pass
-# through there. Budget per instance and day (tokens, from llm_usage) and a
-# frequency cap per minute. Override per instance via config: BUDGET_TOKENS
-# (0 = off), LLM_RATE_MIN. On exceedance: 429 + at most one notify per hour.
-GUARD_BUDGET_TOKENS = int(os.environ.get("GUARD_BUDGET_TOKENS", "5000000"))
-GUARD_LLM_RATE_MIN = int(os.environ.get("GUARD_LLM_RATE_MIN", "60"))
-_guard_lock = threading.Lock()
-_guard_calls = {}          # instance -> [timestamps]
-_guard_notified = {}       # instance -> ts of the last budget notify
-
-
-def _guard_check(inst):
-    """(allowed, reason). inst = instance dict or None (admin/host: always ok)."""
-    if inst is None:
-        return True, ""
-    name = inst["name"]
-    cfg = inst.get("config") or {}
-    now = time.time()
-    # 1) Frequency per minute
-    try:
-        rate = int(cfg.get("LLM_RATE_MIN", GUARD_LLM_RATE_MIN))
-    except ValueError:
-        rate = GUARD_LLM_RATE_MIN
-    with _guard_lock:
-        lst = _guard_calls.setdefault(name, [])
-        lst[:] = [t for t in lst if now - t < 60]
-        if rate > 0 and len(lst) >= rate:
-            return False, f"rate limit: {rate} LLM calls/min reached"
-        lst.append(now)
-    # 2) Daily budget (tokens since local midnight)
-    try:
-        budget = int(cfg.get("BUDGET_TOKENS", GUARD_BUDGET_TOKENS))
-    except ValueError:
-        budget = GUARD_BUDGET_TOKENS
-    if budget > 0:
-        midnight = int(time.mktime(time.localtime()[:3] + (0, 0, 0, 0, 0, -1)))
-        u = _store.usage_for(name, midnight)
-        used = (u.get("in") or 0) + (u.get("out") or 0)
-        if used >= budget:
-            with _guard_lock:
-                last = _guard_notified.get(name, 0)
-                fire = now - last > 3600
-                if fire:
-                    _guard_notified[name] = now
-            if fire:
-                try:
-                    _notify.notify_add("guardrail", f"Budget reached: {name}",
-                               f"{used:,} tokens today (limit {budget:,}). LLM calls "
-                               f"pause until midnight. Override: BUDGET_TOKENS in the "
-                               f"instance config.", link="tasks")
-                except Exception:
-                    pass
-            return False, f"budget: {used:,}/{budget:,} tokens used today"
-    return True, ""
 
 
 # ---- Routing table ---------------------------------------------------------
@@ -3696,20 +3630,20 @@ class H(BaseHTTPRequestHandler):
         those are exactly what should not leave the host or linger anywhere."""
         parts = _pp.strip("/").split("/")      # api/llm/<backend>/chat/completions
         backend = parts[2] if len(parts) > 2 else ""
-        if backend not in LLM_PROXY_UPSTREAMS or parts[3:] != ["chat", "completions"]:
+        if backend not in _llmproxy.LLM_PROXY_UPSTREAMS or parts[3:] != ["chat", "completions"]:
             out = b'{"error":"unknown llm proxy path"}'
             self.send_response(404)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(out)))
             self.end_headers(); self.wfile.write(out); return
-        ok_g, why = _guard_check(instance_by_ip(self.client_address[0]))
+        ok_g, why = _llmproxy._guard_check(instance_by_ip(self.client_address[0]))
         if not ok_g:
             out = json.dumps({"error": {"message": f"guardrail: {why}", "code": 429}}).encode()
             self.send_response(429)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(out)))
             self.end_headers(); self.wfile.write(out); return
-        url, keyname = LLM_PROXY_UPSTREAMS[backend]
+        url, keyname = _llmproxy.LLM_PROXY_UPSTREAMS[backend]
         st = _settings.load_settings()
         # Self-hosted OrcaRouter-Lite: the shared base URL applies to the proxy
         # too — otherwise the detour would suddenly run against the cloud while
@@ -3781,7 +3715,7 @@ class H(BaseHTTPRequestHandler):
                         self.wfile.write(chunk)
                         self.wfile.flush()
                         if b'"usage"' in chunk:
-                            _proxy_usage(ginst, backend, chunk, ms=int((time.monotonic() - _t0) * 1000), **span)
+                            _llmproxy._proxy_usage(ginst, backend, chunk, ms=int((time.monotonic() - _t0) * 1000), **span)
                 except (BrokenPipeError, ConnectionResetError):
                     pass               # client gone -> upstream closes via with
             else:
@@ -3789,7 +3723,7 @@ class H(BaseHTTPRequestHandler):
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
-                _proxy_usage(ginst, backend, data, ms=int((time.monotonic() - _t0) * 1000), **span)
+                _llmproxy._proxy_usage(ginst, backend, data, ms=int((time.monotonic() - _t0) * 1000), **span)
 
     def _do_POST(self):
         if not self._auth():
@@ -3874,25 +3808,6 @@ def ws_forward_headers(items):
     """The subset of a browser's upgrade headers the guest terminal gets."""
     return [(k, v) for k, v in items
             if k.lower() in _WS_KEEP or k.lower().startswith("sec-websocket-")]
-
-
-def _proxy_usage(inst, backend, raw, ms=None, turn="", step=None):
-    """Book the tokens the UPSTREAM reports for this guest: the budget guard
-    must not rest on what the agent chooses to tell us via /api/usage. The
-    span (turn, step from the request headers, duration) rides along."""
-    if inst is None:
-        return
-    raw = raw.strip()
-    if raw.startswith(b"data:"):
-        raw = raw[5:]
-    try:
-        j = json.loads(raw)
-        u = j.get("usage") or {}
-        if isinstance(u, dict) and (u.get("prompt_tokens") or u.get("completion_tokens")):
-            _store.usage_add(inst["name"], j.get("model") or backend, u.get("prompt_tokens"),
-                      u.get("completion_tokens"), u.get("cost"), turn=turn, ms=ms, step=step)
-    except (ValueError, AttributeError, TypeError):
-        pass
 
 
 def _msg_route(method, path, prefix=False, admin=True):
