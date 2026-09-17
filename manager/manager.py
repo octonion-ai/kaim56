@@ -44,6 +44,7 @@ WEB_GUEST_PORT = 8080   # port of the web bridge in the microVM
 TERM_GUEST_PORT = 7682  # port of the webterm (browser terminal) in the microVM
 
 from mgr import paths as _paths  # noqa: E402
+from mgr import models as _models  # noqa: E402
 from mgr import about as _about  # noqa: E402
 from mgr import settings as _settings  # noqa: E402
 
@@ -353,88 +354,6 @@ def load_instances():
             with open(os.path.join(_paths.INST_DIR, f)) as fh:
                 out.append(json.load(fh))
     return out
-
-
-_ormodels = {"ts": 0.0, "data": []}
-
-
-# "Relevant" = curated flagship models (exact IDs). Only those currently
-# present in the OpenRouter catalog are shown. Extend as needed.
-CURATED = {
-    "openai/gpt-4o", "openai/gpt-4o-mini", "openai/gpt-4.1", "openai/gpt-4.1-mini",
-    "openai/o3", "openai/o4-mini", "openai/gpt-5", "openai/gpt-5-mini",
-    "anthropic/claude-3.7-sonnet", "anthropic/claude-3.5-sonnet", "anthropic/claude-3.5-haiku",
-    "anthropic/claude-sonnet-4", "anthropic/claude-sonnet-4.5", "anthropic/claude-opus-4.1",
-    "google/gemini-2.0-flash-001", "google/gemini-2.5-pro", "google/gemini-2.5-flash",
-    "deepseek/deepseek-chat", "deepseek/deepseek-r1", "deepseek/deepseek-chat-v3.1",
-    "deepseek/deepseek-v4-flash-0731",
-    "meta-llama/llama-3.3-70b-instruct", "meta-llama/llama-4-maverick",
-    "mistralai/mistral-large", "mistralai/mistral-small",
-    "qwen/qwen-2.5-72b-instruct", "qwen/qwen3-coder", "x-ai/grok-3", "x-ai/grok-4",
-}
-
-
-MODELS_FILE = os.path.join(_paths.BASE, "models.json")
-def load_curated():
-    """The curated selection for the create form. Kept as a file so a new model
-    comes in via the Models tab instead of via an edit to CURATED + restart.
-    If the file is missing, CURATED is the initial seed."""
-    try:
-        with open(MODELS_FILE) as fh:
-            data = json.load(fh)
-        ids = data.get("curated") if isinstance(data, dict) else data
-        if isinstance(ids, list):
-            return {str(i) for i in ids if i}
-    except (FileNotFoundError, ValueError, AttributeError):
-        pass
-    return set(CURATED)
-
-
-def save_curated(ids):
-    clean = sorted({str(i).strip() for i in ids if str(i).strip()})
-    with open(MODELS_FILE, "w") as fh:
-        json.dump({"curated": clean}, fh, indent=2)
-    return f"{len(clean)} models in the shortlist"
-
-
-def openrouter_models(force=False, tools_only=False, relevant_only=False):
-    """OpenRouter models, price ascending. Cached for 10 min; force bypasses the
-    cache. tools_only -> only function/tool calling; relevant_only -> only curated."""
-    if force or time.time() - _ormodels["ts"] >= 600 or not _ormodels["data"]:
-        try:
-            req = urllib.request.Request("https://openrouter.ai/api/v1/models",
-                                         headers={"User-Agent": "kaim56"})
-            d = json.loads(urllib.request.urlopen(req, timeout=15).read().decode())
-            rows = []
-            for m in d.get("data", []):
-                p = m.get("pricing", {}) or {}
-                try:
-                    pr, co = float(p.get("prompt", 0)), float(p.get("completion", 0))
-                except (TypeError, ValueError):
-                    continue
-                if pr < 0 or co < 0:
-                    continue  # hide auto-router / dynamic pricing
-                sp = m.get("supported_parameters") or []
-                rows.append((pr + co, pr, co, m.get("id", ""), "tools" in sp,
-                             m.get("name", ""), m.get("context_length") or 0))
-            rows.sort(key=lambda r: r[0])
-            out = []
-            for tot, pr, co, mid, tools, name, ctx in rows:
-                if mid:
-                    tag = "free" if tot == 0 else f"${pr*1e6:.2f}/${co*1e6:.2f} /1M"
-                    out.append({"id": mid, "label": f"{mid}  ({tag})", "tools": tools,
-                                "name": name, "ctx": ctx, "price": tag})
-            if out:
-                _ormodels["ts"], _ormodels["data"] = time.time(), out
-        except Exception as e:
-            print(f"[quiet] openrouter model list refresh failed: {e!r}", flush=True)
-    data = _ormodels["data"]
-    if tools_only:
-        data = [m for m in data if m.get("tools")]
-    if relevant_only:
-        cur = load_curated()
-        data = [m for m in data if m["id"] in cur]
-    return data
 
 
 # ---- Signal (send/HITL/receive): moved out to mgr/signal.py ---------------
@@ -5256,7 +5175,7 @@ def _rt_audit_read(h):
 
 @ROUTER.get("/api/models")
 def _rt_models(h):
-    return h._json({"curated": sorted(load_curated())})
+    return h._json({"curated": sorted(_models.load_curated())})
 
 
 @ROUTER.get("/api/plugins")
@@ -5314,7 +5233,7 @@ def _rt_mcps(h):
 
 @ROUTER.get("/api/openrouter-models", admin=True)
 def _rt_openrouter_models(h):
-    return h._json(openrouter_models("refresh=1" in h.path, "tools=1" in h.path, "relevant=1" in h.path))
+    return h._json(_models.openrouter_models("refresh=1" in h.path, "tools=1" in h.path, "relevant=1" in h.path))
 
 
 def _since_wait(q):
@@ -5432,7 +5351,7 @@ def _rt_gateway_toggle(h):
 
 @_msg_route("POST", "/api/models")
 def _rt_models_save(h):
-    return save_curated(h._body().get("curated") or [])
+    return _models.save_curated(h._body().get("curated") or [])
 
 
 @_msg_route("POST", "/api/chats")
