@@ -255,27 +255,27 @@ class AgentLogic(unittest.TestCase):
         class Srv:
             def __init__(self): self.calls = []
             def call(self, tool, args): self.calls.append((tool, args)); return "ON"
-        old_tools, old_mcp, old_audit = dict(a._mcp_tools), dict(a._mcp), a._observe.audit
+        old_tools, old_mcp, old_audit = dict(a._mcp._mcp_tools), dict(a._mcp._mcp), a._observe.audit
         try:
             a._observe.audit = lambda *x, **k: None
             srv = Srv()
-            a._mcp_tools.clear(); a._mcp.clear()
-            a._mcp_tools["mrmusic__mrmusic_power"] = ("mrmusic", "mrmusic_power")
-            a._mcp["mrmusic"] = srv
+            a._mcp._mcp_tools.clear(); a._mcp._mcp.clear()
+            a._mcp._mcp_tools["mrmusic__mrmusic_power"] = ("mrmusic", "mrmusic_power")
+            a._mcp._mcp["mrmusic"] = srv
             self.assertEqual(a._resolve_tool_name("mrmusic_power"), "mrmusic__mrmusic_power")
             self.assertEqual(a._resolve_tool_name("mrmusic__mrmusic_power"), "mrmusic__mrmusic_power")
             self.assertEqual(a._resolve_tool_name("bash"), "bash")
             self.assertEqual(a.exec_tool("mrmusic_power", {"on": True}), "ON")
             self.assertEqual(srv.calls, [("mrmusic_power", {"on": True})])
-            a._mcp_tools["other__mrmusic_power"] = ("other", "mrmusic_power")
+            a._mcp._mcp_tools["other__mrmusic_power"] = ("other", "mrmusic_power")
             self.assertEqual(a._resolve_tool_name("mrmusic_power"), "mrmusic_power")   # ambiguous
             self.assertIn("unknown tool", a.exec_tool("mrmusic_power", {}))
             rep = a._tools_report()
             self.assertIn("mcp (2): mrmusic__mrmusic_power, other__mrmusic_power", rep)
             self.assertIn("built-in (", rep)
         finally:
-            a._mcp_tools.clear(); a._mcp_tools.update(old_tools)
-            a._mcp.clear(); a._mcp.update(old_mcp)
+            a._mcp._mcp_tools.clear(); a._mcp._mcp_tools.update(old_tools)
+            a._mcp._mcp.clear(); a._mcp._mcp.update(old_mcp)
             a._observe.audit = old_audit
 
     def test_now_line_gives_the_model_a_clock(self):
