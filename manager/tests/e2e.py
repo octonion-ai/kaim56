@@ -1944,16 +1944,16 @@ class ManagerFunctions(unittest.TestCase):
         GET /api/skills/<name> when editing."""
         m = self.m
         marker = "SKILL-BODY-MARKER-DO-NOT-INLINE"
-        old = m.load_skills
+        old = m._skills.load_skills
         try:
-            m.load_skills = lambda: [{"name": "e2e-skill", "description": "kurz",
+            m._skills.load_skills = lambda: [{"name": "e2e-skill", "description": "kurz",
                                       "content": marker + " x" * 5000}]
             page = m.render()
             self.assertIn("e2e-skill", page)          # name/description are in
             self.assertIn("kurz", page)
             self.assertNotIn(marker, page)            # the body is NOT
         finally:
-            m.load_skills = old
+            m._skills.load_skills = old
 
     def test_footer_code_link_optional(self):
         """The editor link is host-specific (site.json CODE_URL): set = link in
@@ -3414,12 +3414,12 @@ class ManagerFunctions(unittest.TestCase):
         recommended tools when none are requested, sets its model, and refuses an
         unknown persona."""
         m = self.m
-        old = m.load_personas, m.load_skills
+        old = m.load_personas, m._skills.load_skills
         try:
             m.load_personas = lambda: [{"name": "assistant", "prompt": "You are helpful."},
                                        {"name": "code-reviewer", "prompt": "You review code.",
                                         "tools": ["bash", "read_file"], "model": "google/gemini-2.5-flash"}]
-            m.load_skills = lambda: []
+            m._skills.load_skills = lambda: []
             caller = {"name": "orch", "config": {}}
             cfg, net, err = m.sandbox_config(caller, {"persona": "code-reviewer"})
             self.assertEqual(err, "")
@@ -3446,7 +3446,7 @@ class ManagerFunctions(unittest.TestCase):
             finally:
                 m.create_instance, m._instances.load_instances, m.wait_web, m._chat_post, m.stop, m.delete_instance = old2
         finally:
-            m.load_personas, m.load_skills = old
+            m.load_personas, m._skills.load_skills = old
 
     def test_sandbox_config_only_narrows(self):
         """A sandboxed sub-agent runs in an ephemeral VM with a NARROWER policy:
@@ -3454,9 +3454,9 @@ class ManagerFunctions(unittest.TestCase):
         egress allowlist inside the caller's own, or no network, and one
         skill baked into the system prompt with the file/web tools only."""
         m = self.m
-        old = m.load_skills, m.load_personas
+        old = m._skills.load_skills, m.load_personas
         try:
-            m.load_skills = lambda: [{"name": "pdf-digest", "description": "d", "content": "Read the PDF, summarise."}]
+            m._skills.load_skills = lambda: [{"name": "pdf-digest", "description": "d", "content": "Read the PDF, summarise."}]
             m.load_personas = lambda: [{"name": "assistant", "prompt": "You are helpful."}]
             caller = {"name": "orch", "config": {}}
             self.assertEqual(m.sandbox_config(caller, None), ({}, True, ""))
@@ -3477,7 +3477,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertIn("unknown", m.sandbox_config(caller, {"skill": "ghost"})[2])
             self.assertIn("object", m.sandbox_config(caller, "bash")[2])
         finally:
-            m.load_skills, m.load_personas = old
+            m._skills.load_skills, m.load_personas = old
 
     def test_sandbox_reaches_the_ephemeral_vm(self):
         """The sandbox travels from the task route into the VM's creation:
@@ -3887,10 +3887,10 @@ class ManagerFunctions(unittest.TestCase):
         with the same name replaces the pending one; admins cannot file."""
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-skprop-")
-        old = m.SKILL_PROPOSALS_FILE, m.SKILLS_FILE, m._notify.notify_add, m._guests.instance_by_ip, m._auth.PW
+        old = m._skills.SKILL_PROPOSALS_FILE, m._skills.SKILLS_FILE, m._notify.notify_add, m._guests.instance_by_ip, m._auth.PW
         notes = []
         try:
-            m.SKILL_PROPOSALS_FILE = os.path.join(tmp, "p.json"); m.SKILLS_FILE = os.path.join(tmp, "s.json")
+            m._skills.SKILL_PROPOSALS_FILE = os.path.join(tmp, "p.json"); m._skills.SKILLS_FILE = os.path.join(tmp, "s.json")
             m._notify.notify_add = lambda *a, **k: notes.append(a)
             vm = {"name": "vm1", "index": 3, "template": "openrouter", "config": {}}
             m._guests.instance_by_ip = lambda ip: vm if ip == "172.30.3.2" else None
@@ -3906,24 +3906,24 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual(self._status(h), 400)
             again = dict(good, description="Daily job search, second try"); h = self._post_handler("/api/skill-proposals", "172.30.3.2", json.dumps(again).encode()); h.do_POST()
             self.assertEqual(self._status(h), 200)
-            pending = [p for p in m.load_proposals() if p["status"] == "proposed"]
+            pending = [p for p in m._skills.load_proposals() if p["status"] == "proposed"]
             self.assertEqual([p["description"] for p in pending], ["Daily job search, second try"])   # replaced, not doubled
             self.assertFalse(pending[0]["update"])
             h = self._post_handler("/api/skill-proposals", "10.0.0.5", json.dumps(good).encode()); h.do_POST()
             self.assertEqual(self._status(h), 403)                                     # guests only
-            self.assertEqual([x["name"] for x in m.load_skills()], [])                 # nothing in the catalog yet
+            self.assertEqual([x["name"] for x in m._skills.load_skills()], [])                 # nothing in the catalog yet
             m._auth.PW = ""
             h = self._post_handler(f"/api/skill-proposals/{pending[0]['id']}/approve", "10.0.0.5", b"{}"); h.do_POST()
             self.assertIn(b"saved", h.wfile.getvalue())
-            self.assertEqual([x["name"] for x in m.load_skills()], ["job-search-nrw"])
-            self.assertEqual(m.load_proposals()[0]["status"], "approved")
-            self.assertEqual(m.proposal_decide("nope", True), "unknown")
+            self.assertEqual([x["name"] for x in m._skills.load_skills()], ["job-search-nrw"])
+            self.assertEqual(m._skills.load_proposals()[0]["status"], "approved")
+            self.assertEqual(m._skills.proposal_decide("nope", True), "unknown")
             # a proposal for an existing skill is flagged as an update
-            pid, why = m.proposal_add("vm1", "job-search-nrw", "Better", good["content"])
-            self.assertTrue(pid); self.assertTrue(next(p for p in m.load_proposals() if p["id"] == pid)["update"])
-            self.assertIn("discarded", m.proposal_decide(pid, False))
+            pid, why = m._skills.proposal_add("vm1", "job-search-nrw", "Better", good["content"])
+            self.assertTrue(pid); self.assertTrue(next(p for p in m._skills.load_proposals() if p["id"] == pid)["update"])
+            self.assertIn("discarded", m._skills.proposal_decide(pid, False))
         finally:
-            m.SKILL_PROPOSALS_FILE, m.SKILLS_FILE, m._notify.notify_add, m._guests.instance_by_ip, m._auth.PW = old
+            m._skills.SKILL_PROPOSALS_FILE, m._skills.SKILLS_FILE, m._notify.notify_add, m._guests.instance_by_ip, m._auth.PW = old
 
     def test_sessions_fulltext_search_scoped_per_guest(self):
         """FTS5 over chats and task runs: exact words find the session, guests
@@ -3943,12 +3943,12 @@ class ManagerFunctions(unittest.TestCase):
                       "messages": [{"user": True, "text": "Gartenhaus Licht an"}]}]
             m._chats.load_chats = lambda: chats
             st.history_add("vm2", "MSFT Kurs holen", "MSFT 512.30 — alert sent", True)
-            hits = m.sessions_search("Vaillant")
+            hits = m._skills.sessions_search("Vaillant")
             self.assertEqual({(h["instance"], h["kind"]) for h in hits}, {("vm1", "chat")})
             self.assertIn("[Vaillant]", hits[0]["snippet"])
-            self.assertEqual([h["kind"] for h in m.sessions_search("MSFT alert")], ["task"])
-            self.assertEqual(m.sessions_search("Vaillant", instance="vm2"), [])
-            self.assertEqual(m.sessions_search('"; DROP TABLE x; --'), [])           # syntax cannot break it
+            self.assertEqual([h["kind"] for h in m._skills.sessions_search("MSFT alert")], ["task"])
+            self.assertEqual(m._skills.sessions_search("Vaillant", instance="vm2"), [])
+            self.assertEqual(m._skills.sessions_search('"; DROP TABLE x; --'), [])           # syntax cannot break it
             # guest scoping through the route
             vm1 = {"name": "vm1", "index": 3, "config": {}}; orch = {"name": m._guests.ORCH_INSTANCE, "index": 1, "config": {}}
             m._guests.instance_by_ip = lambda ip: {"172.30.3.2": vm1, "172.30.1.2": orch}.get(ip)
@@ -3959,7 +3959,7 @@ class ManagerFunctions(unittest.TestCase):
             # a changed chats.json is picked up
             chats[1]["messages"].append({"user": False, "text": "Licht im Gartenhaus ist an."})
             os.utime(m._chats.CHATS_FILE, (1, 1))
-            self.assertEqual(len(m.sessions_search("Gartenhaus")), 2)
+            self.assertEqual(len(m._skills.sessions_search("Gartenhaus")), 2)
         finally:
             st.HISTORY_DB, m._chats.load_chats, m._chats.CHATS_FILE, m._guests.instance_by_ip = old[:4]
             st._fts_state.clear(); st._fts_state.update(old[4])
@@ -3973,7 +3973,7 @@ class ManagerFunctions(unittest.TestCase):
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-session-")
         old = (m._instances.load_instances, m._instances.is_running, m._instances.pidfile, m._settings.load_settings, m._secrets.secret_store, m._secrets.load_secret_policy,
-               m._mcp.load_mcps, m.load_skills, m._paths.RUN_DIR, m._guests.instance_by_ip, m._auth.PW, st.HISTORY_DB, m._vm.image_state)
+               m._mcp.load_mcps, m._skills.load_skills, m._paths.RUN_DIR, m._guests.instance_by_ip, m._auth.PW, st.HISTORY_DB, m._vm.image_state)
         try:
             inst = {"name": "vm1", "index": 3, "template": "openrouter", "rootfs": "instances/openrouter-rootfs.ext4",
                     "config": {"OPENROUTER_MODEL": "x/y", "MCP_SERVERS": "caldav,homeassistant"}}
@@ -3990,7 +3990,7 @@ class ManagerFunctions(unittest.TestCase):
             m._secrets.load_secret_policy = lambda: {"by_template": {}, "by_instance": {"vm1": ["HA_TOKEN"]}, "guest_readable": []}
             m._mcp.load_mcps = lambda: [{"name": "caldav", "command": "c", "env": {"CALDAV_PASSWORD": "${CALDAV_PASSWORD}"}},
                                    {"name": "homeassistant", "command": "h", "args": ["Bearer ${HA_TOKEN}"]}]
-            m.load_skills = lambda: [{"name": "a"}, {"name": "b"}]
+            m._skills.load_skills = lambda: [{"name": "a"}, {"name": "b"}]
             m._guests.instance_by_ip = lambda ip: None; m._auth.PW = ""
             d = m.session_info(inst)
             self.assertEqual((d["runtime"], d["login"], d["model"]), ("openrouter-agent", "key proxy", "x/y"))
@@ -4016,7 +4016,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertNotIn("commands", m.session_info(cl))                       # the / picker lists them
         finally:
             (m._instances.load_instances, m._instances.is_running, m._instances.pidfile, m._settings.load_settings, m._secrets.secret_store, m._secrets.load_secret_policy,
-             m._mcp.load_mcps, m.load_skills, m._paths.RUN_DIR, m._guests.instance_by_ip, m._auth.PW, st.HISTORY_DB, m._vm.image_state) = old
+             m._mcp.load_mcps, m._skills.load_skills, m._paths.RUN_DIR, m._guests.instance_by_ip, m._auth.PW, st.HISTORY_DB, m._vm.image_state) = old
 
     def test_chat_page_carries_panel_and_search(self):
         """The rendered chat page has the session panel, the search bar and

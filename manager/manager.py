@@ -34,6 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import chatui   # chat interface (/chat), lives next to this file
 
 from mgr import paths as _paths  # noqa: E402
+from mgr import skills as _skills  # noqa: E402
 from mgr import chats as _chats  # noqa: E402
 from mgr import netfw as _netfw  # noqa: E402
 from mgr import mounts as _mounts  # noqa: E402
@@ -215,7 +216,7 @@ def sandbox_config(caller, sandbox):
     if pobj and pobj.get("model") and "OPENROUTER_MODEL" not in cfg:
         cfg["OPENROUTER_MODEL"] = str(pobj["model"])[:120]
     if skill:
-        body = next((s.get("content", "") for s in load_skills() if s.get("name") == skill), None)
+        body = next((s.get("content", "") for s in _skills.load_skills() if s.get("name") == skill), None)
         if body is None:
             return {}, True, f"skill '{skill}' unknown"
         cfg["AGENT_SYSTEM"] = f"{base}\n\n[Skill: {skill}] Follow this skill for the task:\n{str(body)[:20000]}"
@@ -1185,140 +1186,6 @@ def delete_persona(name):
     return f"persona '{name}' deleted"
 
 
-# ---- Skills library (expert knowledge, loaded on demand by the agent) -------
-SKILLS_FILE = os.path.join(_paths.BASE, "skills.json")
-
-
-def load_skills():
-    try:
-        with open(SKILLS_FILE) as fh:
-            data = json.load(fh)
-        if isinstance(data, list):
-            return data
-    except (FileNotFoundError, ValueError):
-        pass
-    return []
-
-
-def save_skills(items):
-    if not isinstance(items, list):
-        return -1
-    try:
-        with open(SKILLS_FILE, "w") as fh:
-            json.dump(items, fh, indent=2, ensure_ascii=False)
-        return len(items)
-    except OSError:
-        return -1
-
-
-def upsert_skill(name, description, content):
-    name = re.sub(r"[^a-z0-9_-]", "", (name or "").lower())
-    if not name:
-        return "invalid name (only a-z 0-9 _ -)"
-    items = [s for s in load_skills() if s.get("name") != name]
-    items.append({"name": name, "description": description or "", "content": content or ""})
-    save_skills(items)
-    return f"skill '{name}' saved"
-
-
-def delete_skill(name):
-    save_skills([s for s in load_skills() if s.get("name") != name])
-    return f"skill '{name}' deleted"
-
-
-# ---- skills from experience -------------------------------------------------
-# After a long, successful turn the agent distills the way it went into a
-# SKILL proposal (Hermes' learning loop, with our approval gate): it lands
-# here, the operator approves it in the Skills tab, only then it enters the
-# catalog every agent loads from. Nothing an agent writes becomes a skill by
-# itself.
-SKILL_PROPOSALS_FILE = os.path.join(_paths.BASE, "skill_proposals.json")
-PROPOSALS_MAX = 50
-_SECRETISH = re.compile(r"(sk-or-[A-Za-z0-9_-]{8,}|sk-[A-Za-z0-9]{16,}|Bearer [A-Za-z0-9._-]{16,}|hf_[A-Za-z0-9]{16,})")
-
-
-def load_proposals():
-    try:
-        with open(SKILL_PROPOSALS_FILE) as fh:
-            d = json.load(fh)
-        return d if isinstance(d, list) else []
-    except (FileNotFoundError, ValueError):
-        return []
-
-
-def save_proposals(items):
-    tmp = SKILL_PROPOSALS_FILE + ".tmp"
-    with open(tmp, "w") as fh:
-        json.dump(items, fh, indent=1, ensure_ascii=False)
-    os.replace(tmp, SKILL_PROPOSALS_FILE)
-
-
-def skill_lint(name, description, content):
-    """'' when a proposal is acceptable, else why not. Advisory rules in the
-    spirit of Hermes' linter: a usable name, a one-line description, a body
-    that is a procedure and not a dump, nothing that looks like a credential."""
-    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{1,47}", name or ""):
-        return "name must be 2-48 chars of a-z 0-9 _ -"
-    if not (description or "").strip() or len(description) > 200:
-        return "description must be one line (1-200 chars)"
-    body = (content or "").strip()
-    if len(body) < 80:
-        return "content too short to be a procedure"
-    if len(body) > 12000:
-        return "content over 12 kB — a skill is a procedure, not a log"
-    if _SECRETISH.search(body):
-        return "content looks like it contains a credential"
-    return ""
-
-
-def proposal_add(instance, name, description, content, turn="", note=""):
-    name = re.sub(r"[^a-z0-9_-]", "", str(name or "").lower())[:48]
-    why = skill_lint(name, str(description or "").strip(), str(content or ""))
-    if why:
-        return None, why
-    items = [p for p in load_proposals() if not (p.get("name") == name and p.get("status") == "proposed")]
-    pid = uuid.uuid4().hex[:10]
-    items.append({"id": pid, "ts": int(time.time()), "instance": str(instance or "")[:80], "turn": str(turn or "")[:16],
-                  "name": name, "description": str(description).strip()[:200], "content": str(content).strip(),
-                  "note": str(note or "")[:200], "status": "proposed",
-                  "update": any(s.get("name") == name for s in load_skills())})
-    items = items[-PROPOSALS_MAX:]
-    save_proposals(items)
-    try:
-        _notify.notify_add(instance or "skills", f"Skill proposal: {name}",
-                   f"{str(description).strip()[:160]} — review in the Skills tab", link="")
-    except Exception:
-        pass
-    return pid, "ok"
-
-
-def proposal_decide(pid, approve):
-    items = load_proposals()
-    p = next((x for x in items if x.get("id") == pid), None)
-    if p is None:
-        return "unknown"
-    if approve:
-        msg = upsert_skill(p["name"], p.get("description", ""), p.get("content", ""))
-        p["status"] = "approved"
-    else:
-        msg = f"proposal '{p['name']}' discarded"
-        p["status"] = "discarded"
-    p["decided"] = int(time.time())
-    save_proposals(items)
-    return msg
-
-
-def sessions_search(query, instance=None, limit=10):
-    """Exact search over chats and task runs (FTS5), index refreshed from
-    chats.json when it changed."""
-    try:
-        mt = os.path.getmtime(_chats.CHATS_FILE)
-    except OSError:
-        mt = 0
-    _store.sessions_refresh(_chats.load_chats(), mt)
-    return _store.sessions_query(query, instance=instance, limit=limit)
-
-
 # ---- Playbooks + prompt templates: moved out to mgr/rules.py ---------------
 from mgr import rules as _rules  # noqa: E402
 _rules.configure(_paths.BASE)
@@ -1545,7 +1412,7 @@ def render():
                 # when editing (then it fetches GET /api/skills/<name>).
                 .replace("__SKILLS__", _util.js_json(
                     [{"name": x.get("name", ""), "description": x.get("description", "")}
-                     for x in load_skills()], ensure_ascii=False))
+                     for x in _skills.load_skills()], ensure_ascii=False))
                 .replace("__HOSTIF__", _host.HOSTIF).replace("__POOL__", _netfw.POOL)
                 .replace("__PUBLIC_HOST__", _settings.PUBLIC_HOST)
                 .replace("__SIGNAL_HOST__", _settings.SIGNAL_HOST)
@@ -1728,7 +1595,7 @@ def session_info(inst):
         {"name": "Memory", "state": (f"{notes} notes · {sem} semantic" if (notes or sem) else "empty")
                             + (" · hindsight" if _hindsight.enabled() else ""), "ok": True},
         {"name": "Web search", "state": "reachable" if (_settings.load_settings().get("BRAVE_API_KEY") or "") else "DuckDuckGo fallback", "ok": True},
-        {"name": "Skills", "state": f"{len(load_skills())} in catalog", "ok": True},
+        {"name": "Skills", "state": f"{len(_skills.load_skills())} in catalog", "ok": True},
         {"name": "Traces", "state": f"{len(_store.turns_read(name, limit=50))} recent turns", "ok": True},
     ]
     allowed = _secrets.allowed_secret_keys(inst)
@@ -1835,7 +1702,7 @@ def _rt_skills(h):
     # ?meta=1: name + description only. The full catalog is ~870 KB with the
     # bodies — the agents call this on every list_skills and never need them.
     q = urllib.parse.parse_qs(h.path.partition("?")[2])
-    items = load_skills()
+    items = _skills.load_skills()
     if q.get("meta", ["0"])[0] == "1":
         items = [{"name": x.get("name", ""), "description": x.get("description", "")}
                  for x in items]
@@ -1845,7 +1712,7 @@ def _rt_skills(h):
 @ROUTER.get("/api/skills/", prefix=True)
 def _rt_skill(h):
     nm = re.sub(r"[^a-z0-9_-]", "", h.path.split("/api/skills/", 1)[1].lower())
-    sk = next((x for x in load_skills() if x.get("name") == nm), None)
+    sk = next((x for x in _skills.load_skills() if x.get("name") == nm), None)
     return ((sk.get("content", "") if sk else f"Skill '{nm}' not found").encode(),
             "text/plain; charset=utf-8")
 
@@ -3581,7 +3448,7 @@ def _rt_personas_delete(h):
 @_msg_route("POST", "/api/skills")
 def _rt_skills_upsert(h):
     b = h._body()
-    return upsert_skill(b.get("name", ""), b.get("description", ""), b.get("content", ""))
+    return _skills.upsert_skill(b.get("name", ""), b.get("description", ""), b.get("content", ""))
 
 
 @ROUTER.post("/api/skill-proposals")
@@ -3595,7 +3462,7 @@ def _rt_skill_propose(h):
     if not _util.rate_ok(("skill-proposal", inst["name"]), 10, 300):
         return h._json({"error": "rate limit"}, 429)
     b = h._body()
-    pid, why = proposal_add(inst["name"], b.get("name", ""), b.get("description", ""), b.get("content", ""),
+    pid, why = _skills.proposal_add(inst["name"], b.get("name", ""), b.get("description", ""), b.get("content", ""),
                             turn=b.get("turn", ""), note=b.get("note", ""))
     if pid is None:
         return h._json({"error": why}, 400)
@@ -3604,7 +3471,7 @@ def _rt_skill_propose(h):
 
 @ROUTER.get("/api/skill-proposals", admin=True)
 def _rt_skill_proposals(h):
-    return h._json({"proposals": [p for p in load_proposals() if p.get("status") == "proposed"]})
+    return h._json({"proposals": [p for p in _skills.load_proposals() if p.get("status") == "proposed"]})
 
 
 @_msg_route("POST", "/api/skill-proposals/", prefix=True)
@@ -3612,7 +3479,7 @@ def _rt_skill_proposal_decide(h):
     parts = h.path.split("?", 1)[0].strip("/").split("/")
     if len(parts) != 4 or parts[3] not in ("approve", "discard"):
         return "unknown"
-    return proposal_decide(re.sub(r"[^a-f0-9]", "", parts[2]), parts[3] == "approve")
+    return _skills.proposal_decide(re.sub(r"[^a-f0-9]", "", parts[2]), parts[3] == "approve")
 
 
 @ROUTER.post("/api/sessions-search")
@@ -3633,14 +3500,14 @@ def _rt_sessions_search(h):
         limit = max(1, min(int(b.get("limit", 10)), 50))
     except (TypeError, ValueError):
         limit = 10
-    return h._json({"hits": sessions_search(str(b.get("q") or b.get("query") or ""), instance=scope, limit=limit)})
+    return h._json({"hits": _skills.sessions_search(str(b.get("q") or b.get("query") or ""), instance=scope, limit=limit)})
 
 
 @_msg_route("POST", "/api/skills/", prefix=True)
 def _rt_skills_delete(h):
     parts = h.path.split("?", 1)[0].strip("/").split("/")
     if len(parts) == 4 and parts[3] == "delete":
-        return delete_skill(re.sub(r"[^a-z0-9_-]", "", parts[2].lower()))
+        return _skills.delete_skill(re.sub(r"[^a-z0-9_-]", "", parts[2].lower()))
     return "unknown"
 
 
