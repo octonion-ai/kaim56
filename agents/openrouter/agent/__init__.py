@@ -20,6 +20,7 @@ import urllib.error
 import uuid
 
 # ---- package modules ----
+from . import learn as _learn
 from . import llm as _llm
 from . import mcp as _mcp
 from . import tools_local as _tools_local
@@ -812,111 +813,6 @@ def builtin_schema():
     return out
 
 
-# ---- skills from experience -------------------------------------------------
-# Hermes' loop, with the manager's approval gate: after a long successful
-# turn one extra model call distills the way it went into a SKILL proposal
-# and files it; nothing enters the catalog without the operator's click.
-SKILL_LEARN = os.environ.get("SKILL_LEARN", "1") not in ("0", "false", "False", "")
-SKILL_LEARN_MIN_STEPS = int(os.environ.get("SKILL_LEARN_MIN_STEPS", "5"))
-_LEARN_SYSTEM = (
-    "You just completed a multi-step task (the conversation follows). Decide whether "
-    "the approach is a REUSABLE procedure worth saving as a skill for future tasks of "
-    "the same kind. Answer exactly NONE when it was a one-off, trivial, mostly failed, "
-    "personal, or already covered by a skill you loaded. Otherwise answer with one JSON "
-    "object and nothing else: {\"name\": kebab-case, \"description\": one line, "
-    "\"content\": Markdown with sections Purpose, When to use, Steps (the exact tools "
-    "and arguments that worked, in order), Pitfalls}. No secrets, no personal data, no "
-    "full tool outputs, under 4000 characters.")
-
-
-def _turn_slice(hist, user_text):
-    """The messages of the turn that just ended: from the last user message
-    with that text to the end, tool outputs trimmed, images dropped."""
-    start = 0
-    for i in range(len(hist) - 1, -1, -1):
-        m = hist[i]
-        if m.get("role") == "user" and (m.get("content") == user_text or isinstance(m.get("content"), list)):
-            start = i
-            break
-    out = []
-    for m in hist[start:]:
-        c = m.get("content")
-        if isinstance(c, list):
-            c = " ".join(p.get("text", "") for p in c if isinstance(p, dict) and p.get("type") == "text")
-        entry = {"role": m.get("role"), "content": (str(c) if c is not None else "")[:1500]}
-        if m.get("tool_calls"):
-            entry["tool_calls"] = m["tool_calls"]
-        if m.get("tool_call_id"):
-            entry["tool_call_id"] = m["tool_call_id"]
-        out.append(entry)
-    return out
-
-
-def _learn_skill(turn_msgs, user_text):
-    """One model call, no tools; posts the proposal or does nothing."""
-    msgs = [{"role": "system", "content": _LEARN_SYSTEM}] + turn_msgs + \
-           [{"role": "user", "content": "Distill now: NONE or the JSON object."}]
-    try:
-        reply = _llm.or_chat(msgs, []).get("content") or ""
-    except Exception:
-        return None
-    t = reply.strip().strip("`")
-    if t.lower().startswith("json"):
-        t = t[4:].strip()
-    if not t or t.upper().startswith("NONE"):
-        return None
-    try:
-        d = json.loads(t[t.index("{"):t.rindex("}") + 1])
-    except (ValueError, TypeError):
-        return None
-    if not all(isinstance(d.get(k), str) for k in ("name", "description", "content")):
-        return None
-    try:
-        return _mgrclient._mgr(_mgrclient._manager_base(), "/api/skill-proposals",
-                    {"name": d["name"], "description": d["description"], "content": d["content"],
-                     "turn": _observe._turn_id[0], "note": f"distilled after: {str(user_text)[:120]}"}, timeout=10)
-    except Exception:
-        return None
-
-
-def _maybe_learn(hist, user_text, outcome):
-    """Fire the distillation in the background when the turn qualifies:
-    enabled, ended well, at least SKILL_LEARN_MIN_STEPS model calls."""
-    if not SKILL_LEARN or outcome != "ok" or _observe._turn_step[0] < SKILL_LEARN_MIN_STEPS:
-        return False
-    if str(user_text).startswith("/"):
-        return False
-    # A-4: the distillation is an extra background LLM call — log it so the
-    # per-turn cost is not invisible (its usage is booked via or_chat under this
-    # turn id). SKILL_LEARN=0 in the instance config turns it off per instance.
-    _config.log(f"skill-learn: distilling a skill proposal from this turn "
-        f"({_observe._turn_step[0]} steps) — extra model call; set SKILL_LEARN=0 to disable")
-    slice_ = _turn_slice(hist, user_text)
-    threading.Thread(target=_learn_skill, args=(slice_, user_text), daemon=True).start()
-    return True
-
-
-def _outcome_of(text):
-    t = str(text or "")
-    if "(max tool steps reached)" in t:
-        return "max_steps"
-    if "time budget exhausted" in t:
-        return "deadline"
-    if t.lstrip().startswith("⚠️"):
-        return "error"
-    return "ok"
-
-
-# Result strings that mean "the tool ran but the CALL failed" — tools report
-# errors as text, not exceptions, so the audit has to look at the words.
-_ERR_PREFIXES = ("⚠️", "Error:", "Tool error", "error:")
-
-
-def _looks_failed(out):
-    t = str(out).lstrip()
-    return t.startswith(_ERR_PREFIXES) or "web search unavailable" in t[:120]
-
-
 def _resolve_tool_name(name):
     """Models drop the MCP prefix now and then — 'mrmusic_power' for
     'mrmusic__mrmusic_power' (gemini-2.5-flash, 2026-09-07, 'unknown tool'
@@ -972,7 +868,7 @@ def exec_tool(name, args):
     except Exception as e:
         _audit(ok=False, err=repr(e))
         return f"Tool error ({name}): {e!r}"
-    failed = _looks_failed(out)
+    failed = _learn._looks_failed(out)
     _audit(ok=not failed, err=out[:300] if failed else "", result="" if failed else out[:200])
     return _finalize_output(name, out)
 
@@ -1732,8 +1628,8 @@ def run(user_message, deadline=0.0, kind="chat", turn=None):
             out = _tool_loop(hist)
             return out
         finally:
-            _observe._trace_end(_outcome_of(out))
-            _maybe_learn(hist, m, _outcome_of(out))
+            _observe._trace_end(_learn._outcome_of(out))
+            _learn._maybe_learn(hist, m, _learn._outcome_of(out))
     _auto_reset()
     _trim_history()
     _inject_playbooks()
@@ -1750,8 +1646,8 @@ def run(user_message, deadline=0.0, kind="chat", turn=None):
         return out
     finally:
         _busy[0] = False
-        _observe._trace_end(_outcome_of(out))
-        _maybe_learn(_history, user_message, _outcome_of(out))
+        _observe._trace_end(_learn._outcome_of(out))
+        _learn._maybe_learn(_history, user_message, _learn._outcome_of(out))
 
 
 def run_stream(user_message, on_token, image=None, deadline=0.0, kind="stream", turn=None):
@@ -1818,7 +1714,7 @@ def run_stream(user_message, on_token, image=None, deadline=0.0, kind="stream", 
             # streamed) and then emitted as a whole.
             ans = _run_goal(_history, user_message)
             on_token(ans)
-            outcome = _outcome_of(ans)
+            outcome = _learn._outcome_of(ans)
             return
         for _ in _config._step_iter():
             _drain_steer(_history, on_token)
@@ -1834,7 +1730,7 @@ def run_stream(user_message, on_token, image=None, deadline=0.0, kind="stream", 
             if not tcs:
                 if _drain_steer(_history, on_token):
                     continue
-                outcome = _outcome_of(msg.get("content"))
+                outcome = _learn._outcome_of(msg.get("content"))
                 return
             for tc in tcs:
                 fn = tc["function"]
@@ -1865,7 +1761,7 @@ def run_stream(user_message, on_token, image=None, deadline=0.0, kind="stream", 
     finally:
         _busy[0] = False
         _observe._trace_end(outcome)
-        _maybe_learn(_history, user_message, outcome)
+        _learn._maybe_learn(_history, user_message, outcome)
 
 
 # Tool plugins (pi.dev extension idea, ported): one .py file per tool,

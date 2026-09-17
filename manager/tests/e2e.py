@@ -725,9 +725,9 @@ class AgentLogic(unittest.TestCase):
             posts.clear()
             a.run("/steps")                                       # a slash command: no markers
             self.assertEqual([p for p, _ in posts if p == "/api/trace"], [])
-            self.assertEqual(a._outcome_of("(max tool steps reached)"), "max_steps")
-            self.assertEqual(a._outcome_of("x ⏱️ (time budget exhausted — partial result)"), "deadline")
-            self.assertEqual(a._outcome_of("⚠️ LLM HTTP 500"), "error")
+            self.assertEqual(a._learn._outcome_of("(max tool steps reached)"), "max_steps")
+            self.assertEqual(a._learn._outcome_of("x ⏱️ (time budget exhausted — partial result)"), "deadline")
+            self.assertEqual(a._learn._outcome_of("⚠️ LLM HTTP 500"), "error")
         finally:
             a._mgrclient._mgr, a._llm.or_chat, a.exec_tool, a._mgrclient.report_usage = old[:4]
             a._history[:] = old[4]; a._config.MAX_STEPS = old[5]
@@ -742,7 +742,7 @@ class AgentLogic(unittest.TestCase):
         nothing; short turns, failed turns and slash commands never trigger."""
         a = self.a
         posts = []
-        old = a._llm.or_chat, a._mgrclient._mgr, a.SKILL_LEARN, a.SKILL_LEARN_MIN_STEPS, a._observe._turn_step[0], a.threading.Thread
+        old = a._llm.or_chat, a._mgrclient._mgr, a._learn.SKILL_LEARN, a._learn.SKILL_LEARN_MIN_STEPS, a._observe._turn_step[0], a.threading.Thread
 
         class SyncThread:
             def __init__(self, target=None, args=(), daemon=None): self.t, self.a = target, args
@@ -750,35 +750,35 @@ class AgentLogic(unittest.TestCase):
         try:
             a._mgrclient._mgr = lambda base, path, payload=None, timeout=60: posts.append((path, payload)) or "ok"
             a.threading.Thread = SyncThread
-            a.SKILL_LEARN, a.SKILL_LEARN_MIN_STEPS = True, 3
+            a._learn.SKILL_LEARN, a._learn.SKILL_LEARN_MIN_STEPS = True, 3
             hist = [{"role": "system", "content": "s"}, {"role": "user", "content": "old"},
                     {"role": "assistant", "content": "old answer"},
                     {"role": "user", "content": "find jobs"},
                     {"role": "assistant", "content": None, "tool_calls": [{"id": "1", "function": {"name": "web_search", "arguments": "{}"}}]},
                     {"role": "tool", "tool_call_id": "1", "content": "x" * 5000},
                     {"role": "assistant", "content": "done"}]
-            sl = a._turn_slice(hist, "find jobs")
+            sl = a._learn._turn_slice(hist, "find jobs")
             self.assertEqual(sl[0]["content"], "find jobs"); self.assertEqual(len(sl), 4)
             self.assertEqual(len(sl[2]["content"]), 1500)                       # tool output trimmed
             a._llm.or_chat = lambda msgs, tools, model=None: {"role": "assistant", "content":
                 '```json\n{"name": "job-search", "description": "Daily search", "content": "# Purpose\\n..."}\n```'}
             a._observe._turn_step[0] = 4
-            self.assertTrue(a._maybe_learn(hist, "find jobs", "ok"))
+            self.assertTrue(a._learn._maybe_learn(hist, "find jobs", "ok"))
             self.assertEqual(posts[-1][0], "/api/skill-proposals")
             self.assertEqual(posts[-1][1]["name"], "job-search")
             self.assertIn("find jobs", posts[-1][1]["note"])
             posts.clear()
             a._llm.or_chat = lambda msgs, tools, model=None: {"role": "assistant", "content": "NONE"}
-            self.assertTrue(a._maybe_learn(hist, "find jobs", "ok")); self.assertEqual(posts, [])
+            self.assertTrue(a._learn._maybe_learn(hist, "find jobs", "ok")); self.assertEqual(posts, [])
             a._observe._turn_step[0] = 2
-            self.assertFalse(a._maybe_learn(hist, "find jobs", "ok"))              # too short
+            self.assertFalse(a._learn._maybe_learn(hist, "find jobs", "ok"))              # too short
             a._observe._turn_step[0] = 9
-            self.assertFalse(a._maybe_learn(hist, "find jobs", "max_steps"))       # did not end well
-            self.assertFalse(a._maybe_learn(hist, "/fresh x", "ok"))               # slash command
-            a.SKILL_LEARN = False
-            self.assertFalse(a._maybe_learn(hist, "find jobs", "ok"))
+            self.assertFalse(a._learn._maybe_learn(hist, "find jobs", "max_steps"))       # did not end well
+            self.assertFalse(a._learn._maybe_learn(hist, "/fresh x", "ok"))               # slash command
+            a._learn.SKILL_LEARN = False
+            self.assertFalse(a._learn._maybe_learn(hist, "find jobs", "ok"))
         finally:
-            a._llm.or_chat, a._mgrclient._mgr, a.SKILL_LEARN, a.SKILL_LEARN_MIN_STEPS, a._observe._turn_step[0], a.threading.Thread = old
+            a._llm.or_chat, a._mgrclient._mgr, a._learn.SKILL_LEARN, a._learn.SKILL_LEARN_MIN_STEPS, a._observe._turn_step[0], a.threading.Thread = old
 
     # --- Tree-Chat: /branch + /back -------------------------------------------
     def test_branch_and_back(self):
@@ -1005,27 +1005,27 @@ class AgentLogic(unittest.TestCase):
         """A-4: skill-learning fires only on a long successful non-slash turn,
         is off when SKILL_LEARN is false, and logs when it fires (visibility)."""
         a = self.a
-        old = a.SKILL_LEARN, a.SKILL_LEARN_MIN_STEPS, a._observe._turn_step[0], a.threading, a._config.log
+        old = a._learn.SKILL_LEARN, a._learn.SKILL_LEARN_MIN_STEPS, a._observe._turn_step[0], a._learn.threading, a._config.log
         started = []; logged = []
         class _T:
             def __init__(self, target=None, args=(), daemon=None): pass
             def start(self): started.append(1)
         try:
-            a.threading = type("x", (), {"Thread": _T})
+            a._learn.threading = type("x", (), {"Thread": _T})
             a._config.log = lambda *m, **k: logged.append(" ".join(str(x) for x in m))
-            a.SKILL_LEARN_MIN_STEPS = 5
-            a.SKILL_LEARN = True; a._observe._turn_step[0] = 6
-            self.assertTrue(a._maybe_learn([], "do a multi-step job", "ok")); self.assertEqual(len(started), 1)
+            a._learn.SKILL_LEARN_MIN_STEPS = 5
+            a._learn.SKILL_LEARN = True; a._observe._turn_step[0] = 6
+            self.assertTrue(a._learn._maybe_learn([], "do a multi-step job", "ok")); self.assertEqual(len(started), 1)
             self.assertTrue(any("skill-learn" in x for x in logged))
             started.clear()
-            self.assertFalse(a._maybe_learn([], "/reset", "ok")); self.assertEqual(started, [])   # slash: no
-            self.assertFalse(a._maybe_learn([], "x", "error")); self.assertEqual(started, [])      # bad outcome: no
+            self.assertFalse(a._learn._maybe_learn([], "/reset", "ok")); self.assertEqual(started, [])   # slash: no
+            self.assertFalse(a._learn._maybe_learn([], "x", "error")); self.assertEqual(started, [])      # bad outcome: no
             a._observe._turn_step[0] = 2
-            self.assertFalse(a._maybe_learn([], "x", "ok")); self.assertEqual(started, [])         # too short: no
-            a._observe._turn_step[0] = 6; a.SKILL_LEARN = False
-            self.assertFalse(a._maybe_learn([], "x", "ok")); self.assertEqual(started, [])         # disabled: no
+            self.assertFalse(a._learn._maybe_learn([], "x", "ok")); self.assertEqual(started, [])         # too short: no
+            a._observe._turn_step[0] = 6; a._learn.SKILL_LEARN = False
+            self.assertFalse(a._learn._maybe_learn([], "x", "ok")); self.assertEqual(started, [])         # disabled: no
         finally:
-            a.SKILL_LEARN, a.SKILL_LEARN_MIN_STEPS, a._observe._turn_step[0], a.threading, a._config.log = old
+            a._learn.SKILL_LEARN, a._learn.SKILL_LEARN_MIN_STEPS, a._observe._turn_step[0], a._learn.threading, a._config.log = old
 
     def test_office_tools_helpers_and_missing_libs(self):
         """write_xlsx/write_docx: row normalisation (lists, objects, JSON) and
