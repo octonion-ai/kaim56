@@ -6,6 +6,7 @@ history — `git log -p -- manager/CHANGELOG.md` before 2026-09-08 — and in th
 commit messages.
 
 ## 2026-09-17
+- Agent split for review: the openrouter agent becomes the package `agent/` (one concern per module); the harness drive ships the package directory, the rootfs COPY and the test loader follow
 - Split for review (no behaviour change): manager.py (6,078 lines) becomes a composition root; the code moves into mgr/ modules by concern, security boundaries as their own files, routes split by who may call them; siblings are used as modules (`_x.func`), tests patch the defining module
 - Security H-2: the browser-terminal WebSocket handshake now requires a present, allowed Origin (403 otherwise) — any page the admin visited could open a shell in a VM with the cached login
 - Security H-3: the terminal page is served by the manager from its own webterm.py (only the /ws frames are tunneled), and any other HTML relayed from a guest gets `Content-Security-Policy: sandbox` — guest-authored HTML can no longer run script on the manager origin with the admin's session

@@ -70,26 +70,39 @@ OVERLAY_ROOTFS = {"instances/openrouter-rootfs.ext4", "instances/claude-rootfs.e
 # (boot arg fc_harness=/dev/vdX) and prefers it over /app; without the drive
 # it boots from the rootfs as before.
 AGENT_SRC = os.environ.get("AGENT_SRC") or _settings.SITE.get("AGENT_SRC") or ""
-HARNESS_FILES = ("agent.py", "run_agent.py", "webterm.py")
+HARNESS_FILES = ("agent", "run_agent.py", "webterm.py")   # "agent" is the package directory
 HARNESS_IMG = os.path.join(_paths.RUN_DIR, "harness.ext4")
 HARNESS_ROOTFS = {"instances/openrouter-rootfs.ext4"}     # images built from AGENT_SRC
 _harness_lock = threading.Lock()
 
 
 def harness_sources():
-    """All HARNESS_FILES under AGENT_SRC — or nothing: a half-present set
-    (agent.py mid-rename, a partial rsync) must not become the drive a VM
-    boots from; run_agent.py imports agent with no fallback."""
+    """All HARNESS_FILES under AGENT_SRC (a directory entry means every .py
+    file below it) — or nothing: a half-present set (a partial rsync, a
+    package mid-rename) must not become the drive a VM boots from;
+    run_agent.py imports agent with no fallback."""
     if not AGENT_SRC:
         return []
-    ps = [os.path.join(AGENT_SRC, f) for f in HARNESS_FILES]
-    return ps if all(os.path.isfile(p) for p in ps) else []
+    out = []
+    for f in HARNESS_FILES:
+        p = os.path.join(AGENT_SRC, f)
+        if os.path.isdir(p):
+            files = sorted(os.path.join(r, x) for r, _, fs in os.walk(p) for x in fs
+                           if x.endswith(".py") and "__pycache__" not in r)
+            if not files:
+                return []
+            out += files
+        elif os.path.isfile(p):
+            out.append(p)
+        else:
+            return []
+    return out
 
 
 def _harness_digest(srcs):
     h = hashlib.sha256()
     for p in srcs:
-        h.update(os.path.basename(p).encode() + b"\0")
+        h.update(os.path.relpath(p, AGENT_SRC).encode() + b"\0")
         with open(p, "rb") as fh:
             h.update(fh.read())
         h.update(b"\0")
@@ -117,7 +130,9 @@ def harness_image():
         d = tempfile.mkdtemp(prefix="harness-", dir=_paths.RUN_DIR)
         try:
             for p in srcs:
-                shutil.copy2(p, os.path.join(d, os.path.basename(p)))
+                dst = os.path.join(d, os.path.relpath(p, AGENT_SRC))
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(p, dst)
             if not mkfs_image(HARNESS_IMG, 8, "kaim56-harness", srcdir=d):
                 return HARNESS_IMG if os.path.exists(HARNESS_IMG) else None
             with open(stamp, "w") as fh:

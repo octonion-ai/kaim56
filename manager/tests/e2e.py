@@ -2388,25 +2388,28 @@ class ManagerFunctions(unittest.TestCase):
             self.skipTest("mkfs.ext4 not available")
         tmp = tempfile.mkdtemp(prefix="e2e-harness-")
         src = os.path.join(tmp, "src"); os.makedirs(src); run = os.path.join(tmp, "run"); os.makedirs(run)
-        for n in ("agent.py", "run_agent.py", "webterm.py"):
+        os.makedirs(os.path.join(src, "agent"))
+        for n in ("agent/__init__.py", "agent/config.py", "run_agent.py", "webterm.py"):
             with open(os.path.join(src, n), "w") as fh:
                 fh.write(f"# {n}\n")
         old = m._vm.AGENT_SRC, m._vm.HARNESS_IMG, m._paths.RUN_DIR
         try:
             m._vm.AGENT_SRC, m._vm.HARNESS_IMG, m._paths.RUN_DIR = src, os.path.join(run, "harness.ext4"), run
+            self.assertEqual([os.path.relpath(p, src) for p in m._vm.harness_sources()],
+                             ["agent/__init__.py", "agent/config.py", "run_agent.py", "webterm.py"])
             img = m._vm.harness_image()
             self.assertEqual(img, m._vm.HARNESS_IMG)
             self.assertTrue(os.path.exists(img) and os.path.exists(img + ".src"))
             ino1 = os.stat(img).st_ino
-            os.utime(os.path.join(src, "agent.py"), (time.time() + 60,) * 2)   # a newer mtime alone
+            os.utime(os.path.join(src, "agent", "config.py"), (time.time() + 60,) * 2)   # a newer mtime alone
             self.assertEqual(m._vm.harness_image(), img)
             self.assertEqual(os.stat(img).st_ino, ino1)                         # is no rebuild
-            with open(os.path.join(src, "agent.py"), "a") as fh:
+            with open(os.path.join(src, "agent", "config.py"), "a") as fh:
                 fh.write("VERSION = 2\n")
             m._vm.harness_image()
             self.assertNotEqual(os.stat(img).st_ino, ino1)                      # content change is
             self.assertEqual(len(os.listdir(run)), 2, os.listdir(run))          # no temp files left
-            os.unlink(os.path.join(src, "agent.py"))
+            shutil.rmtree(os.path.join(src, "agent"))
             self.assertEqual(m._vm.harness_sources(), [])                           # incomplete: no drive
             inst = {"name": "x", "template": "openrouter", "rootfs": "instances/openrouter-rootfs.ext4", "index": 9}
             self.assertTrue(m._vm.uses_harness(inst))
