@@ -1786,6 +1786,8 @@ AGENT_TOOLS_CATALOG = [
     {"name": "bash", "desc": "Run shell commands in the workspace"},
     {"name": "read_file", "desc": "Read a file"},
     {"name": "write_file", "desc": "Write a file"},
+    {"name": "write_xlsx", "desc": "Write a spreadsheet (.xlsx) into the workspace"},
+    {"name": "write_docx", "desc": "Write a Word document (.docx) into the workspace"},
     {"name": "list_dir", "desc": "List a directory"},
     {"name": "offload_read", "desc": "Re-read offloaded (truncated) tool output"},
     {"name": "http_fetch", "desc": "Fetch a URL (HTTP)"},
@@ -5148,12 +5150,14 @@ def _rt_mission_admin(h):
 # ---- reports from guests: usage, audit, notify, hitl, signal, chat-log ------
 def usage_report_accepted(inst, body):
     """Whose figures count: with the key proxy off, the agent's; with it on,
-    the proxy's — except for a local model (LLAMA_ENDPOINT in the instance
-    config), which the agent calls directly, so its own report is the only
-    one there is."""
+    the proxy's — except for a model the instance calls DIRECTLY, not through
+    the proxy: a local model (LLAMA_ENDPOINT) or a claude-template instance
+    (Claude Code on the host subscription). Their own report is the only one."""
     if (load_settings().get("LLM_KEY_PROXY") or "") != "1":
         return True
-    return bool(body.get("direct")) and bool((inst.get("config") or {}).get("LLAMA_ENDPOINT"))
+    if not body.get("direct"):
+        return False
+    return bool((inst.get("config") or {}).get("LLAMA_ENDPOINT")) or inst.get("template") == "claude"
 
 
 @ROUTER.post("/api/usage")

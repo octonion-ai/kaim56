@@ -8,6 +8,8 @@ import json
 import os
 import subprocess
 import tempfile
+import time
+import uuid
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -22,6 +24,23 @@ _session = None
 
 
 _model = None      # per /model gesetzt; None = Vorgabe der Installation
+_last_turn = [""]  # id of the most recent claude turn, for the X-Kaim-Turn header
+
+
+def _log(*m):
+    print(*m, flush=True)
+
+
+def _post(path, payload):
+    """Fire-and-forget to the manager (usage / trace / audit). The manager
+    identifies this instance by source IP; a failure must never disturb a turn."""
+    try:
+        req = urllib.request.Request(manager_base() + path, method="POST",
+                                     data=json.dumps(payload).encode(),
+                                     headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=5).read()
+    except Exception:
+        pass
 
 # Die Anmeldung ist eine Kopie des Host-Credentials (guest-init holt sie beim
 # Boot). Claude Code auf dem Host erneuert seine Tokens laufend und der
@@ -140,14 +159,35 @@ def _claude_run(msg, resume, keep_session):
         cmd += ["--resume", resume]
     if ALLOW_ACTIONS:
         cmd += ["--dangerously-skip-permissions"]
+    turn = uuid.uuid4().hex[:8]; _last_turn[0] = turn
+    kind = "chat" if keep_session else "fresh"
+    model = _model or "claude-code"
+    _post("/api/trace", {"turn": turn, "event": "start", "kind": kind})
+    t0 = time.monotonic()
     p = subprocess.run(cmd, cwd=WORKDIR, capture_output=True, text=True, timeout=TIMEOUT)
+    ms = int((time.monotonic() - t0) * 1000)
+    d = {}
     try:
         d = json.loads(p.stdout)
-        if keep_session and d.get("session_id"):
-            _session = d["session_id"]
-        return d.get("result") or "(leere Antwort)"
     except json.JSONDecodeError:
-        return (p.stdout or p.stderr or "(keine Ausgabe)")[:4000]
+        d = {}
+    if keep_session and d.get("session_id"):
+        _session = d["session_id"]
+    result = (d.get("result") if d else None) or (p.stdout or p.stderr or "(keine Ausgabe)")[:4000]
+    u = d.get("usage") or {}
+    itok, otok = int(u.get("input_tokens") or 0), int(u.get("output_tokens") or 0)
+    cost = float(d.get("total_cost_usd") or 0.0)
+    steps = int(d.get("num_turns") or 1)
+    ok = bool(d) and not d.get("is_error")
+    # Usage -> Resources tab (subscription runs have cost 0; tokens still show).
+    _post("/api/usage", {"model": model, "prompt_tokens": itok, "completion_tokens": otok,
+                         "cost": cost, "turn": turn, "step": 1, "ms": ms, "ok": ok,
+                         "err": "" if ok else str(result)[:200], "direct": True})
+    _post("/api/trace", {"turn": turn, "event": "end", "kind": kind, "steps": steps,
+                         "ms": ms, "outcome": "ok" if ok else "error"})
+    _log(f"turn {turn} {kind} {model} {ms}ms tokens {itok}/{otok} cost ${cost:.4f} "
+         f"steps {steps} -> {len(str(result))} chars" + ("" if ok else " ERROR"))
+    return result
 
 
 def run_fabric(msg):
@@ -212,7 +252,10 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self):
-        ln = int(self.headers.get("Content-Length", 0))
+        try:
+            ln = max(0, int(self.headers.get("Content-Length", 0)))
+        except (TypeError, ValueError):
+            ln = 0
         try:
             d = json.loads(self.rfile.read(ln) or b"{}")
         except json.JSONDecodeError:
@@ -221,6 +264,8 @@ class H(BaseHTTPRequestHandler):
         b = json.dumps({"reply": reply}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
+        if _last_turn[0]:
+            self.send_header("X-Kaim-Turn", _last_turn[0])   # the app fetches the trace by it
         self.end_headers()
         self.wfile.write(b)
 

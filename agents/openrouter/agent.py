@@ -313,6 +313,100 @@ def t_write_file(path, content):
     return f"written: {p} ({len(content)} characters)"
 
 
+# --- Office output (openpyxl / python-docx, both in the rootfs) -------------
+def _rows_norm(rows):
+    """Rows for a sheet: a JSON string, a list of lists, or a list of dicts
+    (dict keys become the header row). Cells are left as str/int/float."""
+    if isinstance(rows, str):
+        rows = json.loads(rows)
+    if not isinstance(rows, list):
+        raise ValueError("rows must be a list of rows (lists) or of objects")
+    if rows and isinstance(rows[0], dict):
+        keys = []
+        for r in rows:
+            for k in r:
+                if k not in keys:
+                    keys.append(k)
+        return [keys] + [[r.get(k, "") for k in keys] for r in rows]
+    return [list(r) if isinstance(r, (list, tuple)) else [r] for r in rows]
+
+
+def t_write_xlsx(path, rows, sheet="Sheet1"):
+    """Write a spreadsheet (.xlsx) into the workspace. rows: list of lists
+    (first row = header) or list of objects; also accepted as a JSON string."""
+    try:
+        import openpyxl
+    except ImportError:
+        return "⚠️ write_xlsx needs openpyxl in this image (rebuild the rootfs)"
+    try:
+        data = _rows_norm(rows)
+    except (ValueError, TypeError) as e:
+        return f"⚠️ rows: {e}"
+    p = _safe(path if str(path).lower().endswith(".xlsx") else f"{path}.xlsx")
+    os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
+    wb = openpyxl.Workbook(); ws = wb.active; ws.title = str(sheet or "Sheet1")[:31]
+    for r in data:
+        ws.append([c if isinstance(c, (int, float)) or c is None else str(c) for c in r])
+    if data:
+        for cell in ws[1]:
+            cell.font = openpyxl.styles.Font(bold=True)
+        for col in ws.columns:
+            w = max((len(str(c.value)) for c in col if c.value is not None), default=8)
+            ws.column_dimensions[col[0].column_letter].width = min(60, max(10, w + 2))
+    wb.save(p)
+    return f"written: {p} ({max(0, len(data) - 1)} rows, {len(data[0]) if data else 0} columns)"
+
+
+def _md_blocks(md):
+    """A small Markdown subset -> blocks for a document: ('h', level, text),
+    ('li', text), ('p', text). Inline **bold** stays as markers for the writer."""
+    out, para = [], []
+    def flush():
+        if para:
+            out.append(("p", " ".join(para))); para.clear()
+    for line in str(md or "").splitlines():
+        t = line.rstrip()
+        if not t.strip():
+            flush(); continue
+        m = re.match(r"^(#{1,3})\s+(.*)$", t)
+        if m:
+            flush(); out.append(("h", len(m.group(1)), m.group(2).strip())); continue
+        m = re.match(r"^\s*[-*]\s+(.*)$", t)
+        if m:
+            flush(); out.append(("li", m.group(1).strip())); continue
+        para.append(t.strip())
+    flush()
+    return out
+
+
+def t_write_docx(path, markdown, title=None):
+    """Write a Word document (.docx) into the workspace from a small Markdown
+    subset: # headings (1-3), - bullets, paragraphs, **bold** inline."""
+    try:
+        import docx
+    except ImportError:
+        return "⚠️ write_docx needs python-docx in this image (rebuild the rootfs)"
+    p = _safe(path if str(path).lower().endswith(".docx") else f"{path}.docx")
+    os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
+    d = docx.Document()
+    if title:
+        d.add_heading(str(title), 0)
+    def runs(par, text):
+        for i, seg in enumerate(re.split(r"\*\*(.+?)\*\*", text)):
+            if seg:
+                par.add_run(seg).bold = bool(i % 2)
+    blocks = _md_blocks(markdown)
+    for b in blocks:
+        if b[0] == "h":
+            d.add_heading(b[2], min(3, b[1]))
+        elif b[0] == "li":
+            runs(d.add_paragraph(style="List Bullet"), b[1])
+        else:
+            runs(d.add_paragraph(), b[1])
+    d.save(p)
+    return f"written: {p} ({len(blocks)} blocks)"
+
+
 def t_list_dir(path="."):
     return "\n".join(sorted(os.listdir(_safe(path)))) or "(empty)"
 
@@ -1102,6 +1196,16 @@ BUILTIN = {
                   {"path": {"type": "string"}}, ["path"]),
     "write_file": (t_write_file, "Write a file",
                    {"path": {"type": "string"}, "content": {"type": "string"}}, ["path", "content"]),
+    "write_xlsx": (t_write_xlsx, "Write a spreadsheet (.xlsx) into the workspace — for lists and tables the user "
+                   "will filter or sort (jobs, results, inventories). rows: first row = header.",
+                   {"path": {"type": "string", "description": "file name, e.g. jobs.xlsx"},
+                    "rows": {"type": "array", "items": {}, "description": "list of rows (arrays; first = header) or of objects (keys = header)"},
+                    "sheet": {"type": "string", "description": "sheet name (optional)"}}, ["path", "rows"]),
+    "write_docx": (t_write_docx, "Write a Word document (.docx) into the workspace from Markdown "
+                   "(# headings, - bullets, paragraphs, **bold**) — for letters, reports, CVs.",
+                   {"path": {"type": "string", "description": "file name, e.g. anschreiben.docx"},
+                    "markdown": {"type": "string"},
+                    "title": {"type": "string", "description": "document title (optional)"}}, ["path", "markdown"]),
     "list_dir": (t_list_dir, "List a directory",
                  {"path": {"type": "string"}}, []),
     "http_fetch": (t_http_fetch,

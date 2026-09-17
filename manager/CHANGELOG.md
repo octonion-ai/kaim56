@@ -5,6 +5,10 @@ entry (root causes, measurements, alternatives considered) lives in git
 history — `git log -p -- manager/CHANGELOG.md` before 2026-09-08 — and in the
 commit messages.
 
+## 2026-09-17
+- Office output for agents: tools `write_xlsx` (rows → spreadsheet, header bold, columns sized) and `write_docx` (Markdown subset → Word: headings, bullets, paragraphs, bold) write into the workspace; `python3-openpyxl` and `python3-docx` in the openrouter rootfs (rebuild); without the libs the tools say so; catalog/Policy entries
+- Claude instances become observable: the bridge logs one summary line per turn, reports usage to `/api/usage` (Resources tab) and emits a `/api/trace` start+end (trace view), and sets `X-Kaim-Turn` so the app can open the trace; the manager accepts a claude instance's own usage (it runs on the host subscription, not the key proxy). Content-Length in the bridge is now guarded
+
 ## 2026-09-16
 - Fix (from the review of the persona work): a web persona save (name+prompt only) no longer wipes the persona's recommended tools/model — they are kept unless an explicit value replaces or clears them; and an explicit `spawn_subagent(model=…)` now wins over a persona's model
 - Personas & skills from ECC (MIT, attributed in NOTICE): 6 review/architecture personas (code-reviewer, code-architect, code-explorer, code-simplifier, silent-failure-hunter, security-reviewer) and 6 skills (ADR, error-handling, coding-standards, git-workflow, verification-loop, agent-architecture-audit)

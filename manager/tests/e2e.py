@@ -1018,6 +1018,29 @@ class AgentLogic(unittest.TestCase):
         finally:
             a.SKILL_LEARN, a.SKILL_LEARN_MIN_STEPS, a._turn_step[0], a.threading, a.log = old
 
+    def test_office_tools_helpers_and_missing_libs(self):
+        """write_xlsx/write_docx: row normalisation (lists, objects, JSON) and
+        the Markdown-subset parser are pure; without the libs the tools say so
+        instead of crashing (the libs live in the rootfs, not on the host)."""
+        a = self.a
+        self.assertEqual(a._rows_norm([["a", "b"], [1, 2]]), [["a", "b"], [1, 2]])
+        self.assertEqual(a._rows_norm([{"firma": "X", "ort": "K"}, {"firma": "Y", "link": "u"}]),
+                         [["firma", "ort", "link"], ["X", "K", ""], ["Y", "", "u"]])
+        self.assertEqual(a._rows_norm('[["h"],["v"]]'), [["h"], ["v"]])
+        with self.assertRaises(ValueError):
+            a._rows_norm({"not": "a list"})
+        blocks = a._md_blocks("# Titel\n\nErster Absatz\nzweite Zeile\n\n- eins\n- **zwei**\n\n## Sub\nText")
+        self.assertEqual(blocks, [("h", 1, "Titel"), ("p", "Erster Absatz zweite Zeile"),
+                                  ("li", "eins"), ("li", "**zwei**"), ("h", 2, "Sub"), ("p", "Text")])
+        import importlib
+        have_x = importlib.util.find_spec("openpyxl") is not None
+        have_d = importlib.util.find_spec("docx") is not None
+        if not have_x:
+            self.assertIn("openpyxl", a.t_write_xlsx("t.xlsx", [["a"]]))
+        if not have_d:
+            self.assertIn("python-docx", a.t_write_docx("t.docx", "# x"))
+        self.assertIn("write_xlsx", a.BUILTIN); self.assertIn("write_docx", a.BUILTIN)   # registered tools
+
     def test_reset_clears_the_goal(self):
         """/reset drops a stale goal; otherwise every later turn runs the goal
         loop (which is what broke the uncensored instance)."""
@@ -3015,6 +3038,8 @@ class ManagerFunctions(unittest.TestCase):
             self.assertTrue(m.usage_report_accepted(llama, {"direct": True}))
             self.assertFalse(m.usage_report_accepted(llama, {}))                       # old agent: not flagged
             self.assertFalse(m.usage_report_accepted({"name": "o", "config": {}}, {"direct": True}))  # proxied instance
+            self.assertTrue(m.usage_report_accepted({"name": "c", "template": "claude", "config": {}}, {"direct": True}))  # claude = direct
+            self.assertFalse(m.usage_report_accepted({"name": "c", "template": "claude", "config": {}}, {}))               # old bridge: not flagged
             m.load_settings = lambda: {"LLM_KEY_PROXY": ""}
             self.assertTrue(m.usage_report_accepted({"name": "o", "config": {}}, {}))
         finally:
@@ -4173,6 +4198,34 @@ class ManagerHTTP(unittest.TestCase):
         d = json.loads(txt)
         for k in ("calls", "in", "out", "cost"):
             self.assertIn(k, d)
+
+    def test_claude_bridge_reports_usage_and_traces(self):
+        """The claude bridge, on a real turn, logs one summary line and posts a
+        /api/usage and a /api/trace start+end so Logs/Resources/Traces show it."""
+        import io, types
+        wb = _load("web_bridge_obs", os.path.join(os.path.dirname(os.path.dirname(AGENT_PATH)), "claude", "web_bridge.py")
+                   if os.path.exists(os.path.join(os.path.dirname(os.path.dirname(AGENT_PATH)), "claude", "web_bridge.py"))
+                   else "/home/ulrich/claude-signal-firecracker/web_bridge.py")
+        posts = []; logs = []
+        old = wb._post, wb._log, wb.subprocess.run, wb._sync_credentials
+        try:
+            wb._post = lambda path, payload: posts.append((path, payload))
+            wb._log = lambda *m: logs.append(" ".join(str(x) for x in m))
+            wb._sync_credentials = lambda force=False: False
+            fake = json.dumps({"result": "done", "session_id": "s1", "usage": {"input_tokens": 1200, "output_tokens": 80},
+                               "total_cost_usd": 0.0, "num_turns": 3})
+            wb.subprocess.run = lambda *a, **k: types.SimpleNamespace(stdout=fake, stderr="")
+            out = wb._claude_run("hello", None, True)
+            self.assertEqual(out, "done")
+            paths = [p for p, _ in posts]
+            self.assertIn("/api/usage", paths); self.assertEqual(paths.count("/api/trace"), 2)
+            usage = next(pl for pp, pl in posts if pp == "/api/usage")
+            self.assertEqual((usage["prompt_tokens"], usage["completion_tokens"], usage["direct"]), (1200, 80, True))
+            self.assertTrue(usage["ok"])
+            self.assertTrue(any("tokens 1200/80" in x for x in logs))
+            self.assertTrue(wb._last_turn[0])                       # turn id set for the X-Kaim-Turn header
+        finally:
+            wb._post, wb._log, wb.subprocess.run, wb._sync_credentials = old
 
     def test_claude_bridge_syncs_the_host_login(self):
         """The claude VM works from a copy of the host's OAuth login that goes

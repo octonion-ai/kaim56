@@ -1,18 +1,19 @@
-# Rootfs of the OpenRouter agent. node:24-slim = current node/npx (for MCP servers)
-# + existing user 'node' (uid 1000). python3 for the agent.
+# Rootfs des OpenRouter-Agenten. node:24-slim = aktuelles node/npx (fuer MCP-Server)
+# + vorhandener User 'node' (uid 1000). python3 fuer den Agent.
 FROM node:24-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates git curl python3 python3-pip iproute2 iputils-ping nfs-common poppler-utils \
+        python3-openpyxl python3-docx \
     && rm -rf /var/lib/apt/lists/*
 
-# stdio<->SSE bridge for remote MCP servers (e.g. Home Assistant MCP).
+# stdio<->SSE-Bruecke fuer entfernte MCP-Server (z. B. Home Assistant MCP).
 RUN npm install -g mcp-remote && npm cache clean --force
 
-# mcp-portainer is DELIBERATELY no longer here: the MCP processes run in the
-# MCP hub on the host (see /home/ulrich/mcp-hub), the guest only speaks
-# JSON-RPC through the manager. mcp-remote stays as a fallback for managers
-# without /api/mcp.
+# mcp-portainer ist BEWUSST nicht mehr hier: die MCP-Prozesse laufen im
+# MCP-Hub am Host (siehe /home/ulrich/mcp-hub), der Gast spricht nur noch
+# JSON-RPC ueber den Manager. mcp-remote bleibt als Rueckfall fuer Manager
+# ohne /api/mcp.
 
 COPY agent.py                 /app/agent.py
 COPY run_agent.py             /app/run_agent.py
