@@ -255,9 +255,9 @@ class AgentLogic(unittest.TestCase):
         class Srv:
             def __init__(self): self.calls = []
             def call(self, tool, args): self.calls.append((tool, args)); return "ON"
-        old_tools, old_mcp, old_audit = dict(a._mcp_tools), dict(a._mcp), a.audit
+        old_tools, old_mcp, old_audit = dict(a._mcp_tools), dict(a._mcp), a._observe.audit
         try:
-            a.audit = lambda *x, **k: None
+            a._observe.audit = lambda *x, **k: None
             srv = Srv()
             a._mcp_tools.clear(); a._mcp.clear()
             a._mcp_tools["mrmusic__mrmusic_power"] = ("mrmusic", "mrmusic_power")
@@ -276,7 +276,7 @@ class AgentLogic(unittest.TestCase):
         finally:
             a._mcp_tools.clear(); a._mcp_tools.update(old_tools)
             a._mcp.clear(); a._mcp.update(old_mcp)
-            a.audit = old_audit
+            a._observe.audit = old_audit
 
     def test_now_line_gives_the_model_a_clock(self):
         """Every turn carries exactly one [Now] system line in the instance's
@@ -695,11 +695,11 @@ class AgentLogic(unittest.TestCase):
         old = a._mgrclient._mgr, a.or_chat, a.exec_tool, a.report_usage, list(a._history), a._config.MAX_STEPS, a.BUILTIN.get("web_search")
         try:
             a._mgrclient._mgr = lambda base, path, payload=None, timeout=60: posts.append((path, payload))
-            a.report_usage = lambda u, ms=None, ok=True, err="": posts.append(("/api/usage", {"turn": a._turn_id[0], "step": a._turn_step[0], "ms": ms, "ok": ok, "err": err}))
+            a.report_usage = lambda u, ms=None, ok=True, err="": posts.append(("/api/usage", {"turn": a._observe._turn_id[0], "step": a._observe._turn_step[0], "ms": ms, "ok": ok, "err": err}))
             calls = [0]
             def chat(msgs, tools, model=None):
                 calls[0] += 1
-                a._turn_step[0] += 1; a.report_usage({}, ms=5)      # what or_chat does
+                a._observe._turn_step[0] += 1; a.report_usage({}, ms=5)      # what or_chat does
                 if calls[0] == 1:
                     return {"role": "assistant", "content": None,
                             "tool_calls": [{"id": "1", "function": {"name": "web_search", "arguments": "{}"}}]}
@@ -742,7 +742,7 @@ class AgentLogic(unittest.TestCase):
         nothing; short turns, failed turns and slash commands never trigger."""
         a = self.a
         posts = []
-        old = a.or_chat, a._mgrclient._mgr, a.SKILL_LEARN, a.SKILL_LEARN_MIN_STEPS, a._turn_step[0], a.threading.Thread
+        old = a.or_chat, a._mgrclient._mgr, a.SKILL_LEARN, a.SKILL_LEARN_MIN_STEPS, a._observe._turn_step[0], a.threading.Thread
 
         class SyncThread:
             def __init__(self, target=None, args=(), daemon=None): self.t, self.a = target, args
@@ -762,7 +762,7 @@ class AgentLogic(unittest.TestCase):
             self.assertEqual(len(sl[2]["content"]), 1500)                       # tool output trimmed
             a.or_chat = lambda msgs, tools, model=None: {"role": "assistant", "content":
                 '```json\n{"name": "job-search", "description": "Daily search", "content": "# Purpose\\n..."}\n```'}
-            a._turn_step[0] = 4
+            a._observe._turn_step[0] = 4
             self.assertTrue(a._maybe_learn(hist, "find jobs", "ok"))
             self.assertEqual(posts[-1][0], "/api/skill-proposals")
             self.assertEqual(posts[-1][1]["name"], "job-search")
@@ -770,15 +770,15 @@ class AgentLogic(unittest.TestCase):
             posts.clear()
             a.or_chat = lambda msgs, tools, model=None: {"role": "assistant", "content": "NONE"}
             self.assertTrue(a._maybe_learn(hist, "find jobs", "ok")); self.assertEqual(posts, [])
-            a._turn_step[0] = 2
+            a._observe._turn_step[0] = 2
             self.assertFalse(a._maybe_learn(hist, "find jobs", "ok"))              # too short
-            a._turn_step[0] = 9
+            a._observe._turn_step[0] = 9
             self.assertFalse(a._maybe_learn(hist, "find jobs", "max_steps"))       # did not end well
             self.assertFalse(a._maybe_learn(hist, "/fresh x", "ok"))               # slash command
             a.SKILL_LEARN = False
             self.assertFalse(a._maybe_learn(hist, "find jobs", "ok"))
         finally:
-            a.or_chat, a._mgrclient._mgr, a.SKILL_LEARN, a.SKILL_LEARN_MIN_STEPS, a._turn_step[0], a.threading.Thread = old
+            a.or_chat, a._mgrclient._mgr, a.SKILL_LEARN, a.SKILL_LEARN_MIN_STEPS, a._observe._turn_step[0], a.threading.Thread = old
 
     # --- Tree-Chat: /branch + /back -------------------------------------------
     def test_branch_and_back(self):
@@ -1005,7 +1005,7 @@ class AgentLogic(unittest.TestCase):
         """A-4: skill-learning fires only on a long successful non-slash turn,
         is off when SKILL_LEARN is false, and logs when it fires (visibility)."""
         a = self.a
-        old = a.SKILL_LEARN, a.SKILL_LEARN_MIN_STEPS, a._turn_step[0], a.threading, a._config.log
+        old = a.SKILL_LEARN, a.SKILL_LEARN_MIN_STEPS, a._observe._turn_step[0], a.threading, a._config.log
         started = []; logged = []
         class _T:
             def __init__(self, target=None, args=(), daemon=None): pass
@@ -1014,18 +1014,18 @@ class AgentLogic(unittest.TestCase):
             a.threading = type("x", (), {"Thread": _T})
             a._config.log = lambda *m, **k: logged.append(" ".join(str(x) for x in m))
             a.SKILL_LEARN_MIN_STEPS = 5
-            a.SKILL_LEARN = True; a._turn_step[0] = 6
+            a.SKILL_LEARN = True; a._observe._turn_step[0] = 6
             self.assertTrue(a._maybe_learn([], "do a multi-step job", "ok")); self.assertEqual(len(started), 1)
             self.assertTrue(any("skill-learn" in x for x in logged))
             started.clear()
             self.assertFalse(a._maybe_learn([], "/reset", "ok")); self.assertEqual(started, [])   # slash: no
             self.assertFalse(a._maybe_learn([], "x", "error")); self.assertEqual(started, [])      # bad outcome: no
-            a._turn_step[0] = 2
+            a._observe._turn_step[0] = 2
             self.assertFalse(a._maybe_learn([], "x", "ok")); self.assertEqual(started, [])         # too short: no
-            a._turn_step[0] = 6; a.SKILL_LEARN = False
+            a._observe._turn_step[0] = 6; a.SKILL_LEARN = False
             self.assertFalse(a._maybe_learn([], "x", "ok")); self.assertEqual(started, [])         # disabled: no
         finally:
-            a.SKILL_LEARN, a.SKILL_LEARN_MIN_STEPS, a._turn_step[0], a.threading, a._config.log = old
+            a.SKILL_LEARN, a.SKILL_LEARN_MIN_STEPS, a._observe._turn_step[0], a.threading, a._config.log = old
 
     def test_office_tools_helpers_and_missing_libs(self):
         """write_xlsx/write_docx: row normalisation (lists, objects, JSON) and

@@ -22,6 +22,7 @@ import urllib.error
 import uuid
 
 # ---- package modules ----
+from . import observe as _observe
 from . import mgrclient as _mgrclient
 from . import config as _config
 
@@ -338,7 +339,7 @@ def _llm_headers():
     at best a dummy and only suggest a key were present here."""
     h = {"Content-Type": "application/json",
          "HTTP-Referer": "https://agents.example.com", "X-Title": "kaim56-agent",
-         "X-Kaim-Turn": _turn_id[0], "X-Kaim-Step": str(_turn_step[0])}   # the span, for the proxy's books
+         "X-Kaim-Turn": _observe._turn_id[0], "X-Kaim-Step": str(_observe._turn_step[0])}   # the span, for the proxy's books
     if not _mgrclient._llm_proxy_active():
         h["Authorization"] = f"Bearer {_mgrclient.ensure_or_key()}"
     return h
@@ -691,7 +692,7 @@ def t_propose_skill(name, description, content):
     try:
         return _mgrclient._mgr(_mgrclient._manager_base(), "/api/skill-proposals",
                     {"name": name, "description": description, "content": content,
-                     "turn": _turn_id[0], "note": "proposed by the agent"}, timeout=10)
+                     "turn": _observe._turn_id[0], "note": "proposed by the agent"}, timeout=10)
     except Exception as e:
         return f"Error: {e!r}"
 
@@ -1269,82 +1270,6 @@ def init_mcp():
     return schema
 
 
-def _audit_target(name, args):
-    """The most meaningful field per tool for the audit log — never a secret value.
-    For get_secret only the name, for write NOT the content."""
-    a = args or {}
-    if name in ("http_fetch",):
-        return a.get("url", "")
-    if name == "web_search":
-        return a.get("query", "")
-    if name in ("read_file", "write_file", "list_dir", "read_pdf",
-                "remote_ls", "remote_read", "remote_write", "remote_delete"):
-        return a.get("path", "")
-    if name == "bash":
-        return (a.get("command", "") or "")[:200]
-    if name in ("get_secret", "load_skill", "memory_store", "memory_recall", "recall_tasks", "read_inbox"):
-        return a.get("name", "") or a.get("key", "") or a.get("query", "")
-    if name == "spawn_subagent":
-        return (a.get("task", "") or "")[:120]
-    if name == "create_task":
-        return (a.get("target","") + ": " + (a.get("task","") or ""))[:160]
-    return ""
-
-
-# One id per user turn: lets a trace reviewer group the tool calls of a turn
-# and line them up with the chat log. Set in run()/run_stream().
-_turn_id = [""]
-
-
-def audit(name, args, ok=True, err="", result="", ms=None):
-    """Log a tool call at the manager (per instance, on the host — survives VM
-    restarts). Best-effort: if the broker fails, the agent continues normally.
-    Carries tool, target (URL/path/query), ok, a short ERROR TEXT and a short
-    RESULT excerpt — without those a reviewer cannot tell a healthy call from
-    one that failed politely (the audit used to say ok:true while a tool
-    returned "⚠️ blocked"). NEVER secret values or full file contents."""
-    try:
-        rec = {"tool": name, "target": _audit_target(name, args), "ok": bool(ok),
-               "err": str(err)[:300], "result": str(result)[:300],
-               "turn": _turn_id[0]}
-        if ms is not None:
-            rec["ms"] = int(ms)
-        _mgrclient._mgr(_mgrclient._manager_base(), "/api/audit", rec, timeout=5)
-    except Exception:
-        pass
-
-
-# ---- traces: one turn = one span tree (turn -> LLM calls -> tool calls) -----
-# The manager stitches them together from three feeds it already had: the
-# audit (tool calls), the usage (LLM calls) and — new — a turn marker. Each
-# record carries the turn id and its duration; nothing else changes.
-_turn_step = [0]        # LLM calls so far in this turn (the span index)
-_turn_t0 = [0.0]        # monotonic start of the turn
-_turn_kind = ["chat"]
-
-
-def trace_turn(event, **kw):
-    """POST /api/trace {turn, event:start|end, kind, steps, ms, outcome}.
-    Best-effort like audit(): the manager being away must not touch a turn."""
-    try:
-        _mgrclient._mgr(_mgrclient._manager_base(), "/api/trace",
-             {"turn": _turn_id[0], "event": event, "kind": _turn_kind[0], **kw}, timeout=5)
-    except Exception:
-        pass
-
-
-def _trace_begin(kind):
-    _turn_kind[0] = kind
-    _turn_step[0] = 0
-    _turn_t0[0] = time.monotonic()
-    trace_turn("start")
-
-
-def _trace_end(outcome):
-    trace_turn("end", steps=_turn_step[0], ms=int((time.monotonic() - _turn_t0[0]) * 1000),
-               outcome=outcome)
-
-
 # ---- skills from experience -------------------------------------------------
 # Hermes' loop, with the manager's approval gate: after a long successful
 # turn one extra model call distills the way it went into a SKILL proposal
@@ -1407,7 +1332,7 @@ def _learn_skill(turn_msgs, user_text):
     try:
         return _mgrclient._mgr(_mgrclient._manager_base(), "/api/skill-proposals",
                     {"name": d["name"], "description": d["description"], "content": d["content"],
-                     "turn": _turn_id[0], "note": f"distilled after: {str(user_text)[:120]}"}, timeout=10)
+                     "turn": _observe._turn_id[0], "note": f"distilled after: {str(user_text)[:120]}"}, timeout=10)
     except Exception:
         return None
 
@@ -1415,7 +1340,7 @@ def _learn_skill(turn_msgs, user_text):
 def _maybe_learn(hist, user_text, outcome):
     """Fire the distillation in the background when the turn qualifies:
     enabled, ended well, at least SKILL_LEARN_MIN_STEPS model calls."""
-    if not SKILL_LEARN or outcome != "ok" or _turn_step[0] < SKILL_LEARN_MIN_STEPS:
+    if not SKILL_LEARN or outcome != "ok" or _observe._turn_step[0] < SKILL_LEARN_MIN_STEPS:
         return False
     if str(user_text).startswith("/"):
         return False
@@ -1423,7 +1348,7 @@ def _maybe_learn(hist, user_text, outcome):
     # per-turn cost is not invisible (its usage is booked via or_chat under this
     # turn id). SKILL_LEARN=0 in the instance config turns it off per instance.
     _config.log(f"skill-learn: distilling a skill proposal from this turn "
-        f"({_turn_step[0]} steps) — extra model call; set SKILL_LEARN=0 to disable")
+        f"({_observe._turn_step[0]} steps) — extra model call; set SKILL_LEARN=0 to disable")
     slice_ = _turn_slice(hist, user_text)
     threading.Thread(target=_learn_skill, args=(slice_, user_text), daemon=True).start()
     return True
@@ -1484,7 +1409,7 @@ def exec_tool(name, args):
     t0 = time.monotonic()
 
     def _audit(**kw):        # every exit books the call with its duration
-        audit(name, args, ms=int((time.monotonic() - t0) * 1000), **kw)
+        _observe.audit(name, args, ms=int((time.monotonic() - t0) * 1000), **kw)
     # Hook/intervention: denylist + optional HITL approval BEFORE execution.
     allow, reason = _hook_before_tool(name, args)
     if not allow:
@@ -1525,7 +1450,7 @@ def report_usage(u, ms=None, ok=True, err=""):
             "prompt_tokens": u.get("prompt_tokens") or 0,
             "completion_tokens": u.get("completion_tokens") or 0,
             "cost": u.get("cost") or 0.0,
-            "turn": _turn_id[0], "step": _turn_step[0], "ms": ms,
+            "turn": _observe._turn_id[0], "step": _observe._turn_step[0], "ms": ms,
             "ok": bool(ok), "err": str(err or "")[:400],
             "direct": bool(_config.LLAMA_ENDPOINT),     # a local model is called directly, not through the key proxy
         }).encode()
@@ -1849,7 +1774,7 @@ def _request_approval(name, args):
     block (True). Timeout/rejection -> False."""
     try:
         d = json.loads(_mgrclient._mgr(_mgrclient._manager_base(), "/api/hitl",
-                            {"tool": name, "target": _audit_target(name, args)}, timeout=8))
+                            {"tool": name, "target": _observe._audit_target(name, args)}, timeout=8))
         hid = d.get("id")
         if not hid:
             return True
@@ -1936,7 +1861,7 @@ def or_chat(messages, tools, model=None):
         _b["reasoning"] = {"effort": _config._reasoning}
     body = json.dumps(_b).encode()
     last = ""
-    _turn_step[0] += 1
+    _observe._turn_step[0] += 1
     t0 = time.monotonic()
     for attempt in range(LLM_RETRIES + 1):
         req = urllib.request.Request(_mgrclient._llm_url(), data=body, method="POST",
@@ -2404,7 +2329,7 @@ def run(user_message, deadline=0.0, kind="chat", turn=None):
             return run(ts[1], kind=kind, turn=turn)
         finally:
             _config.MAX_STEPS = saved
-    _turn_id[0] = turn or uuid.uuid4().hex[:8]
+    _observe._turn_id[0] = turn or uuid.uuid4().hex[:8]
     user_message = _expand_prompt(user_message)
     if user_message.strip() == "/reset":
         del _history[1:]
@@ -2433,13 +2358,13 @@ def run(user_message, deadline=0.0, kind="chat", turn=None):
         hist = [{"role": "system", "content": _config.SYSTEM},
                 {"role": "system", "content": _now_line()},
                 {"role": "user", "content": m}]
-        _trace_begin("fresh")
+        _observe._trace_begin("fresh")
         out = "⚠️ (no answer)"
         try:
             out = _tool_loop(hist)
             return out
         finally:
-            _trace_end(_outcome_of(out))
+            _observe._trace_end(_outcome_of(out))
             _maybe_learn(hist, m, _outcome_of(out))
     _auto_reset()
     _trim_history()
@@ -2450,14 +2375,14 @@ def run(user_message, deadline=0.0, kind="chat", turn=None):
     _recall(user_message)
     _history.append({"role": "user", "content": user_message})
     _busy[0] = True
-    _trace_begin(kind)
+    _observe._trace_begin(kind)
     out = "⚠️ (no answer)"
     try:
         out = _run_goal(_history, user_message) if _goal else _tool_loop(_history)
         return out
     finally:
         _busy[0] = False
-        _trace_end(_outcome_of(out))
+        _observe._trace_end(_outcome_of(out))
         _maybe_learn(_history, user_message, _outcome_of(out))
 
 
@@ -2506,7 +2431,7 @@ def or_chat_stream(messages, tools, on_token):
     # Only retry the connection setup (mid-stream is not sensibly retryable,
     # since tokens may already have flowed).
     r = None
-    _turn_step[0] += 1
+    _observe._turn_step[0] += 1
     _t0 = time.monotonic()
     for attempt in range(LLM_RETRIES + 1):
         req = urllib.request.Request(_mgrclient._llm_url(), data=body, method="POST",
@@ -2621,7 +2546,7 @@ def or_chat_stream(messages, tools, on_token):
 
 def run_stream(user_message, on_token, image=None, deadline=0.0, kind="stream", turn=None):
     _deadline[0] = float(deadline or 0)
-    _turn_id[0] = turn or uuid.uuid4().hex[:8]
+    _observe._turn_id[0] = turn or uuid.uuid4().hex[:8]
     """Like run(), but streams the answer tokens via on_token. Tool rounds
     produce no text; the final answer is streamed.
     image: optional base64 JPEG -> sent as vision content to OpenRouter."""
@@ -2675,7 +2600,7 @@ def run_stream(user_message, on_token, image=None, deadline=0.0, kind="stream", 
         content = user_message
     _history.append({"role": "user", "content": content})
     _busy[0] = True
-    _trace_begin(kind)
+    _observe._trace_begin(kind)
     outcome = "error"
     try:
         if _goal:
@@ -2729,7 +2654,7 @@ def run_stream(user_message, on_token, image=None, deadline=0.0, kind="stream", 
         outcome = "max_steps"
     finally:
         _busy[0] = False
-        _trace_end(outcome)
+        _observe._trace_end(outcome)
         _maybe_learn(_history, user_message, outcome)
 
 
