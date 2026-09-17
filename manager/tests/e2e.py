@@ -3432,19 +3432,19 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual((cfg2["AGENT_TOOLS"], err2), ("read_file", ""))
             # an explicit model must win over the persona's model in the VM config
             seen = []
-            old2 = m._instances.create_instance, m._instances.load_instances, m.wait_web, m._chat_post, m._vm.stop, m._instances.delete_instance
+            old2 = m._instances.create_instance, m._instances.load_instances, m._guestchat.wait_web, m._chat_post, m._vm.stop, m._instances.delete_instance
             try:
                 def create(name, tpl, cfg=None, mounts=None, internet=True):
                     seen.append(dict(cfg or {}))
                     m._instances.load_instances = lambda: [{"name": name, "template": "openrouter"}]
                     return "ok"
-                m._instances.create_instance = create; m.wait_web = lambda i, timeout=120: True
+                m._instances.create_instance = create; m._guestchat.wait_web = lambda i, timeout=120: True
                 m._chat_post = lambda i, msg, timeout=600: "r"; m._vm.stop = lambda i: None; m._instances.delete_instance = lambda n: None
                 sb = {"cfg": {"OPENROUTER_MODEL": "persona/model", "AGENT_SYSTEM": "You review."}, "internet": True}
                 m._run_ephemeral_vm("do", "explicit/model", 60, sb)
                 self.assertEqual(seen[-1]["OPENROUTER_MODEL"], "explicit/model")
             finally:
-                m._instances.create_instance, m._instances.load_instances, m.wait_web, m._chat_post, m._vm.stop, m._instances.delete_instance = old2
+                m._instances.create_instance, m._instances.load_instances, m._guestchat.wait_web, m._chat_post, m._vm.stop, m._instances.delete_instance = old2
         finally:
             m._personas.load_personas, m._skills.load_skills = old
 
@@ -3485,12 +3485,12 @@ class ManagerFunctions(unittest.TestCase):
         without internet; without a sandbox nothing changes."""
         m = self.m
         seen = []
-        old = m._instances.create_instance, m._instances.load_instances, m.wait_web, m._chat_post, m._vm.stop, m._instances.delete_instance
+        old = m._instances.create_instance, m._instances.load_instances, m._guestchat.wait_web, m._chat_post, m._vm.stop, m._instances.delete_instance
         try:
             m._instances.create_instance = lambda name, tpl, cfg=None, mounts=None, internet=True: seen.append((tpl, dict(cfg or {}), internet)) or "ok"
             m._instances.load_instances = lambda: [{"name": n, "template": "openrouter"} for n in ["x"]] if False else [{"name": seen[-1] and "task-x", "template": "openrouter"}]
             m._instances.load_instances = lambda: [{"name": next((k for k in ["any"]), ""), "template": "openrouter"}]
-            m.wait_web = lambda inst, timeout=120: True
+            m._guestchat.wait_web = lambda inst, timeout=120: True
             m._chat_post = lambda inst, message, timeout=600: "child says hi"
             m._vm.stop = lambda inst: None; m._instances.delete_instance = lambda name: None
             # load_instances must return the instance the run just created: match on prefix
@@ -3506,7 +3506,7 @@ class ManagerFunctions(unittest.TestCase):
             ok, res = m._run_ephemeral_vm("do", "google/gemini-2.5-flash", 60)
             self.assertNotIn("AGENT_TOOLS", seen[-1][1]); self.assertTrue(seen[-1][2]); self.assertEqual(seen[-1][1]["OPENROUTER_MODEL"], "google/gemini-2.5-flash")
         finally:
-            m._instances.create_instance, m._instances.load_instances, m.wait_web, m._chat_post, m._vm.stop, m._instances.delete_instance = old
+            m._instances.create_instance, m._instances.load_instances, m._guestchat.wait_web, m._chat_post, m._vm.stop, m._instances.delete_instance = old
 
     def test_proxy_books_upstream_usage(self):
         m = self.m

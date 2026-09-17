@@ -30,6 +30,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import chatui   # chat interface (/chat), lives next to this file
 
 from mgr import paths as _paths  # noqa: E402
+from mgr import guestchat as _guestchat  # noqa: E402
 from mgr import resources as _resources  # noqa: E402
 from mgr import personas as _personas  # noqa: E402
 from mgr import policy as _policy  # noqa: E402
@@ -135,7 +136,7 @@ def _run_named(instance, message, timeout=600):
     if not inst:
         return (False, f"instance '{instance}' unknown")
     if not _instances.is_running(inst):
-        if not wait_web(inst, timeout=120):
+        if not _guestchat.wait_web(inst, timeout=120):
             return (False, f"instance '{instance}' not ready")
         inst = next((i for i in _instances.load_instances() if i["name"] == instance), None)
     try:
@@ -184,7 +185,7 @@ def _run_ephemeral_vm(message, model=None, timeout=600, sandbox=None):
     if not inst:
         return (False, f"ephemeral VM failed: {msg}")
     try:
-        if not wait_web(inst, timeout=120):
+        if not _guestchat.wait_web(inst, timeout=120):
             return (False, "ephemeral VM not ready")
         return (True, _chat_post(inst, message, timeout=timeout))
     except Exception as e:
@@ -785,84 +786,6 @@ def render():
                 )
 
 
-# ---- Chat (UI under /chat, see chatui.py) ----------------------------------
-# Chattable is every instance with TRANSPORT=web: the bridge in the microVM
-# serves /api/chat (and optionally /api/chat/stream) on :8080.
-
-def web_instances():
-    """Instances you can chat with (+ running state for the UI)."""
-    return [{"name": i["name"], "running": _instances.is_running(i),
-             "description": i.get("description", "")}
-            for i in _instances.load_instances()
-            if (i.get("config") or {}).get("TRANSPORT") == "web"]
-
-
-def wait_web(inst, timeout=120):
-    """Starts the instance if needed and waits until the bridge accepts."""
-    if not _instances.is_running(inst):
-        _vm.start(inst)
-    ip = _instances.net_of(inst)["guest"]
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        try:
-            socket.create_connection((ip, _instances.WEB_GUEST_PORT), 2).close()
-            return True
-        except OSError:
-            time.sleep(1)
-    return False
-
-
-def guest_chat(inst, message, image=None, timeout=620):
-    """Non-streaming call to the bridge in the microVM."""
-    payload = {"message": message}
-    if image:
-        payload["image"] = image
-    req = urllib.request.Request(
-        f"http://{_instances.net_of(inst)['guest']}:{_instances.WEB_GUEST_PORT}/api/chat",
-        data=json.dumps(payload).encode(), method="POST",
-        headers={"Content-Type": "application/json"})
-    body = urllib.request.urlopen(req, timeout=timeout).read().decode("utf-8", "replace")
-    try:
-        return json.loads(body).get("reply", body)
-    except ValueError:
-        return body
-
-
-def guest_stream(inst, message, image, on_token, timeout=620):
-    """Streams tokens from /api/chat/stream. Bridges without streaming answer on
-    the same path with JSON — that then arrives as a single piece."""
-    payload = {"message": message}
-    if image:
-        payload["image"] = image
-    req = urllib.request.Request(
-        f"http://{_instances.net_of(inst)['guest']}:{_instances.WEB_GUEST_PORT}/api/chat/stream",
-        data=json.dumps(payload).encode(), method="POST",
-        headers={"Content-Type": "application/json"})
-    try:
-        r = urllib.request.urlopen(req, timeout=timeout)
-    except Exception:
-        on_token(guest_chat(inst, message, image, timeout))
-        return
-    if "json" in (r.headers.get("Content-Type") or ""):
-        body = r.read().decode("utf-8", "replace")
-        try:
-            on_token(json.loads(body).get("reply", body))
-        except ValueError:
-            on_token(body)
-        return
-    dec = codecs.getincrementaldecoder("utf-8")("replace")
-    while True:
-        raw = r.read(256)
-        if not raw:
-            break
-        tok = dec.decode(raw)
-        if tok:
-            on_token(tok)
-    tail = dec.decode(b"", True)
-    if tail:
-        on_token(tail)
-
-
 # ---- Routing table ---------------------------------------------------------
 # Erster Schritt weg von der if-Kette (Strangler wie beim mgr/-Paket): wer hier
 # steht, wird ueber die Tabelle zugestellt; alles andere faellt weiter durch die
@@ -1214,7 +1137,7 @@ class H(BaseHTTPRequestHandler):
 
         if not inst:
             return emit(f"⚠️ No web instance '{name}'.")
-        if not wait_web(inst):
+        if not _guestchat.wait_web(inst):
             return emit(f"⚠️ Instance '{name}' does not start (port {_instances.WEB_GUEST_PORT}).")
 
         chat_id = body.get("chat")
@@ -1229,7 +1152,7 @@ class H(BaseHTTPRequestHandler):
         else:
             guard = None
         try:
-            guest_stream(inst, msg, img, emit)
+            _guestchat.guest_stream(inst, msg, img, emit)
         except Exception as e:
             emit(f"\n⚠️ {e!r}")
         finally:
@@ -1747,7 +1670,7 @@ def _tail(h, prefix):
 @ROUTER.get("/chat", admin=True)
 def _rt_chat_page(h):
     want = _qs(h).get("i", [""])[0]
-    body = chatui.render(web_instances(), want, LOGO_INLINE).encode()
+    body = chatui.render(_guestchat.web_instances(), want, LOGO_INLINE).encode()
     h.send_response(200)
     h.send_header("Content-Type", "text/html; charset=utf-8")
     # Don't cache: otherwise the browser holds on to an old version (that
