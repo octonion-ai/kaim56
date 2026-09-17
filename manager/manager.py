@@ -43,26 +43,20 @@ import chatui   # chat interface (/chat), lives next to this file
 WEB_GUEST_PORT = 8080   # port of the web bridge in the microVM
 TERM_GUEST_PORT = 7682  # port of the webterm (browser terminal) in the microVM
 
-BASE = os.path.dirname(os.path.abspath(__file__))
+from mgr import paths as _paths  # noqa: E402
 
 # Load the mgr package early: injections (notify/sem) happen further down,
 # as soon as the respective functions are defined.
 from mgr import missions as _missions  # noqa: E402
-_missions.configure(BASE)
+_missions.configure(_paths.BASE)
 from mgr import mcp as _mcp  # noqa: E402
-_mcp.configure(BASE)
+_mcp.configure(_paths.BASE)
 from mgr import memfs as _memfs  # noqa: E402
-_memfs.configure(BASE)
+_memfs.configure(_paths.BASE)
 from mgr import hindsight as _hindsight  # noqa: E402
 _hindsight.configure(lambda: load_settings(), log=print)   # load_settings is defined further down; called lazily
 from mgr import signal as _signal_mod  # noqa: E402
-_signal_mod.configure(BASE)
-BIN = os.path.join(BASE, "bin", "firecracker")
-KERNEL = os.path.join(BASE, "bin", "vmlinux")
-INST_DIR = os.path.join(BASE, "instances")
-TEMPLATE_DIR = os.path.join(BASE, "templates")
-RUN_DIR = os.path.join(BASE, "run")
-SETTINGS_FILE = os.path.join(BASE, "settings.json")
+_signal_mod.configure(_paths.BASE)
 # Shared secrets/defaults, maintained in the config UI, which pre-fill empty
 # template parameters of the same name.
 SETTINGS_SCHEMA = [
@@ -108,8 +102,7 @@ VOICE_PORT = int(os.environ.get("VOICE_PORT", "8770"))   # voice service, loopba
 # Defaults derive from the layout the installer lays out: the manager tree
 # ($BASE/firecracker) sits next to the operator's home files, so the parent
 # of BASE is the home; nothing here names a particular user.
-HOME_DIR = os.path.dirname(BASE)
-CLAUDE_CRED_SRC = os.environ.get("CLAUDE_CRED_SRC", os.path.join(HOME_DIR, ".claude", ".credentials.json"))
+CLAUDE_CRED_SRC = os.environ.get("CLAUDE_CRED_SRC", os.path.join(_paths.HOME_DIR, ".claude", ".credentials.json"))
 GUEST_POST_PATHS = ("/api/usage", "/api/audit", "/api/task", "/api/chat-log", "/api/trace",
                     "/api/skill-proposals", "/api/sessions-search",
                     "/api/stt", "/api/tts", "/api/signal", "/api/mcp",
@@ -191,7 +184,7 @@ NEVER_PERSIST = SECRET_PARAMS | {"MCP_CONFIG"}
 # Domains/IPs/interface of this installation in ONE place, kept out via
 # .gitignore. If the file is missing, public defaults apply (example.com /
 # 1.1.1.1 / eth0) — this keeps the repo free of internal infrastructure.
-SITE_FILE = os.path.join(BASE, "site.json")
+SITE_FILE = os.path.join(_paths.BASE, "site.json")
 def load_site():
     try:
         with open(SITE_FILE) as fh:
@@ -204,10 +197,10 @@ PUBLIC_HOST = SITE.get("PUBLIC_HOST") or "example.com"
 # ── Updates: the installed version (install.sh writes VERSION from `git
 # describe`) against the newest GitHub release; the update itself is the
 # installer again, run by the oneshot unit install.sh installs alongside.
-VERSION_FILE = os.path.join(BASE, "VERSION")
+VERSION_FILE = os.path.join(_paths.BASE, "VERSION")
 UPDATE_REPO = SITE.get("UPDATE_REPO") or "uneidel/kaim56"
 UPDATE_UNIT = "kaim56-update.service"
-UPDATE_LOG = os.path.join(RUN_DIR, "update.log")
+UPDATE_LOG = os.path.join(_paths.RUN_DIR, "update.log")
 _update = {"ts": 0.0, "latest": "", "url": "", "notes": "", "error": ""}
 _update_lock = threading.Lock()
 
@@ -431,13 +424,13 @@ def auth_succeeded(key):
 # its pseudo-root, the guest mounts them by absolute path. Inside the VM the
 # agent is uid 1000; on the host every access is squashed to GUEST_USER, a
 # system user that owns nothing but these folders.
-AGENT_ROOT = os.environ.get("AGENT_ROOT", os.path.join(HOME_DIR, "agent"))
+AGENT_ROOT = os.environ.get("AGENT_ROOT", os.path.join(_paths.HOME_DIR, "agent"))
 AGENT_EXPORTS = "/etc/exports.d/agent.exports"       # the retired root export
 EXPORTS_D = "/etc/exports.d"
 FCMNT_ROOT = os.path.join(AGENT_ROOT, ".fcmnt")
 GUEST_USER = os.environ.get("GUEST_USER", "kaim56-guest")
 GUEST_UID = GUEST_GID = 1000          # until ensure_guest_user() resolved the user
-ADMIN_GID = os.stat(BASE).st_gid      # the operator's group: may read what the guests write
+ADMIN_GID = os.stat(_paths.BASE).st_gid      # the operator's group: may read what the guests write
 
 
 def ensure_guest_user():
@@ -478,7 +471,7 @@ def export_opts(ro, fsid):
     return (f"{'ro' if ro else 'rw'},sync,no_subtree_check,all_squash,"
             f"anonuid={GUEST_UID},anongid={GUEST_GID},fsid={fsid}")
 
-os.makedirs(RUN_DIR, exist_ok=True)
+os.makedirs(_paths.RUN_DIR, exist_ok=True)
 
 
 def sh(*args, check=True):
@@ -492,7 +485,7 @@ def save_instance(inst):
     script's --smoke and the operator read it. Under umask 077 a plain
     open() would leave it root-only (load_instances then fails for anyone
     but root, seen on the deployment test VM)."""
-    p = os.path.join(INST_DIR, f"{inst['name']}.json")
+    p = os.path.join(_paths.INST_DIR, f"{inst['name']}.json")
     with open(p, "w") as fh:
         json.dump(inst, fh, indent=2)
     try:
@@ -505,9 +498,9 @@ def save_instance(inst):
 
 def load_instances():
     out = []
-    for f in sorted(os.listdir(INST_DIR)) if os.path.isdir(INST_DIR) else []:
+    for f in sorted(os.listdir(_paths.INST_DIR)) if os.path.isdir(_paths.INST_DIR) else []:
         if f.endswith(".json"):
-            with open(os.path.join(INST_DIR, f)) as fh:
+            with open(os.path.join(_paths.INST_DIR, f)) as fh:
                 out.append(json.load(fh))
     return out
 
@@ -531,12 +524,12 @@ CURATED = {
 }
 
 
-MODELS_FILE = os.path.join(BASE, "models.json")
-CHANGELOG_FILE = os.path.join(BASE, "CHANGELOG.md")
-SECURITY_FILE = os.path.join(BASE, "security.json")
+MODELS_FILE = os.path.join(_paths.BASE, "models.json")
+CHANGELOG_FILE = os.path.join(_paths.BASE, "CHANGELOG.md")
+SECURITY_FILE = os.path.join(_paths.BASE, "security.json")
 
 
-_mcp.configure(BASE, load_instances)   # injection (mgr/mcp)
+_mcp.configure(_paths.BASE, load_instances)   # injection (mgr/mcp)
 
 def load_changelog():
     try:
@@ -635,7 +628,7 @@ def openrouter_models(force=False, tools_only=False, relevant_only=False):
 
 def load_settings():
     try:
-        with open(SETTINGS_FILE) as fh:
+        with open(_paths.SETTINGS_FILE) as fh:
             return json.load(fh)
     except (FileNotFoundError, ValueError):
         return {}
@@ -663,10 +656,10 @@ def save_settings(d):
     cur = load_settings()
     cur.update({k: v for k, v in d.items()
                 if isinstance(k, str) and v != SETTINGS_KEEP})
-    with open(SETTINGS_FILE, "w") as fh:
+    with open(_paths.SETTINGS_FILE, "w") as fh:
         json.dump(cur, fh, indent=2)
     try:
-        os.chmod(SETTINGS_FILE, 0o600)
+        os.chmod(_paths.SETTINGS_FILE, 0o600)
     except OSError:
         pass
     return "saved"
@@ -680,14 +673,14 @@ from mgr.signal import (signal_send, signal_recipients, hitl_create, hitl_status
 
 # ---- Security gateway: moved out to mgr/gateway.py -------------------------
 from mgr import gateway as _gateway  # noqa: E402
-_gateway.configure(BASE)
+_gateway.configure(_paths.BASE)
 from mgr.gateway import (load_gateway, save_gateway, with_gateway, gateway_on, gateway_clean, gateway_count,  # noqa: E402,F401
                          StreamGuard, strip_image_meta, _clean_unicode)
 
 
 # ---- Chat history (sync with the app) --------------------------------------
-CHATS_FILE = os.path.join(BASE, "chats.json")
-TOMBSTONES_FILE = os.path.join(BASE, "chats_tombstones.json")
+CHATS_FILE = os.path.join(_paths.BASE, "chats.json")
+TOMBSTONES_FILE = os.path.join(_paths.BASE, "chats_tombstones.json")
 TOMB_TTL_MS = 60 * 24 * 3600 * 1000   # discard deletion markers after 60 days
 
 
@@ -775,14 +768,14 @@ def wait_chats(since, timeout):
 
 # ---- Notifications: moved out to mgr/notify.py -----------------------------
 from mgr import notify as _notify  # noqa: E402
-_notify.configure(BASE)
+_notify.configure(_paths.BASE)
 from mgr.notify import (load_notifications, notify_add, notif_mark_read, notif_clear,  # noqa: E402,F401
                         wait_notifs, NOTIF_MAX, NOTIF_RATE, _notif_sent)
 _missions.notify_add = notify_add   # injection (mgr/missions)
 
 
 # ---- Inbox (watermark) — coupled to chat, stays here -----------------------
-INBOX_WM_FILE = os.path.join(BASE, "inbox_wm.json")
+INBOX_WM_FILE = os.path.join(_paths.BASE, "inbox_wm.json")
 
 
 def _inbox_wm():
@@ -912,7 +905,7 @@ def voice_session(inst_name, src, client_id="", reset=False):
 # DESC/PARAMS/REQUIRED/run). Single .py files are stored as plugins/<name>/tool.py.
 # The folder is copied onto the config disk when the instance starts and loaded
 # inside the VM (sandbox). stdlib-only.
-PLUGINS_SRC = os.path.join(BASE, "plugins")
+PLUGINS_SRC = os.path.join(_paths.BASE, "plugins")
 PLUGIN_MAX_BYTES = 5 * 1024 * 1024
 PLUGIN_BOILERPLATE = (
     "# Tool plugin for kAIm56. Convention: DESC / PARAMS / REQUIRED / run().\n"
@@ -1170,7 +1163,7 @@ def merge_chats(incoming):
 
 # ---- store: SQLite history/usage/semantics + memory -> mgr/store.py -------
 from mgr import store as _store  # noqa: E402
-_store.configure(BASE)
+_store.configure(_paths.BASE)
 from mgr.store import (HISTORY_DB, MEMORY_FILE, TASKS_FILE, EMBED_URL, _hist_lock, _hist_conn,  # noqa: E402,F401
                        usage_add, usage_summary, usage_for, usage_by_model, history_add, history_search,
                        load_tasks, save_tasks, add_task, update_task, _next_run,
@@ -1543,7 +1536,7 @@ def _orch_fire():
 _mi_sweep_ts = [0.0]
 
 
-WORKER_LOG = os.path.join(RUN_DIR, "worker.log")
+WORKER_LOG = os.path.join(_paths.RUN_DIR, "worker.log")
 
 
 def _wlog(msg):
@@ -1765,9 +1758,9 @@ def _task_worker():
 
 def load_templates():
     out = []
-    for f in sorted(os.listdir(TEMPLATE_DIR)) if os.path.isdir(TEMPLATE_DIR) else []:
+    for f in sorted(os.listdir(_paths.TEMPLATE_DIR)) if os.path.isdir(_paths.TEMPLATE_DIR) else []:
         if f.endswith(".json"):
-            with open(os.path.join(TEMPLATE_DIR, f)) as fh:
+            with open(os.path.join(_paths.TEMPLATE_DIR, f)) as fh:
                 out.append(json.load(fh))
     return out
 
@@ -1944,7 +1937,7 @@ def delete_instance(name):
     if is_running(inst):
         stop(inst)
     teardown_mounts(inst)   # safely remove any leftovers (binds/export)
-    p = os.path.join(INST_DIR, f"{name}.json")
+    p = os.path.join(_paths.INST_DIR, f"{name}.json")
     if os.path.exists(p):
         os.remove(p)
     return f"instance '{name}' deleted"
@@ -1957,7 +1950,7 @@ def net_of(inst):
 
 
 def pidfile(inst):
-    return os.path.join(RUN_DIR, f"{inst['name']}.pid")
+    return os.path.join(_paths.RUN_DIR, f"{inst['name']}.pid")
 
 
 def is_running(inst):
@@ -2425,7 +2418,7 @@ _GUEST_MOUNT_DENY = ("/bin", "/sbin", "/usr", "/lib", "/lib32", "/lib64", "/etc"
 
 
 def _protected_host_paths():
-    out = [BASE, "/etc", "/root", "/var", "/usr", "/boot"]
+    out = [_paths.BASE, "/etc", "/root", "/var", "/usr", "/boot"]
     if AGENT_SRC:
         out.append(AGENT_SRC)                       # a VM writing agent.py = code in every VM
     for home in glob.glob("/home/*"):
@@ -2527,13 +2520,13 @@ def guest_env(inst):
 def make_config_disk(inst):
     """Create a small ext4 drive with the instance config (key=value) -> vdb."""
     cfg = guest_env(inst)
-    d = os.path.join(RUN_DIR, f"{inst['name']}.cfgdir")
+    d = os.path.join(_paths.RUN_DIR, f"{inst['name']}.cfgdir")
     os.makedirs(d, exist_ok=True)
     # Put tool plugins (firecracker/plugins/*.py) on the disk too — the agent
     # loads them at start from /config/plugins. New plugin = file + stop/start.
     pdst = os.path.join(d, "plugins")
     shutil.rmtree(pdst, ignore_errors=True)
-    psrc = os.path.join(BASE, "plugins")
+    psrc = os.path.join(_paths.BASE, "plugins")
     if os.path.isdir(psrc):
         os.makedirs(pdst, exist_ok=True)
         for f0 in sorted(os.listdir(psrc)):
@@ -2552,7 +2545,7 @@ def make_config_disk(inst):
         os.chmod(root, 0o755)
         for f0 in files:
             os.chmod(os.path.join(root, f0), 0o644)
-    img = os.path.join(RUN_DIR, f"{inst['name']}.config.ext4")
+    img = os.path.join(_paths.RUN_DIR, f"{inst['name']}.config.ext4")
     mkfs_image(img, 16, "fcconfig", srcdir=d)
     return img
 
@@ -2597,7 +2590,7 @@ OVERLAY_ROOTFS = {"instances/openrouter-rootfs.ext4", "instances/claude-rootfs.e
 # it boots from the rootfs as before.
 AGENT_SRC = os.environ.get("AGENT_SRC") or SITE.get("AGENT_SRC") or ""
 HARNESS_FILES = ("agent.py", "run_agent.py", "webterm.py")
-HARNESS_IMG = os.path.join(RUN_DIR, "harness.ext4")
+HARNESS_IMG = os.path.join(_paths.RUN_DIR, "harness.ext4")
 HARNESS_ROOTFS = {"instances/openrouter-rootfs.ext4"}     # images built from AGENT_SRC
 _harness_lock = threading.Lock()
 
@@ -2640,7 +2633,7 @@ def harness_image():
             have = ""
         if have == want and os.path.exists(HARNESS_IMG):
             return HARNESS_IMG
-        d = tempfile.mkdtemp(prefix="harness-", dir=RUN_DIR)
+        d = tempfile.mkdtemp(prefix="harness-", dir=_paths.RUN_DIR)
         try:
             for p in srcs:
                 shutil.copy2(p, os.path.join(d, os.path.basename(p)))
@@ -2668,7 +2661,7 @@ def image_state(inst):
     if inst.get("rootfs") not in OVERLAY_ROOTFS or not is_running(inst):
         return False, 0, 0
     try:
-        built = os.path.getmtime(os.path.join(BASE, inst["rootfs"]))
+        built = os.path.getmtime(os.path.join(_paths.BASE, inst["rootfs"]))
         if uses_harness(inst) and os.path.exists(HARNESS_IMG):
             built = max(built, os.path.getmtime(HARNESS_IMG))   # agent code counts too
         started = os.path.getmtime(pidfile(inst))
@@ -2694,7 +2687,7 @@ def image_sweep():
         _wlog(f"image-sweep harness: {e!r}")
     for rel in sorted(OVERLAY_ROOTFS) + [HARNESS_IMG]:
         try:
-            mt = os.path.getmtime(rel if os.path.isabs(rel) else os.path.join(BASE, rel))
+            mt = os.path.getmtime(rel if os.path.isabs(rel) else os.path.join(_paths.BASE, rel))
         except OSError:
             continue
         if rel in _img_seen and mt > _img_seen[rel]:
@@ -2717,8 +2710,8 @@ UPPER_PERSIST_SIZE_MB = 4096  # persistent layer (apt/pip need room); sparse
 
 def upper_path(inst):
     if inst.get("persist_disk"):
-        return os.path.join(INST_DIR, f"{inst['name']}-upper.ext4")
-    return os.path.join(RUN_DIR, f"{inst['name']}.upper.ext4")
+        return os.path.join(_paths.INST_DIR, f"{inst['name']}-upper.ext4")
+    return os.path.join(_paths.RUN_DIR, f"{inst['name']}.upper.ext4")
 
 
 def make_upper(inst):
@@ -2740,8 +2733,8 @@ def reset_upper(name):
     if is_running(inst):
         return "error: instance is running — stop it first"
     n = 0
-    for p in (os.path.join(INST_DIR, f"{name}-upper.ext4"),
-              os.path.join(RUN_DIR, f"{name}.upper.ext4")):
+    for p in (os.path.join(_paths.INST_DIR, f"{name}-upper.ext4"),
+              os.path.join(_paths.RUN_DIR, f"{name}.upper.ext4")):
         try:
             os.remove(p); n += 1
         except OSError:
@@ -2772,8 +2765,8 @@ def private_rootfs(inst):
     template image, rootfs updates take effect as before with stop/start. State
     that should persist doesn't live here anyway, but centrally (memory.json,
     chats.json, katfs)."""
-    src = os.path.join(BASE, inst["rootfs"])
-    dst = os.path.join(RUN_DIR, f"{inst['name']}.rootfs.ext4")
+    src = os.path.join(_paths.BASE, inst["rootfs"])
+    dst = os.path.join(_paths.RUN_DIR, f"{inst['name']}.rootfs.ext4")
     tmp = dst + ".new"
     # --sparse=always: the 2-GB image carries ~550 MB; the copy should occupy
     # just as little. First .new, then rename — a half copy must never start as
@@ -2794,12 +2787,12 @@ def gen_config(inst):
             f"ip={n['guest']}::{n['host']}:{n['mask']}::eth0:off init=/init")
     overlay = inst.get("rootfs") in OVERLAY_ROOTFS
     if overlay:
-        drives = [{"drive_id": "rootfs", "path_on_host": os.path.join(BASE, inst["rootfs"]),
+        drives = [{"drive_id": "rootfs", "path_on_host": os.path.join(_paths.BASE, inst["rootfs"]),
                    "is_root_device": True, "is_read_only": True}]
     else:
         drives = [{"drive_id": "rootfs", "path_on_host": private_rootfs(inst),
                    "is_root_device": True, "is_read_only": False}]
-    cfg_disk = os.path.join(RUN_DIR, f"{inst['name']}.config.ext4")
+    cfg_disk = os.path.join(_paths.RUN_DIR, f"{inst['name']}.config.ext4")
     if os.path.exists(cfg_disk):
         drives.append({"drive_id": "config", "path_on_host": cfg_disk,
                        "is_root_device": False, "is_read_only": True})
@@ -2819,7 +2812,7 @@ def gen_config(inst):
                        "is_root_device": False, "is_read_only": False})
         boot += f" fc_upper={_vdev(drives)}"
     return {
-        "boot-source": {"kernel_image_path": KERNEL, "boot_args": boot},
+        "boot-source": {"kernel_image_path": _paths.KERNEL, "boot_args": boot},
         "drives": drives,
         "network-interfaces": [{"iface_id": "eth0", "host_dev_name": n["tap"],
                                 "guest_mac": n["mac"]}],
@@ -2835,17 +2828,17 @@ def start(inst):
     setup_tap(inst)
     setup_mounts(inst)
     make_config_disk(inst)
-    cfg = os.path.join(RUN_DIR, f"{inst['name']}.config.json")
+    cfg = os.path.join(_paths.RUN_DIR, f"{inst['name']}.config.json")
     json.dump(gen_config(inst), open(cfg, "w"))
-    sock = os.path.join(RUN_DIR, f"{inst['name']}.sock")
-    log = open(os.path.join(RUN_DIR, f"{inst['name']}.log"), "ab")
+    sock = os.path.join(_paths.RUN_DIR, f"{inst['name']}.sock")
+    log = open(os.path.join(_paths.RUN_DIR, f"{inst['name']}.log"), "ab")
     try:                                  # the operator may tail the console (root:operator, 0640)
         os.chmod(log.name, 0o640); os.chown(log.name, 0, ADMIN_GID)
     except OSError:
         pass
     if os.path.exists(sock):
         os.remove(sock)
-    p = subprocess.Popen([BIN, "--api-sock", sock, "--config-file", cfg],
+    p = subprocess.Popen([_paths.BIN, "--api-sock", sock, "--config-file", cfg],
                          stdout=log, stderr=log, start_new_session=True)
     open(pidfile(inst), "w").write(str(p.pid))
     return f"started (pid {p.pid})"
@@ -2867,14 +2860,14 @@ def stop(inst):
     # a fresh one) — just disk space, so remove it.
     for f in (f"{inst['name']}.rootfs.ext4", f"{inst['name']}.upper.ext4"):
         try:
-            os.remove(os.path.join(RUN_DIR, f))
+            os.remove(os.path.join(_paths.RUN_DIR, f))
         except OSError:
             pass
     return "stopped"
 
 
 # ---- Personas / system prompts --------------------------------------------
-PERSONAS_FILE = os.path.join(BASE, "personas.json")
+PERSONAS_FILE = os.path.join(_paths.BASE, "personas.json")
 _DEFAULT_PERSONAS = [
     {"name": "assistant",
      "prompt": "You are a helpful agent with tools (shell, files, web, MCP). "
@@ -2951,7 +2944,7 @@ def delete_persona(name):
 
 
 # ---- Skills library (expert knowledge, loaded on demand by the agent) -------
-SKILLS_FILE = os.path.join(BASE, "skills.json")
+SKILLS_FILE = os.path.join(_paths.BASE, "skills.json")
 
 
 def load_skills():
@@ -2997,7 +2990,7 @@ def delete_skill(name):
 # here, the operator approves it in the Skills tab, only then it enters the
 # catalog every agent loads from. Nothing an agent writes becomes a skill by
 # itself.
-SKILL_PROPOSALS_FILE = os.path.join(BASE, "skill_proposals.json")
+SKILL_PROPOSALS_FILE = os.path.join(_paths.BASE, "skill_proposals.json")
 PROPOSALS_MAX = 50
 _SECRETISH = re.compile(r"(sk-or-[A-Za-z0-9_-]{8,}|sk-[A-Za-z0-9]{16,}|Bearer [A-Za-z0-9._-]{16,}|hf_[A-Za-z0-9]{16,})")
 
@@ -3086,7 +3079,7 @@ def sessions_search(query, instance=None, limit=10):
 
 # ---- Playbooks + prompt templates: moved out to mgr/rules.py ---------------
 from mgr import rules as _rules  # noqa: E402
-_rules.configure(BASE)
+_rules.configure(_paths.BASE)
 from mgr.rules import (load_playbooks, pb_list, pb_add, pb_remove, PB_MAX,  # noqa: E402,F401
                        load_prompts, prompt_upsert, prompt_delete, PROMPTS_MAX)
 
@@ -3099,7 +3092,7 @@ from mgr.missions import (load_missions, mission_list, mission_start,  # noqa: E
 
 
 # ---- Secrets broker (on-demand, allowlist per template/instance) -----------
-SECRETS_FILE = os.environ.get("SECRETS_FILE", os.path.join(HOME_DIR, ".config", "kat56", "secrets.env"))
+SECRETS_FILE = os.environ.get("SECRETS_FILE", os.path.join(_paths.HOME_DIR, ".config", "kat56", "secrets.env"))
 _SECRET_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
 
 
@@ -3172,7 +3165,7 @@ def secret_delete(name):
         return f"error: {e}"
     print(f"[secrets] deleted {name}", flush=True)
     return f"{name} deleted"
-SECRET_POLICY_FILE = os.path.join(BASE, "secret-policy.json")
+SECRET_POLICY_FILE = os.path.join(_paths.BASE, "secret-policy.json")
 
 
 def load_secrets_file():
@@ -3322,14 +3315,14 @@ from mgr.katfs import (KATFS_HOST, KATFS_PORT, KATFS_BASE, KATFS_MAX_WRITE,  # n
                        KATFS_ZIP_MAX_FILES, KATFS_ZIP_MAX_BYTES)
 
 from mgr import irohgw as _irohgw  # noqa: E402
-_irohgw.configure(BASE)
+_irohgw.configure(_paths.BASE)
 from mgr.irohgw import (status as irohgw_status,  # noqa: E402,F401
                         allow_add as irohgw_allow_add, allow_remove as irohgw_allow_remove)
 
 # ---- Audit log per instance (tool calls, URLs) -----------------------------
 # Lives on the host (survives VM restarts). JSONL, one file per instance,
 # hard-capped to the last N lines.
-AUDIT_DIR = os.path.join(BASE, "audit")
+AUDIT_DIR = os.path.join(_paths.BASE, "audit")
 AUDIT_MAX_LINES = 2000
 
 
@@ -3408,7 +3401,7 @@ def effective_policy(inst):
 
 
 # mgr/mcp needs the secret functions; they are defined above by now.
-_mcp.configure(BASE, load_instances, allowed_secret_keys, secret_store)
+_mcp.configure(_paths.BASE, load_instances, allowed_secret_keys, secret_store)
 
 def audit_read(inst_name, limit=200):
     p = os.path.join(AUDIT_DIR, f"{inst_name}.jsonl")
@@ -3435,7 +3428,7 @@ from mgr.ui import PAGE  # noqa: E402
 # the navy inherits the text color so it carries in both the light and the dark
 # theme; the turquoise stays the accent.
 BRAND = "kAIm56"
-LOGO_FILE = os.path.join(BASE, "logo.svg")
+LOGO_FILE = os.path.join(_paths.BASE, "logo.svg")
 try:
     with open(LOGO_FILE) as _fh:
         LOGO_SVG = _fh.read()
@@ -3868,7 +3861,7 @@ def _rt_session(h):
         return h._json({"error": "unknown instance"}, 404)
     if len(parts) > 1 and parts[1] == "log":
         try:
-            with open(os.path.join(RUN_DIR, f"{nm}.log"), "rb") as fh:
+            with open(os.path.join(_paths.RUN_DIR, f"{nm}.log"), "rb") as fh:
                 fh.seek(0, 2); size = fh.tell(); fh.seek(max(0, size - 64 * 1024))
                 data = fh.read()
         except OSError:
@@ -6037,7 +6030,7 @@ def harden_files(base=None):
     """Chats, audit, missions, tasks, history: written by root, readable by
     root. Nothing else on the host needs them (the operator reads through
     the UI); the guests' folders keep their own owner and mode."""
-    base = base or BASE
+    base = base or _paths.BASE
     n = 0
     try:
         for f in os.listdir(base):

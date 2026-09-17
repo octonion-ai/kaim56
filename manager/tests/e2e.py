@@ -1334,8 +1334,8 @@ class ManagerFunctions(unittest.TestCase):
         tmp = tempfile.mkdtemp(prefix="e2e-tools-")
         with open(os.path.join(tmp, "toolinst.json"), "w") as fh:
             json.dump({"name": "toolinst", "template": "openrouter", "config": {}}, fh)
-        old_dir, old_load, old_run = m.INST_DIR, m.load_instances, m.is_running
-        m.INST_DIR = tmp
+        old_dir, old_load, old_run = m._paths.INST_DIR, m.load_instances, m.is_running
+        m._paths.INST_DIR = tmp
         m.load_instances = lambda: [_readj(os.path.join(tmp, "toolinst.json"))]
         m.is_running = lambda inst: False
         try:
@@ -1354,7 +1354,7 @@ class ManagerFunctions(unittest.TestCase):
             cfg3 = _readj(os.path.join(tmp, "toolinst.json"))["config"]
             self.assertEqual(cfg3["AGENT_TOOLS"], picks[0])                    # unbekannte gefiltert
         finally:
-            m.INST_DIR, m.load_instances, m.is_running = old_dir, old_load, old_run
+            m._paths.INST_DIR, m.load_instances, m.is_running = old_dir, old_load, old_run
 
     def test_plugin_zip_and_slip_guard(self):
         """A multi-file zip lands in the tool folder; a ../ path (zip-slip) must NOT
@@ -1438,16 +1438,16 @@ class ManagerFunctions(unittest.TestCase):
         inst = {"name": "e2e-switch", "config": {"OPENROUTER_MODEL": "google/gemini-2.5-flash"}}
         with open(os.path.join(tmp, "e2e-switch.json"), "w") as fh:
             json.dump(inst, fh)
-        old_dir, old_load = m.INST_DIR, m.load_instances
+        old_dir, old_load = m._paths.INST_DIR, m.load_instances
         try:
-            m.INST_DIR = tmp
+            m._paths.INST_DIR = tmp
             m.load_instances = lambda: [_readj(os.path.join(tmp, "e2e-switch.json"))]
             msg = m.set_model("e2e-switch", "orcarouter:tencent/hy3")
             cfg = _readj(os.path.join(tmp, "e2e-switch.json"))["config"]
             self.assertEqual(cfg.get("ORCAROUTER_MODEL"), "tencent/hy3")
             self.assertNotIn("OPENROUTER_MODEL", cfg)               # anderer Provider entfernt
         finally:
-            m.INST_DIR, m.load_instances = old_dir, old_load
+            m._paths.INST_DIR, m.load_instances = old_dir, old_load
 
     def test_provider_switch_ignores_free_suffix(self):
         """':free' model variants must NOT be read as a provider."""
@@ -1455,16 +1455,16 @@ class ManagerFunctions(unittest.TestCase):
         tmp = tempfile.mkdtemp(prefix="e2e-inst2-")
         with open(os.path.join(tmp, "e2e-free.json"), "w") as fh:
             json.dump({"name": "e2e-free", "config": {"OPENROUTER_MODEL": "x"}}, fh)
-        old_dir, old_load = m.INST_DIR, m.load_instances
+        old_dir, old_load = m._paths.INST_DIR, m.load_instances
         try:
-            m.INST_DIR = tmp
+            m._paths.INST_DIR = tmp
             m.load_instances = lambda: [_readj(os.path.join(tmp, "e2e-free.json"))]
             m.set_model("e2e-free", "mistralai/mistral-7b-instruct:free")
             cfg = _readj(os.path.join(tmp, "e2e-free.json"))["config"]
             self.assertEqual(cfg.get("OPENROUTER_MODEL"), "mistralai/mistral-7b-instruct:free")
             self.assertNotIn("ORCAROUTER_MODEL", cfg)
         finally:
-            m.INST_DIR, m.load_instances = old_dir, old_load
+            m._paths.INST_DIR, m.load_instances = old_dir, old_load
 
     def test_hitl_lifecycle(self):
         m = self.m
@@ -2009,9 +2009,9 @@ class ManagerFunctions(unittest.TestCase):
     def test_overlay_upper_lifecycle(self):
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-ov-")
-        old_run, old_inst = m.RUN_DIR, m.INST_DIR
+        old_run, old_inst = m._paths.RUN_DIR, m._paths.INST_DIR
         try:
-            m.RUN_DIR = tmp; m.INST_DIR = tmp
+            m._paths.RUN_DIR = tmp; m._paths.INST_DIR = tmp
             inst = {"name": "e2e-ov", "rootfs": "instances/openrouter-rootfs.ext4"}
             # Wegwerf-Upper landet in RUN_DIR
             self.assertTrue(m.upper_path(inst).startswith(tmp))
@@ -2028,7 +2028,7 @@ class ManagerFunctions(unittest.TestCase):
                 fh.seek(0); marker = fh.read(4)
             self.assertEqual(m.make_upper(inst), p)
         finally:
-            m.RUN_DIR, m.INST_DIR = old_run, old_inst
+            m._paths.RUN_DIR, m._paths.INST_DIR = old_run, old_inst
 
     def test_overlay_bootarg_in_config(self):
         m = self.m
@@ -2369,9 +2369,9 @@ class ManagerFunctions(unittest.TestCase):
         for n in ("agent.py", "run_agent.py", "webterm.py"):
             with open(os.path.join(src, n), "w") as fh:
                 fh.write(f"# {n}\n")
-        old = m.AGENT_SRC, m.HARNESS_IMG, m.RUN_DIR
+        old = m.AGENT_SRC, m.HARNESS_IMG, m._paths.RUN_DIR
         try:
-            m.AGENT_SRC, m.HARNESS_IMG, m.RUN_DIR = src, os.path.join(run, "harness.ext4"), run
+            m.AGENT_SRC, m.HARNESS_IMG, m._paths.RUN_DIR = src, os.path.join(run, "harness.ext4"), run
             img = m.harness_image()
             self.assertEqual(img, m.HARNESS_IMG)
             self.assertTrue(os.path.exists(img) and os.path.exists(img + ".src"))
@@ -2393,7 +2393,7 @@ class ManagerFunctions(unittest.TestCase):
             m.AGENT_SRC = ""
             self.assertIsNone(m.harness_image())
         finally:
-            m.AGENT_SRC, m.HARNESS_IMG, m.RUN_DIR = old
+            m.AGENT_SRC, m.HARNESS_IMG, m._paths.RUN_DIR = old
 
     def test_secret_policy_seeds_guest_readable_on_upgrade(self):
         """A policy file from before the two-rights model has no guest_readable:
@@ -2427,10 +2427,10 @@ class ManagerFunctions(unittest.TestCase):
         tmp = tempfile.mkdtemp(prefix="e2e-stale-")
         os.makedirs(os.path.join(tmp, "instances")); os.makedirs(os.path.join(tmp, "run"))
         img = os.path.join(tmp, "instances", "openrouter-rootfs.ext4")
-        old = m.BASE, m.RUN_DIR, m.is_running, m.load_instances, m.notify_add, dict(m._img_seen), m.HARNESS_IMG
+        old = m._paths.BASE, m._paths.RUN_DIR, m.is_running, m.load_instances, m.notify_add, dict(m._img_seen), m.HARNESS_IMG
         pushes = []
         try:
-            m.BASE, m.RUN_DIR = tmp, os.path.join(tmp, "run")
+            m._paths.BASE, m._paths.RUN_DIR = tmp, os.path.join(tmp, "run")
             m.HARNESS_IMG = os.path.join(tmp, "run", "harness.ext4")    # none built here: rootfs only
             m.is_running = lambda i: i["name"] != "off"
             insts = [{"name": "old", "rootfs": "instances/openrouter-rootfs.ext4"},
@@ -2453,7 +2453,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertIn("old, fresh", pushes[0][2])
             self.assertEqual(m.image_sweep(), [])           # once per rebuild
         finally:
-            m.BASE, m.RUN_DIR, m.is_running, m.load_instances, m.notify_add = old[:5]
+            m._paths.BASE, m._paths.RUN_DIR, m.is_running, m.load_instances, m.notify_add = old[:5]
             m._img_seen.clear(); m._img_seen.update(old[5]); m.HARNESS_IMG = old[6]
 
     def test_guest_config_carries_host_timezone(self):
@@ -3081,8 +3081,8 @@ class ManagerFunctions(unittest.TestCase):
             self.assertIn("not a directory", m.mount_error(os.path.join(tmp, "nope"), "/x"))
             self.assertIn("must be under", m.mount_error("/srv", "/x"))
             m.BROWSE_ROOTS = ("/",)
-            self.assertIn("would expose", m.mount_error(m.BASE, "/x"))
-            self.assertIn("would expose", m.mount_error(os.path.dirname(m.BASE), "/x"))   # contains it
+            self.assertIn("would expose", m.mount_error(m._paths.BASE, "/x"))
+            self.assertIn("would expose", m.mount_error(os.path.dirname(m._paths.BASE), "/x"))   # contains it
             for bad in ("/bin", "/usr/local", "/etc/x", "/app", "/harness", "/config", "/memory", "/", "rel", "/a/../etc"):
                 self.assertTrue(m.mount_error(share, bad), bad)
             m.BROWSE_ROOTS = (tmp,)
@@ -3101,9 +3101,9 @@ class ManagerFunctions(unittest.TestCase):
     def test_set_mounts_refuses_bad_folders(self):
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-setm-")
-        old = m.load_instances, m.BROWSE_ROOTS, m.INST_DIR
+        old = m.load_instances, m.BROWSE_ROOTS, m._paths.INST_DIR
         try:
-            m.INST_DIR = tmp
+            m._paths.INST_DIR = tmp
             m.BROWSE_ROOTS = (tmp,)
             inst = {"name": "vm1", "index": 4, "template": "openrouter", "rootfs": "instances/openrouter-rootfs.ext4", "mounts": []}
             m.load_instances = lambda: [inst]
@@ -3112,7 +3112,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertTrue(r.startswith("error:"), r)
             self.assertFalse(os.path.exists(os.path.join(tmp, "vm1.json")))     # nothing saved
         finally:
-            m.load_instances, m.BROWSE_ROOTS, m.INST_DIR = old
+            m.load_instances, m.BROWSE_ROOTS, m._paths.INST_DIR = old
 
     def test_js_json_and_download_name_and_rate(self):
         m = self.m
@@ -3627,9 +3627,9 @@ class ManagerFunctions(unittest.TestCase):
         and the operator read it, and harden_files relaxes old ones."""
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-instjson-")
-        old = m.INST_DIR, os.umask(0o077)
+        old = m._paths.INST_DIR, os.umask(0o077)
         try:
-            m.INST_DIR = tmp
+            m._paths.INST_DIR = tmp
             m.save_instance({"name": "x", "template": "openrouter"})
             self.assertEqual(os.stat(os.path.join(tmp, "x.json")).st_mode & 0o777, 0o640)
             self.assertEqual(m.load_instances()[0]["name"], "x")
@@ -3638,7 +3638,7 @@ class ManagerFunctions(unittest.TestCase):
             m.harden_files(tmp)
             self.assertEqual(os.stat(os.path.join(tmp, "instances", "x.json")).st_mode & 0o777, 0o640)
         finally:
-            m.INST_DIR = old[0]; os.umask(old[1])
+            m._paths.INST_DIR = old[0]; os.umask(old[1])
 
     def test_harden_files_makes_state_private(self):
         m = self.m
@@ -3664,9 +3664,9 @@ class ManagerFunctions(unittest.TestCase):
         if not shutil.which("mkfs.ext4", path="/usr/sbin:/sbin:" + os.environ.get("PATH", "")):
             self.skipTest("mkfs.ext4 not available")
         tmp = tempfile.mkdtemp(prefix="e2e-cfgdisk-")
-        old = m.RUN_DIR, None, os.umask(0o077)
+        old = m._paths.RUN_DIR, None, os.umask(0o077)
         try:
-            m.RUN_DIR = tmp
+            m._paths.RUN_DIR = tmp
             inst = {"name": "vm1", "index": 5, "template": "openrouter", "rootfs": "instances/openrouter-rootfs.ext4", "config": {}}
             m.make_config_disk(inst)
             d = os.path.join(tmp, "vm1.cfgdir")
@@ -3676,7 +3676,7 @@ class ManagerFunctions(unittest.TestCase):
                 for x in dirs:
                     self.assertEqual(os.stat(os.path.join(root, x)).st_mode & 0o777, 0o755, x)
         finally:
-            m.RUN_DIR = old[0]
+            m._paths.RUN_DIR = old[0]
             os.umask(old[2])
 
     def test_notify_route_rejects_empty(self):
@@ -3973,14 +3973,14 @@ class ManagerFunctions(unittest.TestCase):
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-session-")
         old = (m.load_instances, m.is_running, m.pidfile, m.load_settings, m.secret_store, m.load_secret_policy,
-               m.load_mcps, m.load_skills, m.RUN_DIR, m.instance_by_ip, m.PW, st.HISTORY_DB, m.image_state)
+               m.load_mcps, m.load_skills, m._paths.RUN_DIR, m.instance_by_ip, m.PW, st.HISTORY_DB, m.image_state)
         try:
             inst = {"name": "vm1", "index": 3, "template": "openrouter", "rootfs": "instances/openrouter-rootfs.ext4",
                     "config": {"OPENROUTER_MODEL": "x/y", "MCP_SERVERS": "caldav,homeassistant"}}
             m.load_instances = lambda: [inst]
             m.is_running = lambda i: True
             m.image_state = lambda i: (False, 0, 0)
-            m.RUN_DIR = tmp; st.HISTORY_DB = os.path.join(tmp, "history.db")
+            m._paths.RUN_DIR = tmp; st.HISTORY_DB = os.path.join(tmp, "history.db")
             pf = os.path.join(tmp, "vm1.pid"); open(pf, "w").write("1"); os.utime(pf, (time.time() - 7500,) * 2)
             m.pidfile = lambda i: pf
             with open(os.path.join(tmp, "vm1.log"), "w") as fh:
@@ -4016,7 +4016,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertNotIn("commands", m.session_info(cl))                       # the / picker lists them
         finally:
             (m.load_instances, m.is_running, m.pidfile, m.load_settings, m.secret_store, m.load_secret_policy,
-             m.load_mcps, m.load_skills, m.RUN_DIR, m.instance_by_ip, m.PW, st.HISTORY_DB, m.image_state) = old
+             m.load_mcps, m.load_skills, m._paths.RUN_DIR, m.instance_by_ip, m.PW, st.HISTORY_DB, m.image_state) = old
 
     def test_chat_page_carries_panel_and_search(self):
         """The rendered chat page has the session panel, the search bar and
