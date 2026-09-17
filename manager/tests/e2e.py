@@ -392,20 +392,20 @@ class AgentLogic(unittest.TestCase):
     # --- Context-Offloader --------------------------------------------------
     def test_offload_roundtrip(self):
         big = "X" * 20000
-        out = self.a._finalize_output("http_fetch", big)
+        out = self.a._offload._finalize_output("http_fetch", big)
         self.assertLess(len(out), len(big))
         self.assertIn('offload_read(id="', out)
         import re
         oid = re.search(r'id="([^"]+)"', out).group(1)
-        back = self.a.t_offload_read(id=oid, offset=0, length=25000)
+        back = self.a._offload.t_offload_read(id=oid, offset=0, length=25000)
         self.assertIn("XXXX", back)
         self.assertGreaterEqual(len(back), 19000)
 
     def test_offload_small_passthrough(self):
-        self.assertEqual(self.a._finalize_output("bash", "kurz"), "kurz")
+        self.assertEqual(self.a._offload._finalize_output("bash", "kurz"), "kurz")
 
     def test_offload_read_missing(self):
-        self.assertIn("not found", self.a.t_offload_read(id="gibtsnicht"))
+        self.assertIn("not found", self.a._offload.t_offload_read(id="gibtsnicht"))
 
     def test_offload_read_always_enabled(self):
         old = self.a._TOOL_ALLOW
@@ -504,30 +504,30 @@ class AgentLogic(unittest.TestCase):
         a = self.a
         rows = [{"id": i, "name": f"row {i}", "value": i * 3.14} for i in range(500)]
         out = __import__("json").dumps({"total": 500, "rows": rows})
-        assert len(out) > a.OFFLOAD_MIN, "test payload must trigger offloading"
-        got = a._finalize_output("http_fetch", out)
+        assert len(out) > a._offload.OFFLOAD_MIN, "test payload must trigger offloading"
+        got = a._offload._finalize_output("http_fetch", out)
         self.assertIn("[JSON structure]", got)
         self.assertIn("rows", got)                     # the key survives
         self.assertIn("500 items", got)                # the count survives
         self.assertIn("offload_read", got)             # the full text is reachable
-        self.assertLess(len(got), a.OFFLOAD_PREVIEW + 400)
+        self.assertLess(len(got), a._offload.OFFLOAD_PREVIEW + 400)
 
     def test_offload_preview_folds_logs_and_keeps_errors(self):
         a = self.a
         noise = "GET /health 200 0.001s"
         lines = [noise] * 800 + ["ERROR: db connection refused"] + [noise] * 800
         out = "\n".join(lines)
-        assert len(out) > a.OFFLOAD_MIN
-        got = a._finalize_output("bash", out)
+        assert len(out) > a._offload.OFFLOAD_MIN
+        got = a._offload._finalize_output("bash", out)
         self.assertIn("repeats ×800", got)             # duplicates folded
         self.assertIn("ERROR: db connection refused", got)   # the problem survives
         self.assertIn("1601 lines", got)
-        self.assertLess(len(got), a.OFFLOAD_PREVIEW + 400)
+        self.assertLess(len(got), a._offload.OFFLOAD_PREVIEW + 400)
 
     def test_offload_preview_plain_text_stays_head_slice(self):
         a = self.a
         out = ("word " * 20000).strip()
-        got = a._finalize_output("read_file", out)
+        got = a._offload._finalize_output("read_file", out)
         self.assertTrue(got.startswith("word word"))
         self.assertIn("offload_read", got)
 
