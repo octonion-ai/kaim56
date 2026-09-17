@@ -34,6 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import chatui   # chat interface (/chat), lives next to this file
 
 from mgr import paths as _paths  # noqa: E402
+from mgr import policy as _policy  # noqa: E402
 from mgr import skills as _skills  # noqa: E402
 from mgr import chats as _chats  # noqa: E402
 from mgr import netfw as _netfw  # noqa: E402
@@ -186,7 +187,7 @@ def sandbox_config(caller, sandbox):
         want = list(SANDBOX_DEFAULT_TOOLS)
     cfg = {}
     if want:
-        unknown = sorted(set(want) - AGENT_TOOL_NAMES)
+        unknown = sorted(set(want) - _policy.AGENT_TOOL_NAMES)
         if unknown:
             return {}, True, f"unknown tools: {', '.join(unknown)}"
         if caller_tools is not None:
@@ -654,54 +655,6 @@ def _task_worker():
                 _util._wlog(f"image-sweep failed: {e!r}")
 
 
-AGENT_TOOLS_CATALOG = [
-    {"name": "bash", "desc": "Run shell commands in the workspace"},
-    {"name": "read_file", "desc": "Read a file"},
-    {"name": "write_file", "desc": "Write a file"},
-    {"name": "write_xlsx", "desc": "Write a spreadsheet (.xlsx) into the workspace"},
-    {"name": "write_docx", "desc": "Write a Word document (.docx) into the workspace"},
-    {"name": "list_dir", "desc": "List a directory"},
-    {"name": "offload_read", "desc": "Re-read offloaded (truncated) tool output"},
-    {"name": "http_fetch", "desc": "Fetch a URL (HTTP)"},
-    {"name": "read_pdf", "desc": "Extract PDF text (file or URL)"},
-    {"name": "web_search", "desc": "Web search (DuckDuckGo) — needs internet"},
-    {"name": "spawn_subagent", "desc": "Start an ephemeral subagent"},
-    {"name": "create_task", "desc": "Queue a task (capable instance or ephemeral)"},
-    {"name": "read_inbox", "desc": "Read new user messages (Signal/app/web)"},
-    {"name": "list_tasks", "desc": "List running/scheduled tasks with IDs"},
-    {"name": "delete_task", "desc": "Delete a running/scheduled task by ID"},
-    {"name": "edit_task", "desc": "Change a task's message/schedule by ID"},
-    {"name": "mission_start", "desc": "Create a mission: goal + steps (orchestrator only)"},
-    {"name": "missions", "desc": "List open missions with status (orchestrator only)"},
-    {"name": "mission_update", "desc": "Advance a mission step (orchestrator only)"},
-    {"name": "mission_finish", "desc": "Complete a mission (orchestrator only)"},
-    {"name": "send_signal", "desc": "Send a Signal message to the user (allowed numbers only)"},
-    {"name": "notify", "desc": "Push notification to app + web manager (title + text)"},
-    {"name": "ha_control", "desc": "Turn a Home Assistant device/area on or off by spoken name (matches + auto-learns aliases)"},
-    {"name": "ha_learn_alias", "desc": "Teach Home Assistant a spoken-name alias for an entity (STT mishears names)"},
-    {"name": "oracle", "desc": "Second opinion before risky actions (challenges assumptions, never acts)"},
-    {"name": "list_agents", "desc": "Available agents + capabilities (routing)"},
-    {"name": "recall_tasks", "desc": "Query earlier tasks/results (institutional knowledge)"},
-    {"name": "list_skills", "desc": "List available skills"},
-    {"name": "search_sessions", "desc": "Full-text search over earlier chats and task results"},
-    {"name": "propose_skill", "desc": "Propose a reusable procedure as a skill (waits for approval)"},
-    {"name": "load_skill", "desc": "Load a skill into the context"},
-    {"name": "memory_store", "desc": "Remember a value permanently"},
-    {"name": "memory_recall", "desc": "Retrieve a remembered value"},
-    {"name": "memory_reflect", "desc": "Ask the second memory (Hindsight) a question over everything it has seen"},
-    {"name": "playbook_add", "desc": "Record a permanent rule/playbook (always applies)"},
-    {"name": "playbooks", "desc": "List playbooks (fixed rules)"},
-    {"name": "playbook_forget", "desc": "Remove a playbook by ID"},
-    {"name": "remote_ls", "desc": "List a katfs share"},
-    {"name": "remote_read", "desc": "Read a katfs file"},
-    {"name": "remote_write", "desc": "Write a katfs file"},
-    {"name": "remote_delete", "desc": "Delete a katfs file/folder"},
-    {"name": "list_secrets", "desc": "Show granted secret names"},
-    {"name": "get_secret", "desc": "Fetch a granted secret"},
-]
-AGENT_TOOL_NAMES = {t["name"] for t in AGENT_TOOLS_CATALOG}
-
-
 def create_instance(name, template, config=None, mounts=None, internet=True):
     name = "".join(c for c in name if c.isalnum() or c in "-_").lower()
     if not name:
@@ -743,9 +696,9 @@ def set_instance_tools(name, tools):
     inst = next((i for i in _instances.load_instances() if i["name"] == name), None)
     if not inst:
         return "unknown"
-    sel = [t for t in (tools or []) if t in AGENT_TOOL_NAMES]
+    sel = [t for t in (tools or []) if t in _policy.AGENT_TOOL_NAMES]
     cfg = inst.setdefault("config", {})
-    if sel and set(sel) != AGENT_TOOL_NAMES:
+    if sel and set(sel) != _policy.AGENT_TOOL_NAMES:
         cfg["AGENT_TOOLS"] = ",".join(sorted(sel))
     else:
         cfg.pop("AGENT_TOOLS", None)
@@ -1168,7 +1121,7 @@ def upsert_persona(name, prompt, tools=None, model=None):
     else:
         tl = [t.strip() for t in tools if str(t).strip()] if isinstance(tools, (list, tuple)) else \
              [t.strip() for t in str(tools).split(",") if t.strip()]
-        keep = [t for t in tl if t in AGENT_TOOL_NAMES]
+        keep = [t for t in tl if t in _policy.AGENT_TOOL_NAMES]
         if keep:
             ent["tools"] = keep
     if model is None:
@@ -1228,7 +1181,7 @@ def effective_policy(inst):
         "internet": inst.get("internet", True),
         "model": model,
         "tools_all": tools_allowed is None,
-        "tools": tools_allowed if tools_allowed is not None else [t["name"] for t in AGENT_TOOLS_CATALOG],
+        "tools": tools_allowed if tools_allowed is not None else [t["name"] for t in _policy.AGENT_TOOLS_CATALOG],
         "secrets": sorted(_secrets.allowed_secret_keys(inst)),
         "mcps": mcps,
         "katfs_share": cfg.get("KATFS_SHARE", ""),
@@ -2578,7 +2531,7 @@ def _rt_mcp_call(h):
 # ---- agents, tasks, missions, playbooks, memory (guest-scoped) --------------
 @ROUTER.get("/api/agent-tools")
 def _rt_agent_tools(h):
-    return h._json({"tools": AGENT_TOOLS_CATALOG})
+    return h._json({"tools": _policy.AGENT_TOOLS_CATALOG})
 
 
 @ROUTER.get("/api/agents")
@@ -3539,8 +3492,8 @@ def _rt_instance_create(h):
     if mcps:
         cfg["MCP_SERVERS"] = ",".join(mcps)
     # Tool allowlist only as a real subset (all selected -> omit = all).
-    tools = [t for t in (body.get("tools") or []) if t in AGENT_TOOL_NAMES]
-    if tools and set(tools) != AGENT_TOOL_NAMES:
+    tools = [t for t in (body.get("tools") or []) if t in _policy.AGENT_TOOL_NAMES]
+    if tools and set(tools) != _policy.AGENT_TOOL_NAMES:
         cfg["AGENT_TOOLS"] = ",".join(tools)
     return create_instance(body.get("name", ""), body.get("template", ""), cfg,
                            body.get("mounts", []), internet=body.get("internet", True))

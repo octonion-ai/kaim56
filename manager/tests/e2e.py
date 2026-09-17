@@ -1339,13 +1339,13 @@ class ManagerFunctions(unittest.TestCase):
         m._instances.load_instances = lambda: [_readj(os.path.join(tmp, "toolinst.json"))]
         m._instances.is_running = lambda inst: False
         try:
-            picks = sorted(m.AGENT_TOOL_NAMES)[:3]
+            picks = sorted(m._policy.AGENT_TOOL_NAMES)[:3]
             m.set_instance_tools("toolinst", picks)
             cfg = _readj(os.path.join(tmp, "toolinst.json"))["config"]
             self.assertEqual(set(cfg["AGENT_TOOLS"].split(",")), set(picks))   # Subset bleibt
             self.assertFalse(m.effective_policy(_readj(os.path.join(tmp, "toolinst.json")))["tools_all"])
 
-            m.set_instance_tools("toolinst", list(m.AGENT_TOOL_NAMES))
+            m.set_instance_tools("toolinst", list(m._policy.AGENT_TOOL_NAMES))
             cfg2 = _readj(os.path.join(tmp, "toolinst.json"))["config"]
             self.assertNotIn("AGENT_TOOLS", cfg2)                              # alle -> Feld raus
             self.assertTrue(m.effective_policy(_readj(os.path.join(tmp, "toolinst.json")))["tools_all"])
@@ -1981,7 +1981,7 @@ class ManagerFunctions(unittest.TestCase):
                   {"CLAUDE_WORKDIR": tempfile.mkdtemp(prefix="e2e-cat-"),
                    "OPENROUTER_API_KEY": "dummy"})
         agent_tools = set(a.BUILTIN.keys())
-        catalog = set(m.AGENT_TOOL_NAMES)
+        catalog = set(m._policy.AGENT_TOOL_NAMES)
         missing_in_catalog = agent_tools - catalog
         self.assertFalse(missing_in_catalog,
                          f"tools in the agent but not in the manager catalog: {sorted(missing_in_catalog)}")
