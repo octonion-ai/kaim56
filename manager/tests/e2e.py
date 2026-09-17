@@ -1294,9 +1294,9 @@ class ManagerFunctions(unittest.TestCase):
         host's VS Code (code-server deep link: folder + payload openFile with
         the remote authority). Without CODE_URL/CODE_ROOT: no link, no crash."""
         m = self.m
-        old = m.CODE_URL, m.CODE_ROOT
+        old = m._settings.CODE_URL, m._settings.CODE_ROOT
         try:
-            m.CODE_URL, m.CODE_ROOT = "http://192.168.0.10:8443/", "/home/coder/firecracker"
+            m._settings.CODE_URL, m._settings.CODE_ROOT = "http://192.168.0.10:8443/", "/home/coder/firecracker"
             u = m.plugin_code_link("folder", "greeter", "lib/h.py")
             q = urllib.parse.parse_qs(urllib.parse.urlsplit(u).query)
             self.assertTrue(u.startswith("http://192.168.0.10:8443/?"))
@@ -1306,7 +1306,7 @@ class ManagerFunctions(unittest.TestCase):
             u1 = m.plugin_code_link("file", "dice", "dice.py")
             self.assertIn("/home/coder/firecracker/plugins/dice.py", json.loads(
                 urllib.parse.parse_qs(urllib.parse.urlsplit(u1).query)["payload"][0])[0][1])
-            m.CODE_ROOT = ""
+            m._settings.CODE_ROOT = ""
             self.assertEqual(m.plugin_code_link("folder", "greeter", "tool.py"), "")
             # list_plugins carries the links per file
             tmp = tempfile.mkdtemp(prefix="e2e-pluglink-")
@@ -1315,13 +1315,13 @@ class ManagerFunctions(unittest.TestCase):
             try:
                 m.plugin_write_py("foo", "DESC='x'\n")
                 self.assertEqual(m.list_plugins()[0]["links"], {"tool.py": ""})
-                m.CODE_ROOT = "/home/coder/firecracker"
+                m._settings.CODE_ROOT = "/home/coder/firecracker"
                 self.assertIn("plugins/foo/tool.py", urllib.parse.unquote(
                     m.list_plugins()[0]["links"]["tool.py"]))
             finally:
                 m.PLUGINS_SRC, m.PLUGIN_PINS_FILE = old_src, old_pins
         finally:
-            m.CODE_URL, m.CODE_ROOT = old
+            m._settings.CODE_URL, m._settings.CODE_ROOT = old
         # the old in-manager viewer route is gone: guests never had it, admins use VS Code
         self.assertNotIn(("GET", "/api/plugins/"), {(meth, p) for meth, _, p, _ in m.ROUTER.inventory()})
 
@@ -1959,17 +1959,17 @@ class ManagerFunctions(unittest.TestCase):
         """The editor link is host-specific (site.json CODE_URL): set = link in
         the footer, unset = no placeholder left over in the page."""
         m = self.m
-        old = m.CODE_URL
+        old = m._settings.CODE_URL
         try:
-            m.CODE_URL = "http://example.invalid:8443/"
+            m._settings.CODE_URL = "http://example.invalid:8443/"
             page = m.render()
             self.assertIn('href="http://example.invalid:8443/"', page)
             self.assertIn('rel="noopener noreferrer"', page)
-            m.CODE_URL = ""
+            m._settings.CODE_URL = ""
             page = m.render()
             self.assertNotIn("__CODE_LINK__", page)
         finally:
-            m.CODE_URL = old
+            m._settings.CODE_URL = old
 
     def test_tool_catalog_matches_agent(self):
         """Drift guard: every tool in the agent (BUILTIN) must be in the manager
@@ -2003,8 +2003,8 @@ class ManagerFunctions(unittest.TestCase):
         self.assertEqual(set(m.LLM_PROXY_UPSTREAMS), {"openrouter", "orcarouter"})
         for url, keyname in m.LLM_PROXY_UPSTREAMS.values():
             self.assertTrue(url.endswith("/chat/completions"), url)
-            self.assertIn(keyname, m.SECRET_PARAMS)
-        self.assertIn("LLM_KEY_PROXY", [s["key"] for s in m.SETTINGS_SCHEMA])
+            self.assertIn(keyname, m._settings.SECRET_PARAMS)
+        self.assertIn("LLM_KEY_PROXY", [s["key"] for s in m._settings.SETTINGS_SCHEMA])
 
     def test_overlay_upper_lifecycle(self):
         m = self.m
@@ -2400,24 +2400,24 @@ class ManagerFunctions(unittest.TestCase):
         it is seeded from the releases once (nothing breaks on upgrade) and
         the file is rewritten with the list; a file that has the key is left alone."""
         m = self.m
-        tmp = tempfile.mkdtemp(prefix="e2e-secpol2-"); oldf, olds = m.SECRET_POLICY_FILE, m.load_settings
+        tmp = tempfile.mkdtemp(prefix="e2e-secpol2-"); oldf, olds = m.SECRET_POLICY_FILE, m._settings.load_settings
         try:
             m.SECRET_POLICY_FILE = os.path.join(tmp, "p.json")
             legacy = {"by_template": {"openrouter": ["OPENROUTER_API_KEY"]},
                       "by_instance": {"hass": ["HA_TOKEN", "OPENROUTER_API_KEY"]}}
             with open(m.SECRET_POLICY_FILE, "w") as fh:
                 json.dump(legacy, fh)
-            m.load_settings = lambda: {}
+            m._settings.load_settings = lambda: {}
             self.assertEqual(m.load_secret_policy()["guest_readable"], ["HA_TOKEN", "OPENROUTER_API_KEY"])
             self.assertEqual(json.load(open(m.SECRET_POLICY_FILE))["guest_readable"], ["HA_TOKEN", "OPENROUTER_API_KEY"])
             with open(m.SECRET_POLICY_FILE, "w") as fh:
                 json.dump(legacy, fh)
-            m.load_settings = lambda: {"LLM_KEY_PROXY": "1"}       # proxy on: the LLM key stays on the host
+            m._settings.load_settings = lambda: {"LLM_KEY_PROXY": "1"}       # proxy on: the LLM key stays on the host
             self.assertEqual(m.load_secret_policy()["guest_readable"], ["HA_TOKEN"])
             m.save_secret_policy({"by_template": {"openrouter": ["OPENROUTER_API_KEY"]}, "by_instance": {}, "guest_readable": []})
             self.assertEqual(m.load_secret_policy()["guest_readable"], [])          # an explicit empty list stays
         finally:
-            m.SECRET_POLICY_FILE, m.load_settings = oldf, olds
+            m.SECRET_POLICY_FILE, m._settings.load_settings = oldf, olds
 
     def test_stale_image_detection_and_rebuild_push(self):
         """A running VM started before its base image was rebuilt is 'stale':
@@ -3128,19 +3128,19 @@ class ManagerFunctions(unittest.TestCase):
         """Key proxy on: the agent's figures are ignored — except a local model
         (LLAMA_ENDPOINT) called directly, whose report is flagged `direct`."""
         m = self.m
-        old = m.load_settings
+        old = m._settings.load_settings
         try:
-            m.load_settings = lambda: {"LLM_KEY_PROXY": "1"}
+            m._settings.load_settings = lambda: {"LLM_KEY_PROXY": "1"}
             llama = {"name": "u", "config": {"LLAMA_ENDPOINT": "http://10.0.0.5:8080/"}}
             self.assertTrue(m.usage_report_accepted(llama, {"direct": True}))
             self.assertFalse(m.usage_report_accepted(llama, {}))                       # old agent: not flagged
             self.assertFalse(m.usage_report_accepted({"name": "o", "config": {}}, {"direct": True}))  # proxied instance
             self.assertTrue(m.usage_report_accepted({"name": "c", "template": "claude", "config": {}}, {"direct": True}))  # claude = direct
             self.assertFalse(m.usage_report_accepted({"name": "c", "template": "claude", "config": {}}, {}))               # old bridge: not flagged
-            m.load_settings = lambda: {"LLM_KEY_PROXY": ""}
+            m._settings.load_settings = lambda: {"LLM_KEY_PROXY": ""}
             self.assertTrue(m.usage_report_accepted({"name": "o", "config": {}}, {}))
         finally:
-            m.load_settings = old
+            m._settings.load_settings = old
 
     def test_hindsight_retains_user_turn_only(self):
         """A-1: the passive chat capture keeps the USER turn, never the agent's
@@ -3177,7 +3177,7 @@ class ManagerFunctions(unittest.TestCase):
         import mgr.hindsight as hs
         m = self.m
         calls = []
-        old = hs._settings, hs._call, m.sem_search, m.load_settings
+        old = hs._settings, hs._call, m.sem_search, m._settings.load_settings
         try:
             hs.configure(lambda: {}, log=lambda *a, **k: None)
             self.assertFalse(hs.enabled()); self.assertFalse(hs.retain("vm1", "x")); self.assertEqual(hs.recall("vm1", "q"), [])
@@ -3200,8 +3200,8 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual(hs.reflect("vm1", "how does he commute?"), "He commutes by bike.")
             self.assertEqual(hs.bank("a/b c"), "a-b-c")
             # merged into the manager's memory search, semantic first, no duplicates
-            m.load_settings = lambda: {"HINDSIGHT_URL": "http://127.0.0.1:1/"}
-            m._hindsight.configure(m.load_settings, log=lambda *a, **k: None); m._hindsight._call = fake
+            m._settings.load_settings = lambda: {"HINDSIGHT_URL": "http://127.0.0.1:1/"}
+            m._hindsight.configure(m._settings.load_settings, log=lambda *a, **k: None); m._hindsight._call = fake
             m.sem_search = lambda inst, q, k=5: [{"score": 0.5, "text": "likes radio"}]
             h = self._post_handler("/api/memory-search", "10.0.0.9", json.dumps({"instance": "vm1", "query": "commute"}).encode())
             m.instance_by_ip = lambda ip: None
@@ -3214,7 +3214,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertFalse(hs.retain("vm1", "x", wait=True)); self.assertEqual(hs.recall("vm1", "q"), [])
             self.assertIn("error", hs.reflect("vm1", "q")); self.assertFalse(hs.health()[0])
         finally:
-            hs._settings, hs._call, m.sem_search, m.load_settings = old
+            hs._settings, hs._call, m.sem_search, m._settings.load_settings = old
 
     def test_internet_off_is_an_explicit_reject(self):
         """internet=False must not depend on the FORWARD policy: the tap gets
@@ -3744,7 +3744,7 @@ class ManagerFunctions(unittest.TestCase):
         import sqlite3
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-trace-")
-        old = st.HISTORY_DB, m.AUDIT_DIR, m.instance_by_ip, m.load_settings, list(st._migrated)
+        old = st.HISTORY_DB, m.AUDIT_DIR, m.instance_by_ip, m._settings.load_settings, list(st._migrated)
         try:
             st.HISTORY_DB = os.path.join(tmp, "history.db")
             m.AUDIT_DIR = os.path.join(tmp, "audit")
@@ -3756,7 +3756,7 @@ class ManagerFunctions(unittest.TestCase):
             st._migrated[0] = False
             inst = {"name": "vm1", "index": 3, "template": "openrouter", "config": {}}
             m.instance_by_ip = lambda ip: inst if ip == "172.30.3.2" else None
-            m.load_settings = lambda: {}                    # proxy off: the agent reports usage
+            m._settings.load_settings = lambda: {}                    # proxy off: the agent reports usage
             def post(path, body):
                 h = self._post_handler(path, "172.30.3.2", json.dumps(body).encode()); h.do_POST()
                 return self._status(h)
@@ -3799,7 +3799,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual(st.usage_for("vm1")["calls"], 3)          # the old row still counts
             self.assertEqual(st.turns_prune(30), 0)
         finally:
-            st.HISTORY_DB, m.AUDIT_DIR, m.instance_by_ip, m.load_settings = old[:4]
+            st.HISTORY_DB, m.AUDIT_DIR, m.instance_by_ip, m._settings.load_settings = old[:4]
             st._migrated[0] = old[4][0]
 
     def test_instance_proxy_forwards_the_turn_header(self):
@@ -3972,7 +3972,7 @@ class ManagerFunctions(unittest.TestCase):
         import mgr.store as st
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-session-")
-        old = (m.load_instances, m.is_running, m.pidfile, m.load_settings, m.secret_store, m.load_secret_policy,
+        old = (m.load_instances, m.is_running, m.pidfile, m._settings.load_settings, m.secret_store, m.load_secret_policy,
                m.load_mcps, m.load_skills, m._paths.RUN_DIR, m.instance_by_ip, m.PW, st.HISTORY_DB, m.image_state)
         try:
             inst = {"name": "vm1", "index": 3, "template": "openrouter", "rootfs": "instances/openrouter-rootfs.ext4",
@@ -3985,7 +3985,7 @@ class ManagerFunctions(unittest.TestCase):
             m.pidfile = lambda i: pf
             with open(os.path.join(tmp, "vm1.log"), "w") as fh:
                 fh.write("[init] harness from /dev/vdc\nagent ready\n")
-            m.load_settings = lambda: {"LLM_KEY_PROXY": "1", "BRAVE_API_KEY": "b"}
+            m._settings.load_settings = lambda: {"LLM_KEY_PROXY": "1", "BRAVE_API_KEY": "b"}
             m.secret_store = lambda: {"CALDAV_PASSWORD": "s3cret", "HA_TOKEN": "t"}
             m.load_secret_policy = lambda: {"by_template": {}, "by_instance": {"vm1": ["HA_TOKEN"]}, "guest_readable": []}
             m.load_mcps = lambda: [{"name": "caldav", "command": "c", "env": {"CALDAV_PASSWORD": "${CALDAV_PASSWORD}"}},
@@ -4015,7 +4015,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertRegex(m.session_info(cl)["login"], r"^(ok · valid \d+h \d+m|expired on the host.*|missing \(log in on the host\))$")
             self.assertNotIn("commands", m.session_info(cl))                       # the / picker lists them
         finally:
-            (m.load_instances, m.is_running, m.pidfile, m.load_settings, m.secret_store, m.load_secret_policy,
+            (m.load_instances, m.is_running, m.pidfile, m._settings.load_settings, m.secret_store, m.load_secret_policy,
              m.load_mcps, m.load_skills, m._paths.RUN_DIR, m.instance_by_ip, m.PW, st.HISTORY_DB, m.image_state) = old
 
     def test_chat_page_carries_panel_and_search(self):
@@ -4034,17 +4034,17 @@ class ManagerFunctions(unittest.TestCase):
         credential is replaced by the placeholder before the page embeds it;
         the placeholder never overwrites the stored value on save."""
         m = self.m
-        old = m.load_settings
+        old = m._settings.load_settings
         try:
-            m.load_settings = lambda: {"OPENROUTER_API_KEY": "sk-or-x", "HF_TOKEN": "hf_abc", "MY_PASSWORD": "p",
+            m._settings.load_settings = lambda: {"OPENROUTER_API_KEY": "sk-or-x", "HF_TOKEN": "hf_abc", "MY_PASSWORD": "p",
                                        "BRAVE_API_KEY": "b", "SIGNAL_NUMBER": "+49", "TTS_VOICE": "de-thorsten-high", "EMPTY_KEY": ""}
-            ui = m.settings_for_ui()
-            self.assertEqual({k: v for k, v in ui.items() if v == m.SETTINGS_KEEP},
-                             {k: m.SETTINGS_KEEP for k in ("OPENROUTER_API_KEY", "HF_TOKEN", "MY_PASSWORD", "BRAVE_API_KEY")})
+            ui = m._settings.settings_for_ui()
+            self.assertEqual({k: v for k, v in ui.items() if v == m._settings.SETTINGS_KEEP},
+                             {k: m._settings.SETTINGS_KEEP for k in ("OPENROUTER_API_KEY", "HF_TOKEN", "MY_PASSWORD", "BRAVE_API_KEY")})
             self.assertEqual((ui["SIGNAL_NUMBER"], ui["TTS_VOICE"], ui["EMPTY_KEY"]), ("+49", "de-thorsten-high", ""))
             self.assertNotIn("hf_abc", json.dumps(ui))
         finally:
-            m.load_settings = old
+            m._settings.load_settings = old
 
     def test_secret_store_edit_from_the_ui(self):
         """Values are added, replaced and deleted in the store file through
@@ -4052,13 +4052,13 @@ class ManagerFunctions(unittest.TestCase):
         file stays 0600, values never come back through /api/secret-keys."""
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-secstore-")
-        old = m.SECRETS_FILE, m.load_settings, m.instance_by_ip, m.PW
+        old = m.SECRETS_FILE, m._settings.load_settings, m.instance_by_ip, m.PW
         try:
             m.SECRETS_FILE = os.path.join(tmp, "secrets.env")
             with open(m.SECRETS_FILE, "w") as fh:
                 fh.write("# my secrets\nHA_TOKEN=old\nMRMUSIC_TOKEN=m\n")
             os.chmod(m.SECRETS_FILE, 0o600)
-            m.load_settings = lambda: {"OPENROUTER_API_KEY": "sk"}
+            m._settings.load_settings = lambda: {"OPENROUTER_API_KEY": "sk"}
             self.assertEqual(m.secret_set("CALDAV_PASSWORD", "p4ss"), "CALDAV_PASSWORD added")
             self.assertEqual(m.secret_set("HA_TOKEN", "new"), "HA_TOKEN replaced")
             self.assertIn("invalid name", m.secret_set("bad-name", "x"))
@@ -4084,7 +4084,7 @@ class ManagerFunctions(unittest.TestCase):
             h = self._post_handler("/api/secret-store", "172.30.3.2", b'{"name": "X_KEY", "value": "v"}'); h.do_POST()
             self.assertEqual(self._status(h), 403)                                       # guests: never
         finally:
-            m.SECRETS_FILE, m.load_settings, m.instance_by_ip, m.PW = old
+            m.SECRETS_FILE, m._settings.load_settings, m.instance_by_ip, m.PW = old
 
     def test_guest_get_denylist_covers_ui_proxy_and_terminal(self):
         """GET /i/<other>/term opened the shell of every other VM — only POST

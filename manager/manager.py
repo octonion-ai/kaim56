@@ -44,6 +44,7 @@ WEB_GUEST_PORT = 8080   # port of the web bridge in the microVM
 TERM_GUEST_PORT = 7682  # port of the webterm (browser terminal) in the microVM
 
 from mgr import paths as _paths  # noqa: E402
+from mgr import settings as _settings  # noqa: E402
 
 # Load the mgr package early: injections (notify/sem) happen further down,
 # as soon as the respective functions are defined.
@@ -54,39 +55,9 @@ _mcp.configure(_paths.BASE)
 from mgr import memfs as _memfs  # noqa: E402
 _memfs.configure(_paths.BASE)
 from mgr import hindsight as _hindsight  # noqa: E402
-_hindsight.configure(lambda: load_settings(), log=print)   # load_settings is defined further down; called lazily
+_hindsight.configure(lambda: _settings.load_settings(), log=print)   # load_settings is defined further down; called lazily
 from mgr import signal as _signal_mod  # noqa: E402
 _signal_mod.configure(_paths.BASE)
-# Shared secrets/defaults, maintained in the config UI, which pre-fill empty
-# template parameters of the same name.
-SETTINGS_SCHEMA = [
-    {"key": "OPENROUTER_API_KEY", "label": "OpenRouter API key"},
-    {"key": "BRAVE_API_KEY", "label": "Brave Search API key (web search for the agents; free tier at brave.com/search/api)"},
-    {"key": "ANTHROPIC_API_KEY", "label": "Anthropic API key"},
-    {"key": "OPENAI_API_KEY", "label": "OpenAI API key"},
-    {"key": "ORCAROUTER_API_KEY", "label": "OrcaRouter API key (sk-orca-…)"},
-    {"key": "ORCAROUTER_URL", "label": "OrcaRouter base URL (blank = https://api.orcarouter.ai/v1; set only when self-hosting OrcaRouter-Lite)"},
-    {"key": "SIGNAL_NUMBER", "label": "Signal bot number"},
-    {"key": "ALLOWED_SENDERS", "label": "Allowed Signal number(s) — who may command the bots and receive its messages; several separated by commas, international format: +4917…, +4915…"},
-    {"key": "SIGNAL_API", "label": "Signal REST API URL"},
-    {"key": "LLAMA_ENDPOINT", "label": "llama.cpp endpoint (OpenAI-compatible base URL, e.g. http://10.0.0.50:8080/v1)"},
-    {"key": "LLAMA_API_KEY", "label": "llama.cpp API key (optional, only if --api-key is set)"},
-    {"key": "HINDSIGHT_URL", "label": "Hindsight memory server — optional second memory (facts from every turn, recall + reflect); blank = off, e.g. http://127.0.0.1:8888"},
-    {"key": "LLM_KEY_PROXY", "label": "LLM key injection proxy (1 = keys stay on the host, VMs proxy through the manager)", "options": [
-        {"value": "", "label": "— off (agent fetches key via broker) —"},
-        {"value": "1", "label": "on — keys never leave the host"}]},
-    {"key": "TTS_VOICE", "label": "TTS voice (Piper)", "options": [
-        {"value": "", "label": "— container default —"},
-        {"value": "de-thorsten-high", "label": "German · Thorsten (high)"},
-        {"value": "de-thorsten-medium", "label": "German · Thorsten (medium, faster)"},
-        {"value": "de-eva_k-x_low", "label": "German · Eva K (x_low, fastest)"},
-        {"value": "en-amy-medium", "label": "English · Amy (medium)"}]},
-    {"key": "TTS_SPEED", "label": "TTS speed (0.5 slow … 2.0 fast, empty = 1.0)"},
-]
-# These values NEVER end up in instances/<name>.json and never on the microVM's
-# config disk. The agent fetches them at runtime via the secret broker
-# (/api/secret/<name>, guest identified by source IP, allowlist per policy).
-SECRET_PARAMS = {"OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "LLAMA_API_KEY", "ORCAROUTER_API_KEY"}
 # Write routes that an agent VM IS ALLOWED to use. Everything else is
 # administration and belongs to the admin. Without this allowlist a
 # compromised VM could reach the host filesystem via /api/instances/<n>/mounts
@@ -95,7 +66,6 @@ SECRET_PARAMS = {"OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "L
 # the tool gating and the egress rules would then be moot.
 # An allowlist instead of individual checks: a new route is then closed by
 # default, not open by default.
-VOICE_PORT = int(os.environ.get("VOICE_PORT", "8770"))   # voice service, loopback
 # Subscription login of the claude template: the user's credential on the host.
 # The manager runs as root and may read the 0600 file; the guest fetches it at
 # boot via /api/claude-credentials (claude template only, by source IP).
@@ -171,34 +141,11 @@ LLM_PROXY_UPSTREAMS = {
     "openrouter": ("https://openrouter.ai/api/v1/chat/completions", "OPENROUTER_API_KEY"),
     "orcarouter": ("https://api.orcarouter.ai/v1/chat/completions", "ORCAROUTER_API_KEY"),
 }
-# Configured secrets never leave the manager in plain text — the UI gets this
-# marker and sends it back unchanged on save, where it is discarded. A genuinely
-# empty value still deletes the entry.
-SETTINGS_KEEP = "__unchanged__"
-# MCP_CONFIG carried the substituted secrets in plain text (e.g. the HA bearer
-# token). Instead MCP_SERVERS is stored — only the catalog names; the agent
-# fetches the values at runtime via /api/mcp-config.
-NEVER_PERSIST = SECRET_PARAMS | {"MCP_CONFIG"}
-
-# ---- Site config (site.json): non-secret, host-specific values ----
-# Domains/IPs/interface of this installation in ONE place, kept out via
-# .gitignore. If the file is missing, public defaults apply (example.com /
-# 1.1.1.1 / eth0) — this keeps the repo free of internal infrastructure.
-SITE_FILE = os.path.join(_paths.BASE, "site.json")
-def load_site():
-    try:
-        with open(SITE_FILE) as fh:
-            return json.load(fh)
-    except (FileNotFoundError, ValueError):
-        return {}
-SITE = load_site()
-PUBLIC_HOST = SITE.get("PUBLIC_HOST") or "example.com"
-
 # ── Updates: the installed version (install.sh writes VERSION from `git
 # describe`) against the newest GitHub release; the update itself is the
 # installer again, run by the oneshot unit install.sh installs alongside.
 VERSION_FILE = os.path.join(_paths.BASE, "VERSION")
-UPDATE_REPO = SITE.get("UPDATE_REPO") or "uneidel/kaim56"
+UPDATE_REPO = _settings.SITE.get("UPDATE_REPO") or "uneidel/kaim56"
 UPDATE_UNIT = "kaim56-update.service"
 UPDATE_LOG = os.path.join(_paths.RUN_DIR, "update.log")
 _update = {"ts": 0.0, "latest": "", "url": "", "notes": "", "error": ""}
@@ -282,16 +229,6 @@ def update_start():
         return f"error: {r.stderr.strip() or r.returncode}"
     print(f"[update] started {UPDATE_UNIT}", flush=True)
     return "update started — the manager restarts when the installer is done"
-SIGNAL_HOST = SITE.get("SIGNAL_HOST") or "signal-api.example.com"
-# Editor on the host (code-server/openvscode). Only a LINK in the footer, no
-# embedding: the manager runs behind HTTPS, the editor usually on plain HTTP in
-# the LAN — an iframe would be blocked as mixed content. Empty = no link.
-CODE_URL = SITE.get("CODE_URL") or ""
-# Where THIS directory (BASE) is mounted inside the editor container — with it
-# the Plugins tab links straight to a tool's file in VS Code instead of
-# showing the source itself. Empty = names only.
-CODE_ROOT = SITE.get("CODE_ROOT") or ""
-
 POOL = "172.30.0.0/16"
 
 _trusted_cache = {"ts": 0.0, "hosts": set()}
@@ -303,8 +240,8 @@ def trusted_hosts():
     site.json TRUSTED_HOSTS for a reverse proxy under another name."""
     now = time.time()
     if now - _trusted_cache["ts"] > 60:
-        hosts = {PUBLIC_HOST, "localhost", "127.0.0.1", "::1"}
-        hosts.update(str(x) for x in (SITE.get("TRUSTED_HOSTS") or []) if x)
+        hosts = {_settings.PUBLIC_HOST, "localhost", "127.0.0.1", "::1"}
+        hosts.update(str(x) for x in (_settings.SITE.get("TRUSTED_HOSTS") or []) if x)
         try:
             r = subprocess.run(["ip", "-4", "-o", "addr", "show"], capture_output=True, text=True, timeout=5)
             hosts.update(re.findall(r"inet (\d+\.\d+\.\d+\.\d+)", r.stdout))
@@ -343,7 +280,7 @@ def _pick_hostif():
     points nowhere — the microVMs then reach neither DNS nor the LLM, and nothing
     logs an error. That's why a configured name only counts if the interface
     really exists; otherwise the default route wins."""
-    want = os.environ.get("HOSTIF") or SITE.get("HOSTIF") or ""
+    want = os.environ.get("HOSTIF") or _settings.SITE.get("HOSTIF") or ""
     if want and os.path.exists(f"/sys/class/net/{want}"):
         return want
     auto = _uplink_iface()
@@ -624,45 +561,6 @@ def openrouter_models(force=False, tools_only=False, relevant_only=False):
         cur = load_curated()
         data = [m for m in data if m["id"] in cur]
     return data
-
-
-def load_settings():
-    try:
-        with open(_paths.SETTINGS_FILE) as fh:
-            return json.load(fh)
-    except (FileNotFoundError, ValueError):
-        return {}
-
-
-_SECRET_NAME = re.compile(r"(KEY|TOKEN|SECRET|PASS|PASSWORD)$")
-
-
-def is_secret_setting(key):
-    """A setting whose value must never reach the browser: the known key
-    params and anything named like a credential (a stray HF_TOKEN in the
-    file was embedded raw into the admin page once)."""
-    return key in SECRET_PARAMS or bool(_SECRET_NAME.search(str(key).upper()))
-
-
-def settings_for_ui():
-    d = dict(load_settings())
-    for k in list(d):
-        if is_secret_setting(k) and d[k]:
-            d[k] = SETTINGS_KEEP
-    return d
-
-
-def save_settings(d):
-    cur = load_settings()
-    cur.update({k: v for k, v in d.items()
-                if isinstance(k, str) and v != SETTINGS_KEEP})
-    with open(_paths.SETTINGS_FILE, "w") as fh:
-        json.dump(cur, fh, indent=2)
-    try:
-        os.chmod(_paths.SETTINGS_FILE, 0o600)
-    except OSError:
-        pass
-    return "saved"
 
 
 # ---- Signal (send/HITL/receive): moved out to mgr/signal.py ---------------
@@ -998,14 +896,14 @@ def plugin_code_link(kind, name, rel):
     `?folder=<CODE_ROOT>&payload=[["openFile","vscode-remote://<authority>/<path>"]]`
     — the workbench reads `openFile` from the payload, and code-server's remote
     authority is its own host:port. Needs CODE_URL and CODE_ROOT; else ''."""
-    if not (CODE_URL and CODE_ROOT):
+    if not (_settings.CODE_URL and _settings.CODE_ROOT):
         return ""
-    u = urllib.parse.urlsplit(CODE_URL)
-    base = CODE_ROOT.rstrip("/") + "/plugins/"
+    u = urllib.parse.urlsplit(_settings.CODE_URL)
+    base = _settings.CODE_ROOT.rstrip("/") + "/plugins/"
     path = base + (name + "/" + rel if kind == "folder" else rel)
     payload = json.dumps([["openFile", f"vscode-remote://{u.netloc}{path}"]],
                          separators=(",", ":"))
-    q = urllib.parse.urlencode({"folder": CODE_ROOT.rstrip("/"), "payload": payload})
+    q = urllib.parse.urlencode({"folder": _settings.CODE_ROOT.rstrip("/"), "payload": payload})
     return urllib.parse.urlunsplit((u.scheme, u.netloc, "/", q, ""))
 
 
@@ -1510,7 +1408,7 @@ def orchestrator_ping():
 
 
 # Supply the signal module with its cross-references (all now defined).
-_signal_mod.load_settings = load_settings
+_signal_mod.load_settings = _settings.load_settings
 _signal_mod.chat_log_append = chat_log_append
 _signal_mod.orchestrator_ping = orchestrator_ping
 
@@ -1836,11 +1734,11 @@ def create_instance(name, template, config=None, mounts=None, internet=True):
     # empty values pre-filled from the shared settings
     cfg = {p["key"]: p.get("default", "") for p in tpl.get("params", [])}
     cfg.update({k: v for k, v in (config or {}).items() if v != ""})
-    settings = load_settings()
+    settings = _settings.load_settings()
     for k in list(cfg):
         if cfg[k] == "" and settings.get(k):
             cfg[k] = settings[k]
-    for k in NEVER_PERSIST:
+    for k in _settings.NEVER_PERSIST:
         cfg.pop(k, None)
     inst = {"name": name, "index": next_index(), "vcpus": tpl.get("vcpus", 2),
             "mem_mib": tpl.get("mem_mib", 1024), "rootfs": tpl["rootfs"],
@@ -2126,7 +2024,7 @@ def setup_tap(inst):
 # the MCPs listed in the instance's MCP_SERVERS, and the guests' DNS.
 # DNS for the guests (ends up in resolv.conf via guest-init). Site-specific —
 # set it via env on other installations; 1.1.1.1 works everywhere.
-GUEST_DNS = os.environ.get("GUEST_DNS") or SITE.get("GUEST_DNS") or "1.1.1.1"
+GUEST_DNS = os.environ.get("GUEST_DNS") or _settings.SITE.get("GUEST_DNS") or "1.1.1.1"
 _PRIVATE_NETS = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
                  "100.64.0.0/10", "169.254.0.0/16")     # CGNAT/Tailscale, link-local too
 
@@ -2495,7 +2393,7 @@ def guest_env(inst):
     cfg = dict(inst.get("config", {}))
     # Second guard: older instance JSONs may still contain a key/MCP_CONFIG;
     # they still must not reach the disk.
-    for k in NEVER_PERSIST:
+    for k in _settings.NEVER_PERSIST:
         cfg.pop(k, None)
     # A minimal VM init does not have /usr/local/bin in PATH -> inject it so
     # claude/fabric are found (guest-init sources the config disk).
@@ -2512,7 +2410,7 @@ def guest_env(inst):
     # manager instead of directly to the router — so the VM never sees an LLM key
     # (not even via the secret broker). The switch lives in the shared settings
     # so that ALL instances are switched over consistently.
-    if load_settings().get("LLM_KEY_PROXY") == "1":
+    if _settings.load_settings().get("LLM_KEY_PROXY") == "1":
         cfg["KEY_PROXY"] = "1"
     return cfg
 
@@ -2588,7 +2486,7 @@ OVERLAY_ROOTFS = {"instances/openrouter-rootfs.ext4", "instances/claude-rootfs.e
 # restart — no docker build, no 2 GB image. The guest mounts it at /harness
 # (boot arg fc_harness=/dev/vdX) and prefers it over /app; without the drive
 # it boots from the rootfs as before.
-AGENT_SRC = os.environ.get("AGENT_SRC") or SITE.get("AGENT_SRC") or ""
+AGENT_SRC = os.environ.get("AGENT_SRC") or _settings.SITE.get("AGENT_SRC") or ""
 HARNESS_FILES = ("agent.py", "run_agent.py", "webterm.py")
 HARNESS_IMG = os.path.join(_paths.RUN_DIR, "harness.ext4")
 HARNESS_ROOTFS = {"instances/openrouter-rootfs.ext4"}     # images built from AGENT_SRC
@@ -3189,8 +3087,8 @@ def secret_store():
     longer flow into the instance config, the broker has to deliver them. The
     store wins on a name collision."""
     out = dict(load_secrets_file())
-    for k, v in load_settings().items():
-        if k in SECRET_PARAMS and v and not out.get(k):
+    for k, v in _settings.load_settings().items():
+        if k in _settings.SECRET_PARAMS and v and not out.get(k):
             out[k] = v
     return out
 
@@ -3207,7 +3105,7 @@ def load_secret_policy():
                 seed = sorted({k for grp in ("by_template", "by_instance")
                                for v in (p.get(grp) or {}).values() if isinstance(v, list)
                                for k in v if isinstance(k, str)})
-                if (load_settings().get("LLM_KEY_PROXY") or "") == "1":
+                if (_settings.load_settings().get("LLM_KEY_PROXY") or "") == "1":
                     seed = [k for k in seed if k not in {kn for _, kn in LLM_PROXY_UPSTREAMS.values()}]
                 p["guest_readable"] = seed
                 save_secret_policy(p)
@@ -3285,7 +3183,7 @@ from mgr.mcp import (MCP_HUB, MCP_CATALOG_FILE, load_mcps, save_mcps, upsert_mcp
 # The picker exists to choose folders for guest mounts — it has no business
 # mapping /etc or /root. Admin auth still applies; this bounds what a stolen
 # admin password can enumerate.
-BROWSE_ROOTS = tuple((SITE.get("BROWSE_ROOTS") or ["/home", "/srv", "/mnt", "/media"]))
+BROWSE_ROOTS = tuple((_settings.SITE.get("BROWSE_ROOTS") or ["/home", "/srv", "/mnt", "/media"]))
 
 
 def list_dirs(path, show_hidden=False):
@@ -3585,8 +3483,8 @@ def render():
                 .replace("__ROWS__", rows or empty)
                 .replace("__TPLS__", tpls or "<option>no templates</option>")
                 .replace("__TPLJSON__", js_json(load_templates()))
-                .replace("__SETTINGS__", js_json(settings_for_ui()))
-                .replace("__SETTINGS_SCHEMA__", js_json(settings_schema()))
+                .replace("__SETTINGS__", js_json(_settings.settings_for_ui()))
+                .replace("__SETTINGS_SCHEMA__", js_json(_settings.settings_schema()))
                 .replace("__PERSONAS__", js_json(load_personas(), ensure_ascii=False))
                 # Only name + description into the page: with an imported
                 # catalog the contents are ~1 MB, and the UI needs them only
@@ -3595,11 +3493,11 @@ def render():
                     [{"name": x.get("name", ""), "description": x.get("description", "")}
                      for x in load_skills()], ensure_ascii=False))
                 .replace("__HOSTIF__", HOSTIF).replace("__POOL__", POOL)
-                .replace("__PUBLIC_HOST__", PUBLIC_HOST)
-                .replace("__SIGNAL_HOST__", SIGNAL_HOST)
+                .replace("__PUBLIC_HOST__", _settings.PUBLIC_HOST)
+                .replace("__SIGNAL_HOST__", _settings.SIGNAL_HOST)
                 .replace("__CODE_LINK__",
-                         f'<a href="{html.escape(CODE_URL, quote=True)}" target="_blank" '
-                         f'rel="noopener noreferrer">VS&nbsp;Code</a>' if CODE_URL else "")
+                         f'<a href="{html.escape(_settings.CODE_URL, quote=True)}" target="_blank" '
+                         f'rel="noopener noreferrer">VS&nbsp;Code</a>' if _settings.CODE_URL else "")
                 .replace("__HOME__", os.path.expanduser(
                     "~" + (os.environ.get("SUDO_USER") or "")))
                 )
@@ -3749,7 +3647,7 @@ from mgr import saddler as _saddler_mod  # noqa: E402
 _saddler_mod.configure(AUDIT_DIR, HISTORY_DB)
 
 from mgr import websearch as _websearch_mod  # noqa: E402
-_websearch_mod.configure(lambda key: (load_settings().get(key) or ""))
+_websearch_mod.configure(lambda key: (_settings.load_settings().get(key) or ""))
 
 
 def _ha_ws_target():
@@ -3813,7 +3711,7 @@ def session_info(inst):
         started = 0
     if tpl == "claude":
         login = claude_login_state()
-    elif (load_settings().get("LLM_KEY_PROXY") or "") == "1":
+    elif (_settings.load_settings().get("LLM_KEY_PROXY") or "") == "1":
         login = "key proxy"
     else:
         keyname = "ORCAROUTER_API_KEY" if tpl in ("orcarouter", "llama") else "OPENROUTER_API_KEY"
@@ -3833,7 +3731,7 @@ def session_info(inst):
     platform = [
         {"name": "Memory", "state": (f"{notes} notes · {sem} semantic" if (notes or sem) else "empty")
                             + (" · hindsight" if _hindsight.enabled() else ""), "ok": True},
-        {"name": "Web search", "state": "reachable" if (load_settings().get("BRAVE_API_KEY") or "") else "DuckDuckGo fallback", "ok": True},
+        {"name": "Web search", "state": "reachable" if (_settings.load_settings().get("BRAVE_API_KEY") or "") else "DuckDuckGo fallback", "ok": True},
         {"name": "Skills", "state": f"{len(load_skills())} in catalog", "ok": True},
         {"name": "Traces", "state": f"{len(turns_read(name, limit=50))} recent turns", "ok": True},
     ]
@@ -3870,34 +3768,9 @@ def _rt_session(h):
     return h._json(session_info(inst))
 
 
-_VOICE_LABELS = {"de-thorsten-high": "German · Thorsten (high)", "de-thorsten-medium": "German · Thorsten (medium, faster)",
-                 "de-eva_k-x_low": "German · Eva K (x_low, fastest)", "en-amy-medium": "English · Amy (medium)"}
-
-
-def settings_schema():
-    """The settings form's schema; the TTS voice list is whatever the voice
-    container actually has installed (a voice added to the image showed up
-    in the health line but not in the dropdown), the static list is the
-    fallback while the container is down."""
-    out = []
-    for s in SETTINGS_SCHEMA:
-        if s["key"] == "TTS_VOICE":
-            try:
-                with urllib.request.urlopen(f"http://127.0.0.1:{VOICE_PORT}/health", timeout=2) as r:
-                    d = json.loads(r.read())
-                voices = [v for v in d.get("voices", []) if isinstance(v, str)]
-                if voices:
-                    s = {**s, "options": [{"value": "", "label": f"— container default ({d.get('voice', '?')}) —"}]
-                         + [{"value": v, "label": _VOICE_LABELS.get(v, v)} for v in voices]}
-            except Exception:
-                pass
-        out.append(s)
-    return out
-
-
 @ROUTER.get("/api/settings", admin=True)
 def _rt_settings(h):
-    return json.dumps(settings_for_ui()).encode(), "application/json"
+    return json.dumps(_settings.settings_for_ui()).encode(), "application/json"
 
 
 # What TTS should NOT read: tool status lines ("🔧 ha_control …"), think blocks,
@@ -4118,7 +3991,7 @@ def _rt_iroh_status(h):
 @ROUTER.get("/api/voice-health")
 def _rt_voice_health(h):
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{VOICE_PORT}/health", timeout=5) as r:
+        with urllib.request.urlopen(f"http://127.0.0.1:{_settings.VOICE_PORT}/health", timeout=5) as r:
             out = r.read()
     except Exception as e:
         out = json.dumps({"ready": False, "error": str(e)}).encode()
@@ -4578,7 +4451,7 @@ class H(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(out)))
             self.end_headers(); self.wfile.write(out); return
         url, keyname = LLM_PROXY_UPSTREAMS[backend]
-        st = load_settings()
+        st = _settings.load_settings()
         # Self-hosted OrcaRouter-Lite: the shared base URL applies to the proxy
         # too — otherwise the detour would suddenly run against the cloud while
         # direct mode talks to the own server.
@@ -4608,7 +4481,7 @@ class H(BaseHTTPRequestHandler):
         req = urllib.request.Request(url, data=payload, method="POST", headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {key}",
-            "HTTP-Referer": f"https://{PUBLIC_HOST}",
+            "HTTP-Referer": f"https://{_settings.PUBLIC_HOST}",
             "X-Title": "kat56-agent"})
         try:
             r = urllib.request.urlopen(req, timeout=600)
@@ -5184,7 +5057,7 @@ def usage_report_accepted(inst, body):
     the proxy's — except for a model the instance calls DIRECTLY, not through
     the proxy: a local model (LLAMA_ENDPOINT) or a claude-template instance
     (Claude Code on the host subscription). Their own report is the only one."""
-    if (load_settings().get("LLM_KEY_PROXY") or "") != "1":
+    if (_settings.load_settings().get("LLM_KEY_PROXY") or "") != "1":
         return True
     if not body.get("direct"):
         return False
@@ -5359,7 +5232,7 @@ def _rt_voice(h):
         try:
             b = json.loads(payload or b"{}")
             b["text"] = speakable_text(b.get("text", ""))
-            st = load_settings()
+            st = _settings.load_settings()
             if st.get("TTS_VOICE") and not b.get("voice"):
                 b["voice"] = st["TTS_VOICE"]
             if st.get("TTS_SPEED") and not b.get("speed"):
@@ -5368,7 +5241,7 @@ def _rt_voice(h):
         except (ValueError, TypeError):
             pass
     try:
-        req = urllib.request.Request(f"http://127.0.0.1:{VOICE_PORT}{p[len('/api'):]}", data=payload,
+        req = urllib.request.Request(f"http://127.0.0.1:{_settings.VOICE_PORT}{p[len('/api'):]}", data=payload,
                                      method="POST", headers={"Content-Type": h.headers.get(
                                          "Content-Type", "application/octet-stream")})
         with urllib.request.urlopen(req, timeout=180) as r:
@@ -5658,7 +5531,7 @@ def _rt_plugins_manage(h):
 
 @_msg_route("POST", "/api/settings")
 def _rt_settings_save(h):
-    return save_settings(h._body())
+    return _settings.save_settings(h._body())
 
 
 @_msg_route("POST", "/api/security")
@@ -5891,7 +5764,7 @@ def _set_config_key(name, key, val):
     inst = next((i for i in load_instances() if i["name"] == name), None)
     if not inst:
         return "unknown"
-    if not re.fullmatch(r"[A-Z][A-Z0-9_]{1,40}", key) or key in NEVER_PERSIST:
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]{1,40}", key) or key in _settings.NEVER_PERSIST:
         return f"error: key '{key}' not allowed"
     if key == "MCP_SERVERS" and mcp_servers_error(val):
         return "error: " + mcp_servers_error(val)
@@ -6014,7 +5887,7 @@ def migrate_secrets_out_of_instances():
     config disk. Runs as root, who owns the files."""
     for inst in load_instances():
         cfg = inst.get("config") or {}
-        hit = [k for k in SECRET_PARAMS if k in cfg]
+        hit = [k for k in _settings.SECRET_PARAMS if k in cfg]
         if not hit:
             continue
         for k in hit:
