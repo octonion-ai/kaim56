@@ -220,14 +220,14 @@ class AgentLogic(unittest.TestCase):
             on_token("done"); return {"role": "assistant", "content": "done"}
         def fake_exec(name, args):
             _t.sleep(0.15); return "ok"
-        saved = (a._llm.or_chat_stream, a._tools.exec_tool, a._config.HEARTBEAT_SEC, a._drain_steer, a._goal)
+        saved = (a._llm.or_chat_stream, a._tools.exec_tool, a._config.HEARTBEAT_SEC, a._loop._drain_steer, a._loop._goal)
         a._llm.or_chat_stream = fake_stream; a._tools.exec_tool = fake_exec
-        a._config.HEARTBEAT_SEC = 0.03; a._drain_steer = lambda *x: False; a._goal = None
+        a._config.HEARTBEAT_SEC = 0.03; a._loop._drain_steer = lambda *x: False; a._loop._goal = None
         try:
             del a._context._history[1:]
-            a.run_stream("build something", toks.append)
+            a._loop.run_stream("build something", toks.append)
         finally:
-            (a._llm.or_chat_stream, a._tools.exec_tool, a._config.HEARTBEAT_SEC, a._drain_steer, a._goal) = saved
+            (a._llm.or_chat_stream, a._tools.exec_tool, a._config.HEARTBEAT_SEC, a._loop._drain_steer, a._loop._goal) = saved
         out = "".join(toks)
         self.assertIn("\U0001f527", out)   # Tool-Status
         self.assertIn("\u00b7", out)        # Heartbeat waehrend Tool-Lauf
@@ -592,18 +592,18 @@ class AgentLogic(unittest.TestCase):
     # --- Steering -------------------------------------------------------------
     def test_steering_queue(self):
         a = self.a
-        self.assertFalse(a.steer_push("x"))               # idle -> reject
-        a._busy[0] = True
+        self.assertFalse(a._loop.steer_push("x"))               # idle -> reject
+        a._loop._busy[0] = True
         try:
-            self.assertTrue(a.steer_push("hold course"))
+            self.assertTrue(a._loop.steer_push("hold course"))
             hist = []
-            self.assertTrue(a._drain_steer(hist))
+            self.assertTrue(a._loop._drain_steer(hist))
             self.assertEqual(hist[0]["role"], "user")
             self.assertIn("hold course", hist[0]["content"])
             self.assertIn("[Steering", hist[0]["content"])
-            self.assertFalse(a._drain_steer(hist))         # queue empty
+            self.assertFalse(a._loop._drain_steer(hist))         # queue empty
         finally:
-            a._busy[0] = False
+            a._loop._busy[0] = False
 
     # --- Prompt-Templates -----------------------------------------------------
     def test_prompt_expansion(self):
@@ -648,7 +648,7 @@ class AgentLogic(unittest.TestCase):
         calls = []
         try:
             def chat(msgs, tools, model=None):
-                final = msgs[-1].get("content") == a._DEADLINE_NOTE
+                final = msgs[-1].get("content") == a._loop._DEADLINE_NOTE
                 calls.append(not final)
                 if not final:
                     return {"role": "assistant", "content": None,
@@ -657,29 +657,29 @@ class AgentLogic(unittest.TestCase):
             a._llm.or_chat = chat
             a._tools.exec_tool = lambda name, args: "hit"
             hist = [{"role": "system", "content": "s"}, {"role": "user", "content": "search"}]
-            a._context._deadline[0] = time.time() + a.DEADLINE_MARGIN - 1          # already inside the margin
-            out = a._tool_loop(hist)
+            a._context._deadline[0] = time.time() + a._loop.DEADLINE_MARGIN - 1          # already inside the margin
+            out = a._loop._tool_loop(hist)
             self.assertIn("partial: 2 hits", out)
             self.assertIn("time budget", out)
             self.assertEqual(calls, [False])                                # one call, tools off
-            self.assertTrue(any(a._DEADLINE_NOTE in str(m.get("content")) for m in hist))
+            self.assertTrue(any(a._loop._DEADLINE_NOTE in str(m.get("content")) for m in hist))
             # a deadline far away: the loop runs its steps as usual
             calls.clear(); a._context._deadline[0] = time.time() + 3600; a._config.MAX_STEPS = 2
-            self.assertEqual(a._tool_loop([{"role": "user", "content": "x"}]), "(max tool steps reached)")
+            self.assertEqual(a._loop._tool_loop([{"role": "user", "content": "x"}]), "(max tool steps reached)")
             self.assertEqual(calls, [True, True])
             # /steps N <text> for one turn, /maxSteps alias, then the old cap again
             a._config.MAX_STEPS = 12
-            self.assertEqual(a._turn_steps("/maxSteps 100 Tägliche Jobsuche"), (100, "Tägliche Jobsuche"))
-            self.assertEqual(a._turn_steps("/steps unlimited go"), (0, "go"))
-            self.assertIsNone(a._turn_steps("/steps 30"))                   # the setter, not a turn
-            self.assertIsNone(a._turn_steps("Jobsuche /steps 3"))
+            self.assertEqual(a._loop._turn_steps("/maxSteps 100 Tägliche Jobsuche"), (100, "Tägliche Jobsuche"))
+            self.assertEqual(a._loop._turn_steps("/steps unlimited go"), (0, "go"))
+            self.assertIsNone(a._loop._turn_steps("/steps 30"))                   # the setter, not a turn
+            self.assertIsNone(a._loop._turn_steps("Jobsuche /steps 3"))
             seen = []
-            old_loop = a._tool_loop
-            a._tool_loop = lambda hist: (seen.append(a._config.MAX_STEPS), "ok")[1]
+            old_loop = a._loop._tool_loop
+            a._loop._tool_loop = lambda hist: (seen.append(a._config.MAX_STEPS), "ok")[1]
             try:
-                self.assertEqual(a.run("/steps 3 hallo", deadline=0), "ok")
+                self.assertEqual(a._loop.run("/steps 3 hallo", deadline=0), "ok")
             finally:
-                a._tool_loop = old_loop
+                a._loop._tool_loop = old_loop
             self.assertEqual(seen, [3])
             self.assertEqual(a._config.MAX_STEPS, 12)
         finally:
@@ -707,7 +707,7 @@ class AgentLogic(unittest.TestCase):
             a._llm.or_chat = chat
             a._tools.BUILTIN["web_search"] = (lambda **kw: "1. hit", {}, [])
             a._config.MAX_STEPS = 5
-            self.assertEqual(a.run("/fresh find it", kind="task", turn="abc12345"), "done")
+            self.assertEqual(a._loop.run("/fresh find it", kind="task", turn="abc12345"), "done")
             self.assertTrue(all(b["turn"] == "abc12345" for p, b in posts if p == "/api/trace"))   # named by the bridge
             kinds = [(p, b.get("event")) for p, b in posts if p == "/api/trace"]
             self.assertEqual(kinds, [("/api/trace", "start"), ("/api/trace", "end")])
@@ -723,7 +723,7 @@ class AgentLogic(unittest.TestCase):
             self.assertEqual(audits[0]["turn"], turn)
             self.assertIn("ms", audits[0])
             posts.clear()
-            a.run("/steps")                                       # a slash command: no markers
+            a._loop.run("/steps")                                       # a slash command: no markers
             self.assertEqual([p for p, _ in posts if p == "/api/trace"], [])
             self.assertEqual(a._learn._outcome_of("(max tool steps reached)"), "max_steps")
             self.assertEqual(a._learn._outcome_of("x ⏱️ (time budget exhausted — partial result)"), "deadline")
@@ -826,13 +826,13 @@ class AgentLogic(unittest.TestCase):
     # --- Goal-Kommando ------------------------------------------------------
     def test_goal_set_show_off(self):
         try:
-            self.assertIn("No goal", self.a._set_goal("/goal show"))
-            self.a._set_goal("/goal Antworte knapp.")
-            self.assertEqual(self.a._goal, "Antworte knapp.")
-            self.a._set_goal("/goal off")
-            self.assertIsNone(self.a._goal)
+            self.assertIn("No goal", self.a._loop._set_goal("/goal show"))
+            self.a._loop._set_goal("/goal Antworte knapp.")
+            self.assertEqual(self.a._loop._goal, "Antworte knapp.")
+            self.a._loop._set_goal("/goal off")
+            self.assertIsNone(self.a._loop._goal)
         finally:
-            self.a._goal = None
+            self.a._loop._goal = None
 
     # --- Summarizing conversation manager -----------------------------------
     def test_local_model_crash_on_image_is_not_retried_and_images_leave_history(self):
@@ -914,21 +914,21 @@ class AgentLogic(unittest.TestCase):
         """AUTO_RESET_MIN: a context that idled longer than that starts over at
         the next turn; a recent turn, a fresh context or 0 leave it alone."""
         a = self.a
-        old = a.AUTO_RESET_MIN, a._last_turn[0], list(a._context._history)
+        old = a._loop.AUTO_RESET_MIN, a._loop._last_turn[0], list(a._context._history)
         try:
             a._context._history[:] = [{"role": "system", "content": "S"}, {"role": "user", "content": "u"}, {"role": "assistant", "content": "a"}]
-            a.AUTO_RESET_MIN = 0; a._last_turn[0] = time.time() - 3600
-            self.assertFalse(a._auto_reset()); self.assertEqual(len(a._context._history), 3)
-            a.AUTO_RESET_MIN = 30; a._last_turn[0] = time.time() - 600
-            self.assertFalse(a._auto_reset()); self.assertEqual(len(a._context._history), 3)      # 10 min idle: keep
-            a._last_turn[0] = time.time() - 3600
-            self.assertTrue(a._auto_reset()); self.assertEqual(len(a._context._history), 1)       # 60 min idle: fresh
-            a._last_turn[0] = time.time() - 3600
-            self.assertFalse(a._auto_reset())                                             # already fresh: nothing to drop
-            a._last_turn[0] = 0.0; a._context._history.append({"role": "user", "content": "u"})
-            self.assertFalse(a._auto_reset())                                             # first turn after boot: keep
+            a._loop.AUTO_RESET_MIN = 0; a._loop._last_turn[0] = time.time() - 3600
+            self.assertFalse(a._loop._auto_reset()); self.assertEqual(len(a._context._history), 3)
+            a._loop.AUTO_RESET_MIN = 30; a._loop._last_turn[0] = time.time() - 600
+            self.assertFalse(a._loop._auto_reset()); self.assertEqual(len(a._context._history), 3)      # 10 min idle: keep
+            a._loop._last_turn[0] = time.time() - 3600
+            self.assertTrue(a._loop._auto_reset()); self.assertEqual(len(a._context._history), 1)       # 60 min idle: fresh
+            a._loop._last_turn[0] = time.time() - 3600
+            self.assertFalse(a._loop._auto_reset())                                             # already fresh: nothing to drop
+            a._loop._last_turn[0] = 0.0; a._context._history.append({"role": "user", "content": "u"})
+            self.assertFalse(a._loop._auto_reset())                                             # first turn after boot: keep
         finally:
-            a.AUTO_RESET_MIN, a._last_turn[0] = old[0], old[1]; a._context._history[:] = old[2]
+            a._loop.AUTO_RESET_MIN, a._loop._last_turn[0] = old[0], old[1]; a._context._history[:] = old[2]
 
     def test_llm_timeouts_and_retry_policy_for_local_models(self):
         """A local model gets long timeouts and no retry after a timeout (it is
@@ -1054,15 +1054,15 @@ class AgentLogic(unittest.TestCase):
         """/reset drops a stale goal; otherwise every later turn runs the goal
         loop (which is what broke the uncensored instance)."""
         a = self.a
-        old = a._goal
+        old = a._loop._goal
         try:
-            a._goal = "write a file to the host"
+            a._loop._goal = "write a file to the host"
             out = []
-            a.run_stream("/reset", out.append)
-            self.assertIsNone(a._goal)
+            a._loop.run_stream("/reset", out.append)
+            self.assertIsNone(a._loop._goal)
             self.assertIn("reset", "".join(out).lower())
         finally:
-            a._goal = old
+            a._loop._goal = old
 
     def test_wire_strict_alternation_invariant(self):
         """A-5: after wiring for a local model, no two adjacent messages share a

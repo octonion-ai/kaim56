@@ -76,7 +76,7 @@ def signal_loop():
             log("MSG from", src, ":", text[:80])
             sig_send("🤔 …", src)
             try:
-                reply = agent.run(text)
+                reply = agent.loop.run(text)
             except Exception as ex:
                 reply = f"⚠️ {ex!r}"
             sig_send(reply, src)
@@ -138,7 +138,7 @@ class H(BaseHTTPRequestHandler):
         # Steering: Nachricht in einen LAUFENDEN Turn einspeisen. queued=false
         # heisst: gerade kein Turn aktiv -> Aufrufer sendet normal.
         if self.path.rstrip("/").endswith("/steer"):
-            ok = agent.steer_push(message) if message else False
+            ok = agent.loop.steer_push(message) if message else False
             b = json.dumps({"queued": bool(ok)}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -161,11 +161,11 @@ class H(BaseHTTPRequestHandler):
                     pass
             try:
                 if message or image:
-                    agent.run_stream(message, emit, image, deadline=deadline, kind=kind or "stream", turn=turn)
+                    agent.loop.run_stream(message, emit, image, deadline=deadline, kind=kind or "stream", turn=turn)
             except Exception as ex:
                 emit(f"⚠️ {ex!r}")
             return
-        reply = agent.run(message, deadline=deadline, kind=kind or "chat", turn=turn) if message else ""
+        reply = agent.loop.run(message, deadline=deadline, kind=kind or "chat", turn=turn) if message else ""
         b = json.dumps({"reply": reply, "turn": turn}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")

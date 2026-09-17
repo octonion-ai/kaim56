@@ -409,6 +409,10 @@ def _hook_before_tool(name, args):
 
 TOOLS = []
 
+# Tool plugins (pi.dev extension idea, ported): one .py file per tool,
+# placed on the config disk by the manager (/config/plugins). Convention:
+#   DESC = "…"; PARAMS = {...}; REQUIRED = [...];  def run(**kwargs): ...
+# The filename (without .py) becomes the tool name. The microVM is the sandbox.
 PLUGIN_TOOLS = set()
 PLUGIN_DIR = os.environ.get("PLUGIN_DIR", "/config/plugins")
 
