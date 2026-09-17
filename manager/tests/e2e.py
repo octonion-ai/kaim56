@@ -3375,32 +3375,32 @@ class ManagerFunctions(unittest.TestCase):
         model across save; unknown tools are dropped; empty stays absent."""
         m = self.m
         import mgr.store as st
-        old = m.load_personas, m.save_personas
+        old = m._personas.load_personas, m._personas.save_personas
         saved = []
         try:
-            m.load_personas = lambda: []
-            m.save_personas = lambda items: saved.append(items)
-            m.upsert_persona("rev", "You review.", tools="read_file, bash, nope_tool", model=" google/gemini-2.5-flash ")
+            m._personas.load_personas = lambda: []
+            m._personas.save_personas = lambda items: saved.append(items)
+            m._personas.upsert_persona("rev", "You review.", tools="read_file, bash, nope_tool", model=" google/gemini-2.5-flash ")
             ent = saved[-1][0]
             self.assertEqual(ent["name"], "rev")
             self.assertEqual(set(ent["tools"]), {"read_file", "bash"})     # unknown dropped
             self.assertEqual(ent["model"], "google/gemini-2.5-flash")
             saved.clear()
-            m.upsert_persona("plain", "hi")
+            m._personas.upsert_persona("plain", "hi")
             self.assertNotIn("tools", saved[-1][0]); self.assertNotIn("model", saved[-1][0])
             # regression: a web save (name+prompt only, tools/model = None) must
             # NOT wipe an existing persona's tools/model.
             saved.clear()
-            m.load_personas = lambda: [{"name": "rev", "prompt": "old", "tools": ["bash"], "model": "m/x"}]
-            m.upsert_persona("rev", "new prompt")                    # tools=None, model=None
+            m._personas.load_personas = lambda: [{"name": "rev", "prompt": "old", "tools": ["bash"], "model": "m/x"}]
+            m._personas.upsert_persona("rev", "new prompt")                    # tools=None, model=None
             ent = saved[-1][0]
             self.assertEqual(ent["prompt"], "new prompt")
             self.assertEqual(ent["tools"], ["bash"]); self.assertEqual(ent["model"], "m/x")   # kept
             saved.clear()
-            m.upsert_persona("rev", "p", tools=[])                   # explicit empty -> clear
+            m._personas.upsert_persona("rev", "p", tools=[])                   # explicit empty -> clear
             self.assertNotIn("tools", saved[-1][0])
         finally:
-            m.load_personas, m.save_personas = old
+            m._personas.load_personas, m._personas.save_personas = old
 
     def test_defense_baseline_prepended(self):
         """Feature 2: every instance's system prompt carries the prompt-defense
@@ -3414,9 +3414,9 @@ class ManagerFunctions(unittest.TestCase):
         recommended tools when none are requested, sets its model, and refuses an
         unknown persona."""
         m = self.m
-        old = m.load_personas, m._skills.load_skills
+        old = m._personas.load_personas, m._skills.load_skills
         try:
-            m.load_personas = lambda: [{"name": "assistant", "prompt": "You are helpful."},
+            m._personas.load_personas = lambda: [{"name": "assistant", "prompt": "You are helpful."},
                                        {"name": "code-reviewer", "prompt": "You review code.",
                                         "tools": ["bash", "read_file"], "model": "google/gemini-2.5-flash"}]
             m._skills.load_skills = lambda: []
@@ -3446,7 +3446,7 @@ class ManagerFunctions(unittest.TestCase):
             finally:
                 m.create_instance, m._instances.load_instances, m.wait_web, m._chat_post, m.stop, m.delete_instance = old2
         finally:
-            m.load_personas, m._skills.load_skills = old
+            m._personas.load_personas, m._skills.load_skills = old
 
     def test_sandbox_config_only_narrows(self):
         """A sandboxed sub-agent runs in an ephemeral VM with a NARROWER policy:
@@ -3454,10 +3454,10 @@ class ManagerFunctions(unittest.TestCase):
         egress allowlist inside the caller's own, or no network, and one
         skill baked into the system prompt with the file/web tools only."""
         m = self.m
-        old = m._skills.load_skills, m.load_personas
+        old = m._skills.load_skills, m._personas.load_personas
         try:
             m._skills.load_skills = lambda: [{"name": "pdf-digest", "description": "d", "content": "Read the PDF, summarise."}]
-            m.load_personas = lambda: [{"name": "assistant", "prompt": "You are helpful."}]
+            m._personas.load_personas = lambda: [{"name": "assistant", "prompt": "You are helpful."}]
             caller = {"name": "orch", "config": {}}
             self.assertEqual(m.sandbox_config(caller, None), ({}, True, ""))
             cfg, net, err = m.sandbox_config(caller, {"tools": "bash, read_file,spawn_subagent"})
@@ -3477,7 +3477,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertIn("unknown", m.sandbox_config(caller, {"skill": "ghost"})[2])
             self.assertIn("object", m.sandbox_config(caller, "bash")[2])
         finally:
-            m._skills.load_skills, m.load_personas = old
+            m._skills.load_skills, m._personas.load_personas = old
 
     def test_sandbox_reaches_the_ephemeral_vm(self):
         """The sandbox travels from the task route into the VM's creation:
