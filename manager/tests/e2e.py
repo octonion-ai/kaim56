@@ -36,6 +36,7 @@ import socket
 FC_DIR = os.environ.get("FC_DIR", "/home/ulrich/firecracker")
 AGENT_PATH = os.environ.get("AGENT_PATH", "/home/ulrich/openrouter-agent/agent.py")
 MANAGER_PATH = os.path.join(FC_DIR, "manager.py")
+HTTPD_PATH = os.path.join(FC_DIR, "mgr", "httpd.py")     # the HTTP handler class H
 MANAGER_URL = os.environ.get("MANAGER_URL", "http://127.0.0.1:8700")
 
 # manager.py imports the sibling module `chatui` -> its directory must be on the
@@ -1876,7 +1877,7 @@ class ManagerFunctions(unittest.TestCase):
         bitten twice (/api/skills/ vs /api/skills). Anything migrated into the
         router is immune by construction; this covers what is still a chain."""
         from mgr.routes import source_routes, shadowed
-        src = open(MANAGER_PATH).read()
+        src = open(HTTPD_PATH).read()
         get_src = src[src.index("    def _do_GET(self):"):src.index("    def _do_POST(self):")]
         post_src = src[src.index("    def _do_POST(self):"):]
         for name, part in (("GET", get_src), ("POST", post_src)):
@@ -1933,7 +1934,7 @@ class ManagerFunctions(unittest.TestCase):
         self.assertTrue(by_route[("POST", "/api/personas")])
         # The whole HTTP surface lives in the table now: no if-chain left.
         from mgr.routes import source_routes
-        src = open(MANAGER_PATH).read()
+        src = open(HTTPD_PATH).read()
         chain = src[src.index("    def _do_GET(self):"):src.index("    def _dispatch(self, method):")]
         self.assertEqual([p for _, p, _ in source_routes(chain)], [],
                          "a path literal crept back into the handler chain")
@@ -2948,7 +2949,7 @@ class ManagerFunctions(unittest.TestCase):
         state for _auth/_do_GET to run and write their response into a buffer."""
         import email.message
         m = self.m
-        h = object.__new__(m.H)
+        h = object.__new__(m._httpd.H)
         h.path, h.command, h.request_version = path, method, "HTTP/1.1"
         h.requestline = f"{method} {path} HTTP/1.1"
         h.client_address = (ip, 40000)
