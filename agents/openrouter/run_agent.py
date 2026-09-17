@@ -61,7 +61,7 @@ def sig_receive():
 
 def signal_loop():
     sig_receive()
-    sig_send(f"🤖 openrouter-agent online (model {agent.OR_MODEL}). /reset für neuen Kontext.",
+    sig_send(f"🤖 openrouter-agent online (model {agent.config.OR_MODEL}). /reset für neuen Kontext.",
              ALLOWED_SENDERS[0])
     while True:
         for env in sig_receive() or []:
@@ -83,7 +83,7 @@ def signal_loop():
             log("replied", len(reply))
             # Turn in die gemeinsame Chat-Historie (App+Web) spiegeln.
             try:
-                agent._mgr(agent._manager_base(), "/api/chat-log",
+                agent.mgrclient._mgr(agent.mgrclient._manager_base(), "/api/chat-log",
                            {"sender": src, "user": text, "reply": reply}, timeout=10)
             except Exception:
                 pass
@@ -175,7 +175,7 @@ class H(BaseHTTPRequestHandler):
 
 
 def main():
-    if not agent.ensure_or_key() and not agent.LLAMA_ENDPOINT:   # a local model needs no key
+    if not agent.mgrclient.ensure_or_key() and not agent.config.LLAMA_ENDPOINT:   # a local model needs no key
         log("FATAL: OPENROUTER_API_KEY fehlt — weder in der Umgebung noch vom "
             "Secret-Broker des Managers (Allowlist in secret-policy.json?)")
     agent.init()
