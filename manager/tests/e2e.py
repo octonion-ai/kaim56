@@ -2111,35 +2111,35 @@ class ManagerFunctions(unittest.TestCase):
         """Read aloud must skip tool status, think blocks, fences and decor —
         filtered in the manager so web, app and ESP get it for free."""
         m = self.m
-        self.assertEqual(m.speakable_text("🔧 ha_control …\nEs gab ein Problem."), "Es gab ein Problem.")
-        self.assertEqual(m.speakable_text("  🔧 caldav__list-events …\n\nAm Freitag: **Frühstück**."),
+        self.assertEqual(m._voice.speakable_text("🔧 ha_control …\nEs gab ein Problem."), "Es gab ein Problem.")
+        self.assertEqual(m._voice.speakable_text("  🔧 caldav__list-events …\n\nAm Freitag: **Frühstück**."),
                          "Am Freitag: Frühstück.")
-        self.assertEqual(m.speakable_text("⟦think⟧ plan ⟦/think⟧Es ist 10 Uhr."), "Es ist 10 Uhr.")
-        self.assertEqual(m.speakable_text("Siehe [Doku](https://x.y/z) und https://a.b/c."), "Siehe Doku und")
-        self.assertIn("Codeblock übersprungen", m.speakable_text("Hier:\n```py\nprint(1)\n```\nfertig"))
-        self.assertEqual(m.speakable_text(""), "")
+        self.assertEqual(m._voice.speakable_text("⟦think⟧ plan ⟦/think⟧Es ist 10 Uhr."), "Es ist 10 Uhr.")
+        self.assertEqual(m._voice.speakable_text("Siehe [Doku](https://x.y/z) und https://a.b/c."), "Siehe Doku und")
+        self.assertIn("Codeblock übersprungen", m._voice.speakable_text("Hier:\n```py\nprint(1)\n```\nfertig"))
+        self.assertEqual(m._voice.speakable_text(""), "")
 
     def test_stt_recent_ring(self):
         """What did STT hear? Newest first, bounded, in memory only."""
         m = self.m
-        m._stt_recent.clear()
-        m.stt_remember("Radio aus", 1.2, "192.168.1.5")
-        m.stt_remember("Wie spät ist es?", 1.8, "192.168.1.5")
-        r = m.stt_recent()
+        m._voice._stt_recent.clear()
+        m._voice.stt_remember("Radio aus", 1.2, "192.168.1.5")
+        m._voice.stt_remember("Wie spät ist es?", 1.8, "192.168.1.5")
+        r = m._voice.stt_recent()
         self.assertEqual([x["text"] for x in r], ["Wie spät ist es?", "Radio aus"])
-        for i in range(m.STT_RECENT_MAX + 5):
-            m.stt_remember(f"t{i}", 1, "x")
-        self.assertEqual(len(m.stt_recent()), m.STT_RECENT_MAX)
+        for i in range(m._voice.STT_RECENT_MAX + 5):
+            m._voice.stt_remember(f"t{i}", 1, "x")
+        self.assertEqual(len(m._voice.stt_recent()), m._voice.STT_RECENT_MAX)
         by_path = {p: admin for _, _, p, admin in m.ROUTER.inventory()}
         self.assertTrue(by_path["/api/stt-recent"])
         self.assertTrue(by_path["/api/stt-recent/audio"])
-        m._stt_audio.clear()
-        m.stt_remember("a", 1, "x", audio=b"RIFFaaa", ctype="audio/wav")
-        m.stt_remember("b", 1, "x", audio=b"RIFFbbb", ctype="audio/wav")
-        self.assertEqual(m.stt_audio(0)[3], b"RIFFbbb")
-        self.assertEqual(m.stt_audio(1)[3], b"RIFFaaa")
-        self.assertIsNone(m.stt_audio(2))
-        m._stt_recent.clear(); m._stt_audio.clear()
+        m._voice._stt_audio.clear()
+        m._voice.stt_remember("a", 1, "x", audio=b"RIFFaaa", ctype="audio/wav")
+        m._voice.stt_remember("b", 1, "x", audio=b"RIFFbbb", ctype="audio/wav")
+        self.assertEqual(m._voice.stt_audio(0)[3], b"RIFFbbb")
+        self.assertEqual(m._voice.stt_audio(1)[3], b"RIFFaaa")
+        self.assertIsNone(m._voice.stt_audio(2))
+        m._voice._stt_recent.clear(); m._voice._stt_audio.clear()
 
     def test_hub_processes_get_the_host_timezone(self):
         """caldav-mcp formats event times in its process TZ — the manager hands

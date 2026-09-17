@@ -10,7 +10,6 @@ library, no extra packages. Instances are stored as JSON under
 instances/<name>.json; the network is derived per instance from 'index':
   host  172.30.<index>.1/30   guest 172.30.<index>.2/30   tap fc<index>
 """
-import collections
 import tempfile
 import base64
 import codecs
@@ -44,6 +43,7 @@ WEB_GUEST_PORT = 8080   # port of the web bridge in the microVM
 TERM_GUEST_PORT = 7682  # port of the webterm (browser terminal) in the microVM
 
 from mgr import paths as _paths  # noqa: E402
+from mgr import voice as _voice  # noqa: E402
 from mgr import browse as _browse  # noqa: E402
 from mgr import audit as _audit  # noqa: E402
 from mgr import auth as _auth  # noqa: E402
@@ -3319,66 +3319,9 @@ def _rt_settings(h):
 # code fences, markdown decor, URLs. The desktop client filters this itself;
 # the web chat's "Read aloud", the app and the ESP client send the reply as
 # is — so the manager filters once for everyone, right before Piper.
-_SPK_THINK = re.compile(r"⟦think⟧.*?(?:⟦/think⟧|$)", re.S)
-_SPK_TOOL = re.compile(r"^[ \t]*🔧.*$", re.M)
-_SPK_FENCE = re.compile(r"```.*?(?:```|$)", re.S)
-_SPK_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
-_SPK_URL = re.compile(r"https?://\S+")
-_SPK_DECOR = re.compile(r"[*_`#>|]")
-_SPK_SPACE = re.compile(r"[ \t]+")
-_SPK_NL = re.compile(r"\n{2,}")
-
-
-def speakable_text(text):
-    """Reply text -> read-aloud text (same rules as the desktop client)."""
-    t = str(text or "")
-    t = _SPK_THINK.sub("", t)
-    t = _SPK_TOOL.sub("", t)
-    t = _SPK_FENCE.sub(" Codeblock übersprungen. ", t)
-    t = _SPK_LINK.sub(r"\1", t)
-    t = _SPK_URL.sub("", t)
-    t = _SPK_DECOR.sub("", t)
-    t = _SPK_SPACE.sub(" ", t)
-    t = _SPK_NL.sub("\n", t)
-    return t.strip()
-
-
-# Last transcripts from /api/stt, in memory only (no file: spoken words are
-# not something to persist by accident). Answers "what did STT hear?" from
-# the web UI/API instead of guessing from the model's reply.
-STT_RECENT_MAX = 50
-_stt_recent = collections.deque(maxlen=STT_RECENT_MAX)
-_stt_lock = threading.Lock()
-
-
-STT_AUDIO_MAX = 5
-_stt_audio = collections.deque(maxlen=STT_AUDIO_MAX)   # (ts, src, content-type, bytes)
-
-
-def stt_remember(text, seconds, src, audio=None, ctype=""):
-    with _stt_lock:
-        _stt_recent.append({"ts": int(time.time()), "text": str(text or "")[:500],
-                            "seconds": seconds, "src": src})
-        if audio:
-            _stt_audio.append((int(time.time()), src, ctype, bytes(audio[:4 * 1024 * 1024])))
-
-
-def stt_audio(i=0):
-    """The i-th most recent STT upload as (ts, src, content-type, bytes) — to
-    LOOK at what a client sends (rate, level, header) when STT hears nothing."""
-    with _stt_lock:
-        items = list(_stt_audio)[::-1]
-        return items[i] if 0 <= i < len(items) else None
-
-
-def stt_recent():
-    with _stt_lock:
-        return list(_stt_recent)[::-1]        # newest first
-
-
 @ROUTER.get("/api/stt-recent", admin=True)
 def _rt_stt_recent(h):
-    return json.dumps({"recent": stt_recent()}, ensure_ascii=False).encode(), "application/json"
+    return json.dumps({"recent": _voice.stt_recent()}, ensure_ascii=False).encode(), "application/json"
 
 
 @ROUTER.get("/api/stt-recent/audio", admin=True)
@@ -3388,7 +3331,7 @@ def _rt_stt_audio(h):
         i = int(q.get("i", ["0"])[0])
     except ValueError:
         i = 0
-    item = stt_audio(i)
+    item = _voice.stt_audio(i)
     if not item:
         return json.dumps({"error": "no audio kept"}).encode(), "application/json"
     return item[3], item[2] or "application/octet-stream"
@@ -4773,7 +4716,7 @@ def _rt_voice(h):
         # Read-aloud filter + voice/speed from the settings (explicit client values win).
         try:
             b = json.loads(payload or b"{}")
-            b["text"] = speakable_text(b.get("text", ""))
+            b["text"] = _voice.speakable_text(b.get("text", ""))
             st = _settings.load_settings()
             if st.get("TTS_VOICE") and not b.get("voice"):
                 b["voice"] = st["TTS_VOICE"]
@@ -4794,7 +4737,7 @@ def _rt_voice(h):
             try:
                 j = json.loads(data)
                 g = h._guest()
-                stt_remember(j.get("text", ""), j.get("seconds"), g["name"] if g else h.client_address[0],
+                _voice.stt_remember(j.get("text", ""), j.get("seconds"), g["name"] if g else h.client_address[0],
                              audio=payload, ctype=h.headers.get("Content-Type", ""))
             except (ValueError, TypeError):
                 pass
