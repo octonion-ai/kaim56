@@ -44,6 +44,7 @@ WEB_GUEST_PORT = 8080   # port of the web bridge in the microVM
 TERM_GUEST_PORT = 7682  # port of the webterm (browser terminal) in the microVM
 
 from mgr import paths as _paths  # noqa: E402
+from mgr import browse as _browse  # noqa: E402
 from mgr import audit as _audit  # noqa: E402
 from mgr import auth as _auth  # noqa: E402
 from mgr import host as _host  # noqa: E402
@@ -1962,8 +1963,8 @@ def mount_error(host, guest):
     hp = os.path.realpath(str(host or ""))
     if not host or not os.path.isdir(hp):
         return f"host folder {host!r} is not a directory"
-    if not any(hp == r or hp.startswith(r.rstrip("/") + "/") for r in BROWSE_ROOTS):
-        return f"host folder must be under {', '.join(BROWSE_ROOTS)}"
+    if not any(hp == r or hp.startswith(r.rstrip("/") + "/") for r in _browse.BROWSE_ROOTS):
+        return f"host folder must be under {', '.join(_browse.BROWSE_ROOTS)}"
     for prot in _protected_host_paths():
         if hp == prot or hp.startswith(prot + "/") or prot.startswith(hp + "/"):
             return f"host folder {host} would expose {prot}"
@@ -2801,38 +2802,6 @@ def save_secret_policy(pol):
 from mgr.mcp import (MCP_HUB, MCP_CATALOG_FILE, load_mcps, save_mcps, upsert_mcp,  # noqa: E402,F401
                      delete_mcp, mcp_required_secrets, mcp_hub_call, mcp_hub_kill,
                      build_mcp_config)
-
-
-# ---- Browse host folders (the UI's folder picker) --------------------------
-# Directory names only, never file contents. The manager runs as root and thus
-# sees everything — the route is admin-only like /api/secret-keys (guests
-# blocked by source IP) and sits behind the same auth as the UI.
-
-# The picker exists to choose folders for guest mounts — it has no business
-# mapping /etc or /root. Admin auth still applies; this bounds what a stolen
-# admin password can enumerate.
-BROWSE_ROOTS = tuple((_settings.SITE.get("BROWSE_ROOTS") or ["/home", "/srv", "/mnt", "/media"]))
-
-
-def list_dirs(path, show_hidden=False):
-    p = os.path.abspath(path or "/") or "/"
-    parent = "" if p == "/" else os.path.dirname(p)
-    inside = any(p == r or p.startswith(r.rstrip("/") + "/") for r in BROWSE_ROOTS)
-    if not inside:
-        # Outside the allowed roots the picker shows the roots themselves —
-        # that keeps "/" navigable without exposing the rest of the tree.
-        roots = [r for r in BROWSE_ROOTS if os.path.isdir(r)]
-        return {"path": "/", "parent": "", "dirs": [r.lstrip("/") for r in roots]}
-    if not os.path.isdir(p):
-        return {"path": p, "parent": parent, "dirs": [], "error": "not a directory"}
-    try:
-        dirs = sorted((e.name for e in os.scandir(p)
-                       if e.is_dir(follow_symlinks=False)
-                       and (show_hidden or not e.name.startswith("."))),
-                      key=str.lower)
-    except OSError as e:
-        return {"path": p, "parent": parent, "dirs": [], "error": f"no access ({e.strerror})"}
-    return {"path": p, "parent": parent, "dirs": dirs}
 
 
 # ---- katfs: moved out to mgr/katfs.py --------------------------------------
@@ -4928,7 +4897,7 @@ def _rt_katfs_status(h):
 @ROUTER.get("/api/browse", admin=True)
 def _rt_host_browse(h):
     q = _qs(h)
-    return h._json(list_dirs(q.get("path", ["/"])[0], q.get("hidden", [""])[0] == "1"))
+    return h._json(_browse.list_dirs(q.get("path", ["/"])[0], q.get("hidden", [""])[0] == "1"))
 
 
 # ---- admin reads --------------------------------------------------------------

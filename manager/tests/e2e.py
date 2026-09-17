@@ -3074,18 +3074,18 @@ class ManagerFunctions(unittest.TestCase):
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-mounts-")
         share = os.path.join(tmp, "share"); os.makedirs(share)
-        old = m.BROWSE_ROOTS, m.instance_by_ip, m.mount_specs, m.load_instances
+        old = m._browse.BROWSE_ROOTS, m.instance_by_ip, m.mount_specs, m.load_instances
         try:
-            m.BROWSE_ROOTS = (tmp,)
+            m._browse.BROWSE_ROOTS = (tmp,)
             self.assertEqual(m.mount_error(share, "/home/node/data"), "")
             self.assertIn("not a directory", m.mount_error(os.path.join(tmp, "nope"), "/x"))
             self.assertIn("must be under", m.mount_error("/srv", "/x"))
-            m.BROWSE_ROOTS = ("/",)
+            m._browse.BROWSE_ROOTS = ("/",)
             self.assertIn("would expose", m.mount_error(m._paths.BASE, "/x"))
             self.assertIn("would expose", m.mount_error(os.path.dirname(m._paths.BASE), "/x"))   # contains it
             for bad in ("/bin", "/usr/local", "/etc/x", "/app", "/harness", "/config", "/memory", "/", "rel", "/a/../etc"):
                 self.assertTrue(m.mount_error(share, bad), bad)
-            m.BROWSE_ROOTS = (tmp,)
+            m._browse.BROWSE_ROOTS = (tmp,)
             self.assertIn("error:", m.set_mounts.__doc__ or "error:")     # documented below via the route
             inst = {"name": "vm1", "index": 4, "template": "openrouter", "rootfs": "instances/openrouter-rootfs.ext4", "mounts": []}
             m.load_instances = lambda: [inst]
@@ -3096,15 +3096,15 @@ class ManagerFunctions(unittest.TestCase):
             h = self._handler("/api/mounts?instance=nope", "10.0.0.5"); h._do_GET()
             self.assertEqual(self._status(h), 404)
         finally:
-            m.BROWSE_ROOTS, m.instance_by_ip, m.mount_specs, m.load_instances = old
+            m._browse.BROWSE_ROOTS, m.instance_by_ip, m.mount_specs, m.load_instances = old
 
     def test_set_mounts_refuses_bad_folders(self):
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-setm-")
-        old = m.load_instances, m.BROWSE_ROOTS, m._paths.INST_DIR
+        old = m.load_instances, m._browse.BROWSE_ROOTS, m._paths.INST_DIR
         try:
             m._paths.INST_DIR = tmp
-            m.BROWSE_ROOTS = (tmp,)
+            m._browse.BROWSE_ROOTS = (tmp,)
             inst = {"name": "vm1", "index": 4, "template": "openrouter", "rootfs": "instances/openrouter-rootfs.ext4", "mounts": []}
             m.load_instances = lambda: [inst]
             m.mount_specs = m.mount_specs
@@ -3112,7 +3112,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertTrue(r.startswith("error:"), r)
             self.assertFalse(os.path.exists(os.path.join(tmp, "vm1.json")))     # nothing saved
         finally:
-            m.load_instances, m.BROWSE_ROOTS, m._paths.INST_DIR = old
+            m.load_instances, m._browse.BROWSE_ROOTS, m._paths.INST_DIR = old
 
     def test_js_json_and_download_name_and_rate(self):
         m = self.m
