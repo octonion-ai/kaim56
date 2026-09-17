@@ -38,6 +38,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import chatui   # chat interface (/chat), lives next to this file
 
 from mgr import paths as _paths  # noqa: E402
+from mgr import guests as _guests  # noqa: E402
 from mgr import instances as _instances  # noqa: E402
 from mgr import secrets as _secrets  # noqa: E402
 from mgr import llmproxy as _llmproxy  # noqa: E402
@@ -75,14 +76,6 @@ _signal_mod.configure(_paths.BASE)
 # the tool gating and the egress rules would then be moot.
 # An allowlist instead of individual checks: a new route is then closed by
 # default, not open by default.
-GUEST_POST_PATHS = ("/api/usage", "/api/audit", "/api/task", "/api/chat-log", "/api/trace",
-                    "/api/skill-proposals", "/api/sessions-search",
-                    "/api/stt", "/api/tts", "/api/signal", "/api/mcp",
-                    "/api/memory-search", "/api/task-delete", "/api/task-edit",
-                    "/api/playbook-add", "/api/playbook-remove", "/api/hitl",
-                    "/api/notify", "/api/mission-start", "/api/mission-update",
-                    "/api/mission-finish", "/api/ha-alias", "/api/ha-control")
-GUEST_POST_PREFIXES = ("/api/memory/", "/api/llm/")
 # Request bodies are read whole into the root process: cap them. A guest (or
 # anyone on the LAN) must not be able to hand the manager a gigabyte.
 BODY_MAX = 4 * 1024 * 1024            # JSON routes
@@ -90,20 +83,6 @@ BODY_MAX_LLM = 8 * 1024 * 1024        # chat completions (long contexts, images)
 BODY_MAX_AUDIO = 32 * 1024 * 1024     # STT uploads
 
 
-# GET paths a guest VM must never reach: the admin UI, the web chat, the katfs
-# browser and the per-instance proxy /i/<name>/… (incl. the WebSocket
-# terminal). Only POST was gated so far — a VM could open the SHELL of every
-# other running VM through GET /i/<other>/term.
-GUEST_GET_DENIED_EXACT = ("/", "/chat", "/katfs")
-GUEST_GET_DENIED_PREFIXES = ("/i/", "/katfs/")
-
-
-def guest_get_blocked(path):
-    """True when a guest VM may not GET this path (query string ignored)."""
-    p = path.split("?", 1)[0]
-    if p != "/" and p.endswith("/") and p[:-1] in GUEST_GET_DENIED_EXACT:
-        p = p[:-1]
-    return p in GUEST_GET_DENIED_EXACT or p.startswith(GUEST_GET_DENIED_PREFIXES)
 POOL = "172.30.0.0/16"
 
 _mcp.HUB_TZ = _host.HOST_TZ          # hub processes (caldav-mcp …) format dates in this zone
@@ -679,29 +658,6 @@ def _run_task_now(instance, message, model=None, timeout=600, sandbox=None):
 # seconds instead of only at the next 2-h heartbeat. Coalesces bursts, one run
 # at a time; if new messages arrived during the run, it fires again right away.
 # Fires only if the inbox really has something new (peek).
-ORCH_INSTANCE = "orchestrator"
-
-
-def delegate_targets(inst):
-    """Instances this guest may address besides itself and 'ephemeral': the
-    DELEGATE_TARGETS list of its config (comma-separated, '*' = all). The
-    orchestrator may address everything — routing work is its job."""
-    if inst.get("name") == ORCH_INSTANCE:
-        return {"*"}
-    raw = (inst.get("config") or {}).get("DELEGATE_TARGETS", "") or ""
-    return {x.strip() for x in str(raw).split(",") if x.strip()}
-
-
-def guest_may_target(inst, target):
-    """May this guest create a task for (and see) `target`? Own name and
-    'ephemeral' always, anything else only via DELEGATE_TARGETS. Closes the
-    path where a prompt-injected agent runs its text on ANY other instance —
-    with that instance's secrets and MCPs."""
-    target = (target or "ephemeral").strip()
-    if target in ("ephemeral", inst.get("name")):
-        return True
-    allow = delegate_targets(inst)
-    return "*" in allow or target in allow
 ORCH_HEARTBEAT_MSG = (
     "/fresh "   # stateless: own throwaway context, no bloat, no wiping out a
                 # running app chat (shared _history).
@@ -779,7 +735,7 @@ _orch_dirty = [False]
 
 
 def orchestrator_ping():
-    if not any(i.get("name") == ORCH_INSTANCE for i in _instances.load_instances()):
+    if not any(i.get("name") == _guests.ORCH_INSTANCE for i in _instances.load_instances()):
         return
     try:
         if not inbox_since(peek=True):   # only fire if there is really something new
@@ -807,7 +763,7 @@ def _orch_fire():
             return
         _orch_running[0] = True
     try:
-        _run_named(ORCH_INSTANCE, ORCH_HEARTBEAT_MSG)
+        _run_named(_guests.ORCH_INSTANCE, ORCH_HEARTBEAT_MSG)
     except Exception as e:
         print("orch-trigger:", repr(e), flush=True)
     finally:
@@ -1735,7 +1691,7 @@ def guest_env(inst):
     cfg["AGENT_EXPORT"] = workspace_dir(inst)   # its own workspace export, by absolute path
     if uses_harness(inst):
         cfg["MEMORY_DIR"] = "/memory"    # Markdown memory folder (mgr/memfs.py)
-    if inst["name"] == ORCH_INSTANCE:   # only the orchestrator may manage tasks
+    if inst["name"] == _guests.ORCH_INSTANCE:   # only the orchestrator may manage tasks
         cfg["TASK_ADMIN"] = "1"
     # Key injection proxy active? Then the agent sends chat requests to the
     # manager instead of directly to the router — so the VM never sees an LLM key
@@ -2314,16 +2270,6 @@ _rules.configure(_paths.BASE)
 # ---- Missions: moved out to mgr/missions.py (imported early, see above) ----
 
 
-def instance_by_ip(ip):
-    for i in _instances.load_instances():
-        try:
-            if _instances.net_of(i).get("guest") == ip:
-                return i
-        except Exception:
-            continue
-    return None
-
-
 # ---- MCP catalog + hub: moved out to mgr/mcp.py ----------------------------
 
 
@@ -2852,8 +2798,8 @@ def _rt_saddler(h):
     # Weekly failure digest over ALL instances' audits. That is cross-instance
     # information, so guests may not read it — except the orchestrator, whose
     # scheduled saddler task is the intended consumer.
-    g = instance_by_ip(h.client_address[0])
-    if g is not None and g.get("name") != ORCH_INSTANCE:
+    g = _guests.instance_by_ip(h.client_address[0])
+    if g is not None and g.get("name") != _guests.ORCH_INSTANCE:
         return json.dumps({"error": "orchestrator only"}).encode(), "application/json"
     q = urllib.parse.parse_qs(h.path.partition("?")[2])
     try:
@@ -2996,7 +2942,7 @@ class H(BaseHTTPRequestHandler):
         # Guests (VMs) carry no credentials: they are identified by source IP
         # and gated by the guest allow/deny lists. Without this exemption a set
         # MANAGER_PASS would lock every agent out of its own manager.
-        if not _auth.PW or instance_by_ip(self.client_address[0]) is not None:
+        if not _auth.PW or _guests.instance_by_ip(self.client_address[0]) is not None:
             return True
         # Host services (containers on the docker bridge, e.g. Hindsight) may
         # use the key proxy without a login — only that path, only from there.
@@ -3350,7 +3296,7 @@ class H(BaseHTTPRequestHandler):
             return
         # No route: the admin UI for everything else (index, deep links).
         # Guests get nothing here; unknown API paths a clean 404.
-        if instance_by_ip(self.client_address[0]) is not None:
+        if _guests.instance_by_ip(self.client_address[0]) is not None:
             return self._forbid()
         if self.path.split("?", 1)[0].startswith("/api/"):
             return self._json({"error": "not found"}, 404)
@@ -3379,7 +3325,7 @@ class H(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(out)))
             self.end_headers(); self.wfile.write(out); return
-        ok_g, why = _llmproxy._guard_check(instance_by_ip(self.client_address[0]))
+        ok_g, why = _llmproxy._guard_check(_guests.instance_by_ip(self.client_address[0]))
         if not ok_g:
             out = json.dumps({"error": {"message": f"guardrail: {why}", "code": 429}}).encode()
             self.send_response(429)
@@ -3404,7 +3350,7 @@ class H(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(out)))
             self.end_headers(); self.wfile.write(out); return
         payload = self._raw(BODY_MAX_LLM)
-        ginst = instance_by_ip(self.client_address[0])
+        ginst = _guests.instance_by_ip(self.client_address[0])
         if ginst is None and self.client_address[0].startswith("172.17."):
             ginst = {"name": "hindsight" if _hindsight.enabled() else "services"}   # booked, not a VM
         span = {"turn": self.headers.get("X-Kaim-Turn", "")[:16],
@@ -3472,11 +3418,11 @@ class H(BaseHTTPRequestHandler):
         if not self._auth():
             return
         p = self.path.split("?", 1)[0]
-        guest = instance_by_ip(self.client_address[0])
+        guest = _guests.instance_by_ip(self.client_address[0])
         if guest is None and not _auth.origin_allowed(self.headers.get("Origin", "")):
             return self._json({"error": "cross-site request refused"}, 403)
         if guest is not None and not (
-                p in GUEST_POST_PATHS or p.startswith(GUEST_POST_PREFIXES)):
+                p in _guests.GUEST_POST_PATHS or p.startswith(_guests.GUEST_POST_PREFIXES)):
             return self._forbid()
         if self._dispatch("POST"):
             return
@@ -3488,7 +3434,7 @@ class H(BaseHTTPRequestHandler):
         if hit is None:
             return False
         fn, admin_only = hit
-        if admin_only and instance_by_ip(self.client_address[0]) is not None:
+        if admin_only and _guests.instance_by_ip(self.client_address[0]) is not None:
             self._forbid()
             return True
         out = fn(self)
@@ -3531,7 +3477,7 @@ class H(BaseHTTPRequestHandler):
             return {} if default is None else default
 
     def _guest(self):
-        return instance_by_ip(self.client_address[0])
+        return _guests.instance_by_ip(self.client_address[0])
 
 
 # =============================================================================
@@ -3720,7 +3666,7 @@ def _rt_agents(h):
     for i in _instances.load_instances():
         if i["name"].startswith(("task-", "sub-")):
             continue
-        if guest is not None and not guest_may_target(guest, i["name"]):
+        if guest is not None and not _guests.guest_may_target(guest, i["name"]):
             continue
         cfg = i.get("config") or {}
         mkey = next((k for k in MODEL_KEYS if cfg.get(k)), "")
@@ -3740,7 +3686,7 @@ def _rt_agents(h):
 def _rt_inbox(h):
     # EVERY user message of every chat — among guests only the orchestrator.
     guest = h._guest()
-    if guest is not None and guest["name"] != ORCH_INSTANCE:
+    if guest is not None and guest["name"] != _guests.ORCH_INSTANCE:
         return h._forbid()
     peek = _qs(h).get("peek", ["0"])[0] == "1"
     return h._json({"messages": inbox_since(peek=peek)})
@@ -3766,7 +3712,7 @@ def _rt_playbooks(h):
 @ROUTER.get("/api/tasks-open")
 def _rt_tasks_open(h):
     g = h._guest()
-    if g is not None and g.get("name") != ORCH_INSTANCE:
+    if g is not None and g.get("name") != _guests.ORCH_INSTANCE:
         return h._json({"error": "orchestrator only"}, 403)
     rows = [{"id": t.get("id"), "instance": t.get("instance"),
              "schedule": t.get("schedule", ""), "status": t.get("status", ""),
@@ -3780,7 +3726,7 @@ def _rt_history(h):
     # Guest: only runs it created or executed; orchestrator and admin: all.
     q = _qs(h)
     guest = h._guest()
-    scope = guest["name"] if guest is not None and guest["name"] != ORCH_INSTANCE else None
+    scope = guest["name"] if guest is not None and guest["name"] != _guests.ORCH_INSTANCE else None
     return h._json({"rows": _store.history_search(q.get("q", [""])[0], q.get("limit", ["20"])[0],
                                            instance=scope)})
 
@@ -3870,7 +3816,7 @@ def _rt_task_create_guest(h):
         return h._json({"error": "message missing"})
     if terr:
         return h._json({"error": terr})
-    if not guest_may_target(inst, target):
+    if not _guests.guest_may_target(inst, target):
         return h._json({"error": f"target '{target}' not allowed for this instance "
                                  "(own name, 'ephemeral', or a DELEGATE_TARGETS entry in its config)"})
     sandbox = None
@@ -3891,7 +3837,7 @@ def _rt_task_create_guest(h):
 
 def _orchestrator_or_admin(h):
     g = h._guest()
-    return g is None or g.get("name") == ORCH_INSTANCE
+    return g is None or g.get("name") == _guests.ORCH_INSTANCE
 
 
 @ROUTER.post("/api/task-edit")
@@ -3937,7 +3883,7 @@ def _rt_mission_write(h):
     g = h._guest()
     if g is not None and g["name"].startswith(("task-", "sub-")):
         return h._json({"error": "ephemeral VMs may not own missions"}, 403)
-    inst = g["name"] if g else ORCH_INSTANCE
+    inst = g["name"] if g else _guests.ORCH_INSTANCE
     b = h._body()
     p = h.path.split("?", 1)[0]
     if p.endswith("start"):
@@ -4621,7 +4567,7 @@ def _rt_sessions_search(h):
     if inst is not None:
         if not _util.rate_ok(("sessions-search", inst["name"]), 60, 300):
             return h._json({"error": "rate limit"}, 429)
-        scope = None if inst["name"] == ORCH_INSTANCE else inst["name"]
+        scope = None if inst["name"] == _guests.ORCH_INSTANCE else inst["name"]
         if scope is None and b.get("instance"):
             scope = str(b.get("instance"))[:80]
     else:

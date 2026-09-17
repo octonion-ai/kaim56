@@ -1999,7 +1999,7 @@ class ManagerFunctions(unittest.TestCase):
         403 for the VM), the upstreams must match the secret names, and the
         settings toggle must appear in the schema."""
         m = self.m
-        self.assertIn("/api/llm/", m.GUEST_POST_PREFIXES)
+        self.assertIn("/api/llm/", m._guests.GUEST_POST_PREFIXES)
         self.assertEqual(set(m._llmproxy.LLM_PROXY_UPSTREAMS), {"openrouter", "orcarouter"})
         for url, keyname in m._llmproxy.LLM_PROXY_UPSTREAMS.values():
             self.assertTrue(url.endswith("/chat/completions"), url)
@@ -2206,11 +2206,11 @@ class ManagerFunctions(unittest.TestCase):
         JSON/plain answers (the chat API) do not."""
         m = self.m
         import types
-        old = m._instances.load_instances, m._instances.is_running, m._instances.net_of, m.urllib.request.urlopen, m.instance_by_ip
+        old = m._instances.load_instances, m._instances.is_running, m._instances.net_of, m.urllib.request.urlopen, m._guests.instance_by_ip
         try:
             inst = {"name": "vm1", "index": 3, "template": "openrouter"}
             m._instances.load_instances = lambda: [inst]; m._instances.is_running = lambda i: True
-            m._instances.net_of = lambda i: {"guest": "172.30.3.2", "tap": "fc3"}; m.instance_by_ip = lambda ip: None
+            m._instances.net_of = lambda i: {"guest": "172.30.3.2", "tap": "fc3"}; m._guests.instance_by_ip = lambda ip: None
             class Resp:
                 def __init__(self, ct, body): self.status, self.headers, self._b = 200, {"Content-Type": ct}, body
                 def read(self, n=-1):
@@ -2225,7 +2225,7 @@ class ManagerFunctions(unittest.TestCase):
                 self.assertEqual(self._status(h), 200)
                 self.assertEqual(b"content-security-policy: sandbox" in raw.lower(), want, (ct, raw[:200]))
         finally:
-            m._instances.load_instances, m._instances.is_running, m._instances.net_of, m.urllib.request.urlopen, m.instance_by_ip = old
+            m._instances.load_instances, m._instances.is_running, m._instances.net_of, m.urllib.request.urlopen, m._guests.instance_by_ip = old
 
     def test_memfs_git_never_runs_as_root_with_hooks(self):
         """C-1: git in the guest-writable memory folder must run as the guest
@@ -2330,9 +2330,9 @@ class ManagerFunctions(unittest.TestCase):
         reaches a VM only when the key is also in guest_readable."""
         m = self.m
         guest = {"name": "hass", "template": "openrouter", "index": 7, "config": {}}
-        old = m.instance_by_ip, m._secrets.load_secret_policy, m._secrets.secret_store
+        old = m._guests.instance_by_ip, m._secrets.load_secret_policy, m._secrets.secret_store
         try:
-            m.instance_by_ip = lambda ip: guest if ip == "172.30.7.2" else None
+            m._guests.instance_by_ip = lambda ip: guest if ip == "172.30.7.2" else None
             m._secrets.secret_store = lambda: {"HA_TOKEN": "t0k", "OPENROUTER_API_KEY": "k3y"}
             m._secrets.load_secret_policy = lambda: {"by_template": {"openrouter": ["OPENROUTER_API_KEY"]},
                                             "by_instance": {"hass": ["HA_TOKEN"]},
@@ -2354,7 +2354,7 @@ class ManagerFunctions(unittest.TestCase):
             finally:
                 m._secrets.SECRET_POLICY_FILE = oldf
         finally:
-            m.instance_by_ip, m._secrets.load_secret_policy, m._secrets.secret_store = old
+            m._guests.instance_by_ip, m._secrets.load_secret_policy, m._secrets.secret_store = old
 
     def test_harness_disk_rebuilds_when_agent_source_changes(self):
         """The agent code rides a read-only drive built from AGENT_SRC: built
@@ -2974,9 +2974,9 @@ class ManagerFunctions(unittest.TestCase):
         """A body over the cap is answered 413 without being read; a bad or
         negative Content-Length is an empty body, not a hang."""
         m = self.m
-        old = m.instance_by_ip, m._auth.PW
+        old = m._guests.instance_by_ip, m._auth.PW
         try:
-            m.instance_by_ip = lambda ip: None
+            m._guests.instance_by_ip = lambda ip: None
             m._auth.PW = ""
             h = self._post_handler("/api/settings", "10.0.0.5", b"{}")
             h.headers.replace_header("Content-Length", str(m.BODY_MAX + 1))
@@ -2991,16 +2991,16 @@ class ManagerFunctions(unittest.TestCase):
             with self.assertRaises(m._util.BodyTooLarge):
                 h.headers.replace_header("Content-Length", str(m.BODY_MAX_AUDIO + 1)); h._raw(m.BODY_MAX_AUDIO)
         finally:
-            m.instance_by_ip, m._auth.PW = old
+            m._guests.instance_by_ip, m._auth.PW = old
 
     def test_cross_site_post_is_refused(self):
         """CSRF: a browser on another site (or a DNS-rebound name) sends its
         Origin and is refused; our own origins pass; clients without an Origin
         (app, desktop, curl) are untouched. Guests never carry one."""
         m = self.m
-        old = m.instance_by_ip, m._auth.PW, dict(m._auth._trusted_cache)
+        old = m._guests.instance_by_ip, m._auth.PW, dict(m._auth._trusted_cache)
         try:
-            m.instance_by_ip = lambda ip: None
+            m._guests.instance_by_ip = lambda ip: None
             m._auth.PW = ""
             m._auth._trusted_cache.update(ts=time.time() + 3600, hosts={"agents.example.com", "localhost", "192.168.1.10"})
             self.assertTrue(m._auth.origin_allowed(""))
@@ -3016,21 +3016,21 @@ class ManagerFunctions(unittest.TestCase):
             h.do_POST()
             self.assertEqual(self._status(h), 404)          # passed the guard, no such route
         finally:
-            m.instance_by_ip, m._auth.PW = old[:2]
+            m._guests.instance_by_ip, m._auth.PW = old[:2]
             m._auth._trusted_cache.update(old[2])
 
     def test_responses_carry_hardening_headers(self):
         m = self.m
-        old = m.instance_by_ip
+        old = m._guests.instance_by_ip
         try:
-            m.instance_by_ip = lambda ip: None
+            m._guests.instance_by_ip = lambda ip: None
             h = self._handler("/api/agents", "10.0.0.5")
             h._json({"ok": 1})
             head = h.wfile.getvalue().split(b"\r\n\r\n", 1)[0].lower()
             self.assertIn(b"x-content-type-options: nosniff", head)
             self.assertIn(b"x-frame-options: sameorigin", head)
         finally:
-            m.instance_by_ip = old
+            m._guests.instance_by_ip = old
 
     def test_terminal_tunnel_forwards_only_upgrade_headers(self):
         """The browser's Authorization (Traefik's BasicAuth passes it on) and
@@ -3047,9 +3047,9 @@ class ManagerFunctions(unittest.TestCase):
         as relayed by that agent so the orchestrator knows who spoke."""
         m = self.m
         web = {"name": "web1", "template": "openrouter", "index": 3, "config": {"TRANSPORT": "web"}}
-        old = m.instance_by_ip, m.load_chats, m._inbox_wm, m.INBOX_WM_FILE
+        old = m._guests.instance_by_ip, m.load_chats, m._inbox_wm, m.INBOX_WM_FILE
         try:
-            m.instance_by_ip = lambda ip: web if ip == "172.30.3.2" else None
+            m._guests.instance_by_ip = lambda ip: web if ip == "172.30.3.2" else None
             h = self._post_handler("/api/chat-log", "172.30.3.2", b'{"sender":"x","user":"hi"}')
             h.do_POST()
             self.assertEqual(self._status(h), 403)
@@ -3065,7 +3065,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertNotIn("via", items["web-1"])
             self.assertEqual(items["web-1"]["text"], "Plan")
         finally:
-            m.instance_by_ip, m.load_chats, m._inbox_wm, m.INBOX_WM_FILE = old
+            m._guests.instance_by_ip, m.load_chats, m._inbox_wm, m.INBOX_WM_FILE = old
 
     def test_mount_validation_and_guest_mount_list(self):
         """A host folder never exposes the manager tree, the agent sources or
@@ -3074,7 +3074,7 @@ class ManagerFunctions(unittest.TestCase):
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-mounts-")
         share = os.path.join(tmp, "share"); os.makedirs(share)
-        old = m._browse.BROWSE_ROOTS, m.instance_by_ip, m.mount_specs, m._instances.load_instances
+        old = m._browse.BROWSE_ROOTS, m._guests.instance_by_ip, m.mount_specs, m._instances.load_instances
         try:
             m._browse.BROWSE_ROOTS = (tmp,)
             self.assertEqual(m.mount_error(share, "/home/node/data"), "")
@@ -3090,13 +3090,13 @@ class ManagerFunctions(unittest.TestCase):
             inst = {"name": "vm1", "index": 4, "template": "openrouter", "rootfs": "instances/openrouter-rootfs.ext4", "mounts": []}
             m._instances.load_instances = lambda: [inst]
             m.mount_specs = lambda i: [{"sub": m.FCMNT_ROOT + "/vm1/0", "guest": "/home/node/data", "ro": True}]
-            m.instance_by_ip = lambda ip: inst if ip == "172.30.4.2" else None
+            m._guests.instance_by_ip = lambda ip: inst if ip == "172.30.4.2" else None
             h = self._handler("/api/mounts", "172.30.4.2"); h._do_GET()
             self.assertIn(m.FCMNT_ROOT.encode() + b"/vm1/0|/home/node/data|ro\n", h.wfile.getvalue())
             h = self._handler("/api/mounts?instance=nope", "10.0.0.5"); h._do_GET()
             self.assertEqual(self._status(h), 404)
         finally:
-            m._browse.BROWSE_ROOTS, m.instance_by_ip, m.mount_specs, m._instances.load_instances = old
+            m._browse.BROWSE_ROOTS, m._guests.instance_by_ip, m.mount_specs, m._instances.load_instances = old
 
     def test_set_mounts_refuses_bad_folders(self):
         m = self.m
@@ -3148,7 +3148,7 @@ class ManagerFunctions(unittest.TestCase):
         off for that instance; explicit notes obey the same switch."""
         m = self.m
         seen = []
-        old = (m._instances.load_instances, m.instance_by_ip, m.save_chats, m.load_chats, m._memfs.timeline_add,
+        old = (m._instances.load_instances, m._guests.instance_by_ip, m.save_chats, m.load_chats, m._memfs.timeline_add,
                m._hindsight.retain_async)
         try:
             m._hindsight.retain_async = lambda inst, text, tags=(): seen.append((inst, text, tuple(tags)))
@@ -3166,7 +3166,7 @@ class ManagerFunctions(unittest.TestCase):
             m.chat_log_append("voice", "", "hallo", "hi", kind="voice")                 # retention off
             self.assertEqual(seen, [])
         finally:
-            (m._instances.load_instances, m.instance_by_ip, m.save_chats, m.load_chats, m._memfs.timeline_add,
+            (m._instances.load_instances, m._guests.instance_by_ip, m.save_chats, m.load_chats, m._memfs.timeline_add,
              m._hindsight.retain_async) = old
 
     def test_hindsight_second_memory(self):
@@ -3204,7 +3204,7 @@ class ManagerFunctions(unittest.TestCase):
             m._hindsight.configure(m._settings.load_settings, log=lambda *a, **k: None); m._hindsight._call = fake
             m._store.sem_search = lambda inst, q, k=5: [{"score": 0.5, "text": "likes radio"}]
             h = self._post_handler("/api/memory-search", "10.0.0.9", json.dumps({"instance": "vm1", "query": "commute"}).encode())
-            m.instance_by_ip = lambda ip: None
+            m._guests.instance_by_ip = lambda ip: None
             h._do_POST()
             d = json.loads(h.wfile.getvalue().split(b"\r\n\r\n", 1)[1])
             self.assertEqual([x["text"] for x in d["hits"]], ["likes radio", "Ulrich bikes to work"])
@@ -3251,13 +3251,13 @@ class ManagerFunctions(unittest.TestCase):
         m = self.m
         import mgr.store as st
         seen = []
-        old = (m.instance_by_ip, m._instances.load_instances, m._run_task_now, m._store.history_add, m.guest_may_target,
+        old = (m._guests.instance_by_ip, m._instances.load_instances, m._run_task_now, m._store.history_add, m._guests.guest_may_target,
                m._run_ephemeral, st.TASKS_FILE)
         try:
             caller = {"name": "orch", "config": {}}
-            m.instance_by_ip = lambda ip: caller if ip == "172.30.1.2" else None
+            m._guests.instance_by_ip = lambda ip: caller if ip == "172.30.1.2" else None
             m._instances.load_instances = lambda: [caller, {"name": "hass"}]
-            m.guest_may_target = lambda inst, target: True
+            m._guests.guest_may_target = lambda inst, target: True
             m._store.history_add = lambda *a, **k: None
             m._run_task_now = lambda target, msg, model=None, timeout=600, sandbox=None: (seen.append((target, msg, sandbox)), (True, "ok"))[1]
             def post(body):
@@ -3286,7 +3286,7 @@ class ManagerFunctions(unittest.TestCase):
             m._run_task_now("ephemeral", "do")
             self.assertEqual(len(calls[0][0]), 4); self.assertEqual(len(calls[1][0]), 3)
         finally:
-            (m.instance_by_ip, m._instances.load_instances, m._run_task_now, m._store.history_add, m.guest_may_target,
+            (m._guests.instance_by_ip, m._instances.load_instances, m._run_task_now, m._store.history_add, m._guests.guest_may_target,
              m._run_ephemeral, st.TASKS_FILE) = old
 
     def test_egress_allowlist_rules(self):
@@ -3324,9 +3324,9 @@ class ManagerFunctions(unittest.TestCase):
         touches no chat."""
         m = self.m
         seen = []
-        old = m.instance_by_ip, m._notify.notify_add, m.chat_log_append, m._audit.audit_append
+        old = m._guests.instance_by_ip, m._notify.notify_add, m.chat_log_append, m._audit.audit_append
         try:
-            m.instance_by_ip = lambda ip: {"name": "orch"} if ip == "172.30.1.2" else None
+            m._guests.instance_by_ip = lambda ip: {"name": "orch"} if ip == "172.30.1.2" else None
             m._notify.notify_add = lambda inst, title, body, link="": ("id1", "")
             m.chat_log_append = lambda inst, sender, u, r, kind="signal": seen.append((inst, u, r, kind)) or 1
             m._audit.audit_append = lambda *a, **k: None
@@ -3344,7 +3344,7 @@ class ManagerFunctions(unittest.TestCase):
             h._do_POST()
             self.assertEqual(len(seen), 1)
         finally:
-            m.instance_by_ip, m._notify.notify_add, m.chat_log_append, m._audit.audit_append = old
+            m._guests.instance_by_ip, m._notify.notify_add, m.chat_log_append, m._audit.audit_append = old
 
     def test_tool_allowlist_enforced_at_the_host(self):
         """A-2: a restricted instance is refused a capability it did not list;
@@ -3355,20 +3355,20 @@ class ManagerFunctions(unittest.TestCase):
         self.assertFalse(m.tool_allowed({"config": {"AGENT_TOOLS": "bash,read_file"}}, "send_signal"))
         self.assertFalse(m.tool_allowed({"config": {"AGENT_TOOLS": "bash"}}, "ha_control"))
         seen = []
-        old = m.instance_by_ip, m._notify.notify_add, m._audit.audit_append, m.chat_log_append
+        old = m._guests.instance_by_ip, m._notify.notify_add, m._audit.audit_append, m.chat_log_append
         try:
             m._notify.notify_add = lambda *a, **k: seen.append(a) or ("id", "")
             m._audit.audit_append = lambda *a, **k: None; m.chat_log_append = lambda *a, **k: 1
-            m.instance_by_ip = lambda ip: {"name": "r", "config": {"AGENT_TOOLS": "bash"}} if ip == "172.30.1.2" else None
+            m._guests.instance_by_ip = lambda ip: {"name": "r", "config": {"AGENT_TOOLS": "bash"}} if ip == "172.30.1.2" else None
             h = self._post_handler("/api/notify", "172.30.1.2", json.dumps({"title": "t", "message": "m"}).encode())
             h._do_POST()
             self.assertEqual(self._status(h), 403); self.assertEqual(seen, [])
-            m.instance_by_ip = lambda ip: {"name": "o", "config": {}}
+            m._guests.instance_by_ip = lambda ip: {"name": "o", "config": {}}
             h = self._post_handler("/api/notify", "172.30.1.2", json.dumps({"title": "t", "message": "m"}).encode())
             h._do_POST()
             self.assertEqual(self._status(h), 200); self.assertEqual(len(seen), 1)
         finally:
-            m.instance_by_ip, m._notify.notify_add, m._audit.audit_append, m.chat_log_append = old
+            m._guests.instance_by_ip, m._notify.notify_add, m._audit.audit_append, m.chat_log_append = old
 
     def test_persona_carries_tools_and_model(self):
         """Feature 3: a persona keeps an optional recommended tool subset and
@@ -3598,9 +3598,9 @@ class ManagerFunctions(unittest.TestCase):
         password included; a success clears the counter. Behind the local proxy
         the client is the first X-Forwarded-For hop, not the proxy."""
         m = self.m
-        old = m.instance_by_ip, m._auth.PW, m._auth.USER
+        old = m._guests.instance_by_ip, m._auth.PW, m._auth.USER
         try:
-            m.instance_by_ip = lambda ip: None
+            m._guests.instance_by_ip = lambda ip: None
             m._auth.PW, m._auth.USER = "s3cret", "admin"
             m._auth._auth_fails.clear()
             good = "Basic " + base64.b64encode(b"admin:s3cret").decode()
@@ -3619,7 +3619,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual(m._auth.auth_client_key("172.17.0.3", "203.0.113.5"), "203.0.113.5")
             self.assertEqual(m._auth.auth_client_key("192.168.1.20", "203.0.113.5"), "192.168.1.20")   # LAN client: XFF ignored
         finally:
-            m.instance_by_ip, m._auth.PW, m._auth.USER = old
+            m._guests.instance_by_ip, m._auth.PW, m._auth.USER = old
             m._auth._auth_fails.clear()
 
     def test_instance_json_is_operator_readable(self):
@@ -3685,9 +3685,9 @@ class ManagerFunctions(unittest.TestCase):
         'admin/notify empty' line in the live audit each time (138 of them
         looked like a misbehaving admin instance)."""
         m = self.m
-        old = m.instance_by_ip, m._audit.audit_append, m._auth.PW
+        old = m._guests.instance_by_ip, m._audit.audit_append, m._auth.PW
         try:
-            m.instance_by_ip = lambda ip: None
+            m._guests.instance_by_ip = lambda ip: None
             m._audit.audit_append = lambda *a, **k: None
             m._auth.PW = ""
             h = self._post_handler("/api/notify", "10.0.0.5", b'{"title": "", "message": ""}')
@@ -3695,7 +3695,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual(self._status(h), 429)
             self.assertIsNone(json.loads(h.wfile.getvalue().split(b"\r\n\r\n", 1)[1]).get("id"))
         finally:
-            m.instance_by_ip, m._audit.audit_append, m._auth.PW = old
+            m._guests.instance_by_ip, m._audit.audit_append, m._auth.PW = old
 
     def test_task_runs_carry_a_deadline_and_the_worker_timeout(self):
         """The bridge call carries deadline = now + timeout - margin; the worker
@@ -3744,7 +3744,7 @@ class ManagerFunctions(unittest.TestCase):
         import sqlite3
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-trace-")
-        old = st.HISTORY_DB, m._audit.AUDIT_DIR, m.instance_by_ip, m._settings.load_settings, list(st._migrated)
+        old = st.HISTORY_DB, m._audit.AUDIT_DIR, m._guests.instance_by_ip, m._settings.load_settings, list(st._migrated)
         try:
             st.HISTORY_DB = os.path.join(tmp, "history.db")
             m._audit.AUDIT_DIR = os.path.join(tmp, "audit")
@@ -3755,7 +3755,7 @@ class ManagerFunctions(unittest.TestCase):
                           "VALUES(1,'vm1','old',1,1,0)")
             st._migrated[0] = False
             inst = {"name": "vm1", "index": 3, "template": "openrouter", "config": {}}
-            m.instance_by_ip = lambda ip: inst if ip == "172.30.3.2" else None
+            m._guests.instance_by_ip = lambda ip: inst if ip == "172.30.3.2" else None
             m._settings.load_settings = lambda: {}                    # proxy off: the agent reports usage
             def post(path, body):
                 h = self._post_handler(path, "172.30.3.2", json.dumps(body).encode()); h.do_POST()
@@ -3799,7 +3799,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual(st.usage_for("vm1")["calls"], 3)          # the old row still counts
             self.assertEqual(st.turns_prune(30), 0)
         finally:
-            st.HISTORY_DB, m._audit.AUDIT_DIR, m.instance_by_ip, m._settings.load_settings = old[:4]
+            st.HISTORY_DB, m._audit.AUDIT_DIR, m._guests.instance_by_ip, m._settings.load_settings = old[:4]
             st._migrated[0] = old[4][0]
 
     def test_instance_proxy_forwards_the_turn_header(self):
@@ -3820,13 +3820,13 @@ class ManagerFunctions(unittest.TestCase):
                 if n is None:
                     out, self.pos = self.body[self.pos:], len(self.body); return out
                 out = self.body[self.pos:self.pos + n]; self.pos += len(out); return out
-        old = m.urllib.request.urlopen, m._instances.load_instances, m._instances.is_running, m._instances.net_of, m.instance_by_ip, m._auth.PW
+        old = m.urllib.request.urlopen, m._instances.load_instances, m._instances.is_running, m._instances.net_of, m._guests.instance_by_ip, m._auth.PW
         try:
             inst = {"name": "vm1", "index": 4, "config": {"TRANSPORT": "web"}}
             m._instances.load_instances = lambda: [inst]
             m._instances.is_running = lambda i: True
             m._instances.net_of = lambda i: {"guest": "172.30.4.2"}
-            m.instance_by_ip = lambda ip: None
+            m._guests.instance_by_ip = lambda ip: None
             m._auth.PW = ""
             m.urllib.request.urlopen = lambda req, timeout=None: _R(b"Hallo", "text/plain; charset=utf-8", "t0ken001")
             h = self._post_handler("/i/vm1/api/chat/stream", "10.0.0.5", b'{"message":"hi"}')
@@ -3844,7 +3844,7 @@ class ManagerFunctions(unittest.TestCase):
             h = self._handler("/i/vm1/", "10.0.0.5"); h._proxy("GET")
             self.assertNotIn(b"X-Kaim-Turn", h.wfile.getvalue())                # nothing to forward
         finally:
-            m.urllib.request.urlopen, m._instances.load_instances, m._instances.is_running, m._instances.net_of, m.instance_by_ip, m._auth.PW = old
+            m.urllib.request.urlopen, m._instances.load_instances, m._instances.is_running, m._instances.net_of, m._guests.instance_by_ip, m._auth.PW = old
 
     def test_task_run_now(self):
         """The Tasks tab's play button: a scheduled task runs at the next tick
@@ -3853,7 +3853,7 @@ class ManagerFunctions(unittest.TestCase):
         import mgr.store as st
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-runnow-")
-        old = st.TASKS_FILE, m.instance_by_ip, m._auth.PW
+        old = st.TASKS_FILE, m._guests.instance_by_ip, m._auth.PW
         try:
             st.TASKS_FILE = os.path.join(tmp, "tasks.json")
             later = int(time.time()) + 86400
@@ -3875,11 +3875,11 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual(ts["o1"]["status"], "pending")
             self.assertEqual(ts["r1"]["status"], "running")
             # the route
-            m.instance_by_ip = lambda ip: None; m._auth.PW = ""
+            m._guests.instance_by_ip = lambda ip: None; m._auth.PW = ""
             h = self._post_handler("/api/tasks/o1/run", "10.0.0.5", b"{}"); h.do_POST()
             self.assertIn(b"queued", h.wfile.getvalue())
         finally:
-            st.TASKS_FILE, m.instance_by_ip, m._auth.PW = old
+            st.TASKS_FILE, m._guests.instance_by_ip, m._auth.PW = old
 
     def test_skill_proposals_wait_for_approval(self):
         """An agent's skill proposal is linted, stored, announced, and enters
@@ -3887,13 +3887,13 @@ class ManagerFunctions(unittest.TestCase):
         with the same name replaces the pending one; admins cannot file."""
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-skprop-")
-        old = m.SKILL_PROPOSALS_FILE, m.SKILLS_FILE, m._notify.notify_add, m.instance_by_ip, m._auth.PW
+        old = m.SKILL_PROPOSALS_FILE, m.SKILLS_FILE, m._notify.notify_add, m._guests.instance_by_ip, m._auth.PW
         notes = []
         try:
             m.SKILL_PROPOSALS_FILE = os.path.join(tmp, "p.json"); m.SKILLS_FILE = os.path.join(tmp, "s.json")
             m._notify.notify_add = lambda *a, **k: notes.append(a)
             vm = {"name": "vm1", "index": 3, "template": "openrouter", "config": {}}
-            m.instance_by_ip = lambda ip: vm if ip == "172.30.3.2" else None
+            m._guests.instance_by_ip = lambda ip: vm if ip == "172.30.3.2" else None
             good = {"name": "Job-Search-NRW", "description": "Daily job search for a region",
                     "content": "# Purpose\nSearch job boards.\n\n## Steps\n1. web_search with the region\n2. http_fetch each hit\n3. notify a summary\n\n## Pitfalls\nIndeed blocks fetches.",
                     "turn": "t1"}
@@ -3923,7 +3923,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertTrue(pid); self.assertTrue(next(p for p in m.load_proposals() if p["id"] == pid)["update"])
             self.assertIn("discarded", m.proposal_decide(pid, False))
         finally:
-            m.SKILL_PROPOSALS_FILE, m.SKILLS_FILE, m._notify.notify_add, m.instance_by_ip, m._auth.PW = old
+            m.SKILL_PROPOSALS_FILE, m.SKILLS_FILE, m._notify.notify_add, m._guests.instance_by_ip, m._auth.PW = old
 
     def test_sessions_fulltext_search_scoped_per_guest(self):
         """FTS5 over chats and task runs: exact words find the session, guests
@@ -3932,7 +3932,7 @@ class ManagerFunctions(unittest.TestCase):
         import mgr.store as st
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-fts-")
-        old = st.HISTORY_DB, m.load_chats, m.CHATS_FILE, m.instance_by_ip, dict(st._fts_state)
+        old = st.HISTORY_DB, m.load_chats, m.CHATS_FILE, m._guests.instance_by_ip, dict(st._fts_state)
         try:
             st.HISTORY_DB = os.path.join(tmp, "history.db"); st._fts_state["mtime"] = None
             m.CHATS_FILE = os.path.join(tmp, "chats.json"); open(m.CHATS_FILE, "w").write("[]")
@@ -3950,8 +3950,8 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual(m.sessions_search("Vaillant", instance="vm2"), [])
             self.assertEqual(m.sessions_search('"; DROP TABLE x; --'), [])           # syntax cannot break it
             # guest scoping through the route
-            vm1 = {"name": "vm1", "index": 3, "config": {}}; orch = {"name": m.ORCH_INSTANCE, "index": 1, "config": {}}
-            m.instance_by_ip = lambda ip: {"172.30.3.2": vm1, "172.30.1.2": orch}.get(ip)
+            vm1 = {"name": "vm1", "index": 3, "config": {}}; orch = {"name": m._guests.ORCH_INSTANCE, "index": 1, "config": {}}
+            m._guests.instance_by_ip = lambda ip: {"172.30.3.2": vm1, "172.30.1.2": orch}.get(ip)
             h = self._post_handler("/api/sessions-search", "172.30.3.2", b'{"q": "Gartenhaus"}'); h.do_POST()
             self.assertEqual(json.loads(h.wfile.getvalue().split(b"\r\n\r\n", 1)[1])["hits"], [])     # vm2's chat
             h = self._post_handler("/api/sessions-search", "172.30.1.2", b'{"q": "Gartenhaus"}'); h.do_POST()
@@ -3961,7 +3961,7 @@ class ManagerFunctions(unittest.TestCase):
             os.utime(m.CHATS_FILE, (1, 1))
             self.assertEqual(len(m.sessions_search("Gartenhaus")), 2)
         finally:
-            st.HISTORY_DB, m.load_chats, m.CHATS_FILE, m.instance_by_ip = old[:4]
+            st.HISTORY_DB, m.load_chats, m.CHATS_FILE, m._guests.instance_by_ip = old[:4]
             st._fts_state.clear(); st._fts_state.update(old[4])
 
     def test_session_panel_data_and_log(self):
@@ -3973,7 +3973,7 @@ class ManagerFunctions(unittest.TestCase):
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-session-")
         old = (m._instances.load_instances, m._instances.is_running, m._instances.pidfile, m._settings.load_settings, m._secrets.secret_store, m._secrets.load_secret_policy,
-               m._mcp.load_mcps, m.load_skills, m._paths.RUN_DIR, m.instance_by_ip, m._auth.PW, st.HISTORY_DB, m.image_state)
+               m._mcp.load_mcps, m.load_skills, m._paths.RUN_DIR, m._guests.instance_by_ip, m._auth.PW, st.HISTORY_DB, m.image_state)
         try:
             inst = {"name": "vm1", "index": 3, "template": "openrouter", "rootfs": "instances/openrouter-rootfs.ext4",
                     "config": {"OPENROUTER_MODEL": "x/y", "MCP_SERVERS": "caldav,homeassistant"}}
@@ -3991,7 +3991,7 @@ class ManagerFunctions(unittest.TestCase):
             m._mcp.load_mcps = lambda: [{"name": "caldav", "command": "c", "env": {"CALDAV_PASSWORD": "${CALDAV_PASSWORD}"}},
                                    {"name": "homeassistant", "command": "h", "args": ["Bearer ${HA_TOKEN}"]}]
             m.load_skills = lambda: [{"name": "a"}, {"name": "b"}]
-            m.instance_by_ip = lambda ip: None; m._auth.PW = ""
+            m._guests.instance_by_ip = lambda ip: None; m._auth.PW = ""
             d = m.session_info(inst)
             self.assertEqual((d["runtime"], d["login"], d["model"]), ("openrouter-agent", "key proxy", "x/y"))
             self.assertTrue(7400 < d["uptime"] < 7700)
@@ -4006,17 +4006,17 @@ class ManagerFunctions(unittest.TestCase):
             self.assertTrue(h.wfile.getvalue().endswith(b"agent ready\n"))
             h = self._handler("/api/session/nope", "10.0.0.5"); h._do_GET()
             self.assertEqual(self._status(h), 404)
-            m.instance_by_ip = lambda ip: inst
+            m._guests.instance_by_ip = lambda ip: inst
             h = self._handler("/api/session/vm1", "172.30.3.2"); h._do_GET()
             self.assertEqual(self._status(h), 403)                                  # guests: no
             # a claude instance reports its host credential, not a key
-            m.instance_by_ip = lambda ip: None
+            m._guests.instance_by_ip = lambda ip: None
             cl = {**inst, "template": "claude", "config": {}}
             self.assertRegex(m.session_info(cl)["login"], r"^(ok · valid \d+h \d+m|expired on the host.*|missing \(log in on the host\))$")
             self.assertNotIn("commands", m.session_info(cl))                       # the / picker lists them
         finally:
             (m._instances.load_instances, m._instances.is_running, m._instances.pidfile, m._settings.load_settings, m._secrets.secret_store, m._secrets.load_secret_policy,
-             m._mcp.load_mcps, m.load_skills, m._paths.RUN_DIR, m.instance_by_ip, m._auth.PW, st.HISTORY_DB, m.image_state) = old
+             m._mcp.load_mcps, m.load_skills, m._paths.RUN_DIR, m._guests.instance_by_ip, m._auth.PW, st.HISTORY_DB, m.image_state) = old
 
     def test_chat_page_carries_panel_and_search(self):
         """The rendered chat page has the session panel, the search bar and
@@ -4052,7 +4052,7 @@ class ManagerFunctions(unittest.TestCase):
         file stays 0600, values never come back through /api/secret-keys."""
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-secstore-")
-        old = m._secrets.SECRETS_FILE, m._settings.load_settings, m.instance_by_ip, m._auth.PW
+        old = m._secrets.SECRETS_FILE, m._settings.load_settings, m._guests.instance_by_ip, m._auth.PW
         try:
             m._secrets.SECRETS_FILE = os.path.join(tmp, "secrets.env")
             with open(m._secrets.SECRETS_FILE, "w") as fh:
@@ -4070,7 +4070,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual(m._secrets.secret_delete("MRMUSIC_TOKEN"), "MRMUSIC_TOKEN deleted")
             self.assertEqual(m._secrets.secret_delete("MRMUSIC_TOKEN"), "MRMUSIC_TOKEN not in the store")
             self.assertEqual(set(m._secrets.load_secrets_file()), {"HA_TOKEN", "CALDAV_PASSWORD"})
-            m.instance_by_ip = lambda ip: None; m._auth.PW = ""
+            m._guests.instance_by_ip = lambda ip: None; m._auth.PW = ""
             h = self._handler("/api/secret-keys", "10.0.0.5"); h._do_GET()
             body = json.loads(h.wfile.getvalue().split(b"\r\n\r\n", 1)[1])
             self.assertEqual(body["sources"], {"CALDAV_PASSWORD": "store", "HA_TOKEN": "store", "OPENROUTER_API_KEY": "settings"})
@@ -4080,11 +4080,11 @@ class ManagerFunctions(unittest.TestCase):
             h = self._post_handler("/api/secret-store/NEW_KEY/delete", "10.0.0.5", b"{}"); h.do_POST()
             self.assertIn(b"NEW_KEY deleted", h.wfile.getvalue())
             guest = {"name": "vm1", "index": 3, "config": {}}
-            m.instance_by_ip = lambda ip: guest
+            m._guests.instance_by_ip = lambda ip: guest
             h = self._post_handler("/api/secret-store", "172.30.3.2", b'{"name": "X_KEY", "value": "v"}'); h.do_POST()
             self.assertEqual(self._status(h), 403)                                       # guests: never
         finally:
-            m._secrets.SECRETS_FILE, m._settings.load_settings, m.instance_by_ip, m._auth.PW = old
+            m._secrets.SECRETS_FILE, m._settings.load_settings, m._guests.instance_by_ip, m._auth.PW = old
 
     def test_guest_get_denylist_covers_ui_proxy_and_terminal(self):
         """GET /i/<other>/term opened the shell of every other VM — only POST
@@ -4092,10 +4092,10 @@ class ManagerFunctions(unittest.TestCase):
         m = self.m
         for p in ("/", "/chat", "/chat?i=x", "/katfs", "/katfs/", "/katfs/x.txt",
                   "/i/orchestrator/", "/i/orchestrator/term", "/i/x/term/ws?y=1"):
-            self.assertTrue(m.guest_get_blocked(p), p)
+            self.assertTrue(m._guests.guest_get_blocked(p), p)
         for p in ("/api/agents", "/api/memory/self", "/api/skills?meta=1",
                   "/api/inbox", "/chatx", "/logo.svg"):
-            self.assertFalse(m.guest_get_blocked(p), p)
+            self.assertFalse(m._guests.guest_get_blocked(p), p)
 
     def test_guest_gets_403_on_denied_paths_and_skips_basic_auth(self):
         """Guests carry no credentials (identity = source IP), so they pass
@@ -4103,9 +4103,9 @@ class ManagerFunctions(unittest.TestCase):
         401. Denied GET paths answer 403 before any handler runs."""
         m = self.m
         guest = {"name": "hass", "index": 7, "config": {}}
-        old_ibi, old_pw = m.instance_by_ip, m._auth.PW
+        old_ibi, old_pw = m._guests.instance_by_ip, m._auth.PW
         try:
-            m.instance_by_ip = lambda ip: guest if ip == "172.30.7.2" else None
+            m._guests.instance_by_ip = lambda ip: guest if ip == "172.30.7.2" else None
             m._auth.PW = "secret"
             for p in ("/i/orchestrator/term", "/", "/chat", "/katfs/", "/api/inbox",
                       "/no/such/page"):
@@ -4120,7 +4120,7 @@ class ManagerFunctions(unittest.TestCase):
                 f"{m._auth.USER}:secret".encode()).decode())
             self.assertTrue(h._auth())
         finally:
-            m.instance_by_ip, m._auth.PW = old_ibi, old_pw
+            m._guests.instance_by_ip, m._auth.PW = old_ibi, old_pw
 
     def test_guest_task_target_policy(self):
         """A guest may task itself or an ephemeral VM; other instances only via
@@ -4128,17 +4128,17 @@ class ManagerFunctions(unittest.TestCase):
         m = self.m
         me = {"name": "jobresearcher", "config": {}}
         for t in ("ephemeral", "", None, "jobresearcher"):
-            self.assertTrue(m.guest_may_target(me, t), repr(t))
+            self.assertTrue(m._guests.guest_may_target(me, t), repr(t))
         for t in ("orchestrator", "hass", "claudy"):
-            self.assertFalse(m.guest_may_target(me, t), t)
+            self.assertFalse(m._guests.guest_may_target(me, t), t)
         me["config"]["DELEGATE_TARGETS"] = "hass, claudy"
-        self.assertTrue(m.guest_may_target(me, "hass"))
-        self.assertTrue(m.guest_may_target(me, "claudy"))
-        self.assertFalse(m.guest_may_target(me, "orchestrator"))
+        self.assertTrue(m._guests.guest_may_target(me, "hass"))
+        self.assertTrue(m._guests.guest_may_target(me, "claudy"))
+        self.assertFalse(m._guests.guest_may_target(me, "orchestrator"))
         me["config"]["DELEGATE_TARGETS"] = "*"
-        self.assertTrue(m.guest_may_target(me, "orchestrator"))
-        orch = {"name": m.ORCH_INSTANCE, "config": {}}
-        self.assertTrue(m.guest_may_target(orch, "anything"))
+        self.assertTrue(m._guests.guest_may_target(me, "orchestrator"))
+        orch = {"name": m._guests.ORCH_INSTANCE, "config": {}}
+        self.assertTrue(m._guests.guest_may_target(orch, "anything"))
 
     def test_history_search_scoped_to_instance(self):
         """recall_tasks from a guest returns only runs it created or executed."""
