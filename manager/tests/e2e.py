@@ -1269,25 +1269,25 @@ class ManagerFunctions(unittest.TestCase):
         m = self.m
         import tempfile, os
         tmp = tempfile.mkdtemp(prefix="e2e-pin-")
-        old_src, old_pins = m.PLUGINS_SRC, m.PLUGIN_PINS_FILE
-        m.PLUGINS_SRC = tmp
-        m.PLUGIN_PINS_FILE = os.path.join(tmp, ".pins.json")
+        old_src, old_pins = m._plugins.PLUGINS_SRC, m._plugins.PLUGIN_PINS_FILE
+        m._plugins.PLUGINS_SRC = tmp
+        m._plugins.PLUGIN_PINS_FILE = os.path.join(tmp, ".pins.json")
         try:
-            self.assertIsNone(m.plugin_write_py("foo", "DESC='x'\ndef run():\n    return 1\n"))
-            lst = {p["name"]: p for p in m.list_plugins()}
+            self.assertIsNone(m._plugins.plugin_write_py("foo", "DESC='x'\ndef run():\n    return 1\n"))
+            lst = {p["name"]: p for p in m._plugins.list_plugins()}
             self.assertTrue(lst["foo"]["pinned"])
             self.assertFalse(lst["foo"]["modified"])
             with open(os.path.join(tmp, "foo", "tool.py"), "a") as fh:
                 fh.write("# tampered\n")
-            lst = {p["name"]: p for p in m.list_plugins()}
+            lst = {p["name"]: p for p in m._plugins.list_plugins()}
             self.assertTrue(lst["foo"]["modified"])          # Manipulation erkannt
-            m.plugin_pin("foo")                              # Approve
-            lst = {p["name"]: p for p in m.list_plugins()}
+            m._plugins.plugin_pin("foo")                              # Approve
+            lst = {p["name"]: p for p in m._plugins.list_plugins()}
             self.assertFalse(lst["foo"]["modified"])
-            m.plugin_delete("foo")
-            self.assertNotIn("foo", m.load_plugin_pins())    # Pin mit weg
+            m._plugins.plugin_delete("foo")
+            self.assertNotIn("foo", m._plugins.load_plugin_pins())    # Pin mit weg
         finally:
-            m.PLUGINS_SRC, m.PLUGIN_PINS_FILE = old_src, old_pins
+            m._plugins.PLUGINS_SRC, m._plugins.PLUGIN_PINS_FILE = old_src, old_pins
 
     def test_plugin_files_link_into_vscode(self):
         """Approve must never be blind: each file name links to the file in the
@@ -1297,29 +1297,29 @@ class ManagerFunctions(unittest.TestCase):
         old = m._settings.CODE_URL, m._settings.CODE_ROOT
         try:
             m._settings.CODE_URL, m._settings.CODE_ROOT = "http://192.168.0.10:8443/", "/home/coder/firecracker"
-            u = m.plugin_code_link("folder", "greeter", "lib/h.py")
+            u = m._plugins.plugin_code_link("folder", "greeter", "lib/h.py")
             q = urllib.parse.parse_qs(urllib.parse.urlsplit(u).query)
             self.assertTrue(u.startswith("http://192.168.0.10:8443/?"))
             self.assertEqual(q["folder"], ["/home/coder/firecracker"])
             self.assertEqual(json.loads(q["payload"][0]),
                              [["openFile", "vscode-remote://192.168.0.10:8443/home/coder/firecracker/plugins/greeter/lib/h.py"]])
-            u1 = m.plugin_code_link("file", "dice", "dice.py")
+            u1 = m._plugins.plugin_code_link("file", "dice", "dice.py")
             self.assertIn("/home/coder/firecracker/plugins/dice.py", json.loads(
                 urllib.parse.parse_qs(urllib.parse.urlsplit(u1).query)["payload"][0])[0][1])
             m._settings.CODE_ROOT = ""
-            self.assertEqual(m.plugin_code_link("folder", "greeter", "tool.py"), "")
+            self.assertEqual(m._plugins.plugin_code_link("folder", "greeter", "tool.py"), "")
             # list_plugins carries the links per file
             tmp = tempfile.mkdtemp(prefix="e2e-pluglink-")
-            old_src, old_pins = m.PLUGINS_SRC, m.PLUGIN_PINS_FILE
-            m.PLUGINS_SRC, m.PLUGIN_PINS_FILE = tmp, os.path.join(tmp, ".pins.json")
+            old_src, old_pins = m._plugins.PLUGINS_SRC, m._plugins.PLUGIN_PINS_FILE
+            m._plugins.PLUGINS_SRC, m._plugins.PLUGIN_PINS_FILE = tmp, os.path.join(tmp, ".pins.json")
             try:
-                m.plugin_write_py("foo", "DESC='x'\n")
-                self.assertEqual(m.list_plugins()[0]["links"], {"tool.py": ""})
+                m._plugins.plugin_write_py("foo", "DESC='x'\n")
+                self.assertEqual(m._plugins.list_plugins()[0]["links"], {"tool.py": ""})
                 m._settings.CODE_ROOT = "/home/coder/firecracker"
                 self.assertIn("plugins/foo/tool.py", urllib.parse.unquote(
-                    m.list_plugins()[0]["links"]["tool.py"]))
+                    m._plugins.list_plugins()[0]["links"]["tool.py"]))
             finally:
-                m.PLUGINS_SRC, m.PLUGIN_PINS_FILE = old_src, old_pins
+                m._plugins.PLUGINS_SRC, m._plugins.PLUGIN_PINS_FILE = old_src, old_pins
         finally:
             m._settings.CODE_URL, m._settings.CODE_ROOT = old
         # the old in-manager viewer route is gone: guests never had it, admins use VS Code
@@ -1362,24 +1362,24 @@ class ManagerFunctions(unittest.TestCase):
         m = self.m
         import tempfile, os, io, zipfile
         tmp = tempfile.mkdtemp(prefix="e2e-plug-")
-        old = m.PLUGINS_SRC
-        m.PLUGINS_SRC = tmp
+        old = m._plugins.PLUGINS_SRC
+        m._plugins.PLUGINS_SRC = tmp
         try:
             buf = io.BytesIO(); z = zipfile.ZipFile(buf, "w")
             z.writestr("tool.py", "DESC='x'\nPARAMS={}\nREQUIRED=[]\ndef run():\n    return 1\n")
             z.writestr("helper.py", "x=1\n"); z.close()
-            self.assertIsNone(m.plugin_write_zip("mytool", buf.getvalue()))
+            self.assertIsNone(m._plugins.plugin_write_zip("mytool", buf.getvalue()))
             self.assertTrue(os.path.isfile(os.path.join(tmp, "mytool", "tool.py")))
             self.assertTrue(os.path.isfile(os.path.join(tmp, "mytool", "helper.py")))
             b2 = io.BytesIO(); z2 = zipfile.ZipFile(b2, "w")
             z2.writestr("tool.py", "def run():\n    return 1\n")
             z2.writestr("../evil.py", "boom\n"); z2.close()
-            m.plugin_write_zip("slip", b2.getvalue())
+            m._plugins.plugin_write_zip("slip", b2.getvalue())
             self.assertFalse(os.path.exists(os.path.join(tmp, "evil.py")))
             b3 = io.BytesIO(); z3 = zipfile.ZipFile(b3, "w"); z3.writestr("readme.txt", "x"); z3.close()
-            self.assertIsNotNone(m.plugin_write_zip("noentry", b3.getvalue()))
+            self.assertIsNotNone(m._plugins.plugin_write_zip("noentry", b3.getvalue()))
         finally:
-            m.PLUGINS_SRC = old
+            m._plugins.PLUGINS_SRC = old
 
     def test_playbook_add_imports_present(self):
         """Regression: mgr/rules.pb_add uses uuid+time -> they must be imported,
