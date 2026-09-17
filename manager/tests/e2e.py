@@ -2315,13 +2315,13 @@ class ManagerFunctions(unittest.TestCase):
             mf.MEMORY_ROOT = os.path.join(tmp, "memory")
             inst = {"name": "vc", "index": 8, "template": "openrouter", "rootfs": "instances/openrouter-rootfs.ext4",
                     "mounts": [{"host": tmp, "guest": "/mnt/x"}]}
-            specs = m.mount_specs(inst)
+            specs = m._mounts.mount_specs(inst)
             mem = [s for s in specs if s["guest"] == "/memory"]
             self.assertEqual(len(mem), 1)
             self.assertFalse(mem[0]["ro"])
             self.assertTrue(mem[0]["host"].endswith("/memory/vc"))
             self.assertEqual(mem[0]["fsid"], 4000 + 8 * 16 + 15)
-            self.assertEqual(m.mount_specs({**inst, "template": "claude", "rootfs": "instances/claude-rootfs.ext4"})[0]["guest"], "/mnt/x")
+            self.assertEqual(m._mounts.mount_specs({**inst, "template": "claude", "rootfs": "instances/claude-rootfs.ext4"})[0]["guest"], "/mnt/x")
         finally:
             mf.MEMORY_ROOT = old
 
@@ -3074,29 +3074,29 @@ class ManagerFunctions(unittest.TestCase):
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-mounts-")
         share = os.path.join(tmp, "share"); os.makedirs(share)
-        old = m._browse.BROWSE_ROOTS, m._guests.instance_by_ip, m.mount_specs, m._instances.load_instances
+        old = m._browse.BROWSE_ROOTS, m._guests.instance_by_ip, m._mounts.mount_specs, m._instances.load_instances
         try:
             m._browse.BROWSE_ROOTS = (tmp,)
-            self.assertEqual(m.mount_error(share, "/home/node/data"), "")
-            self.assertIn("not a directory", m.mount_error(os.path.join(tmp, "nope"), "/x"))
-            self.assertIn("must be under", m.mount_error("/srv", "/x"))
+            self.assertEqual(m._mounts.mount_error(share, "/home/node/data"), "")
+            self.assertIn("not a directory", m._mounts.mount_error(os.path.join(tmp, "nope"), "/x"))
+            self.assertIn("must be under", m._mounts.mount_error("/srv", "/x"))
             m._browse.BROWSE_ROOTS = ("/",)
-            self.assertIn("would expose", m.mount_error(m._paths.BASE, "/x"))
-            self.assertIn("would expose", m.mount_error(os.path.dirname(m._paths.BASE), "/x"))   # contains it
+            self.assertIn("would expose", m._mounts.mount_error(m._paths.BASE, "/x"))
+            self.assertIn("would expose", m._mounts.mount_error(os.path.dirname(m._paths.BASE), "/x"))   # contains it
             for bad in ("/bin", "/usr/local", "/etc/x", "/app", "/harness", "/config", "/memory", "/", "rel", "/a/../etc"):
-                self.assertTrue(m.mount_error(share, bad), bad)
+                self.assertTrue(m._mounts.mount_error(share, bad), bad)
             m._browse.BROWSE_ROOTS = (tmp,)
-            self.assertIn("error:", m.set_mounts.__doc__ or "error:")     # documented below via the route
+            self.assertIn("error:", m._mounts.set_mounts.__doc__ or "error:")     # documented below via the route
             inst = {"name": "vm1", "index": 4, "template": "openrouter", "rootfs": "instances/openrouter-rootfs.ext4", "mounts": []}
             m._instances.load_instances = lambda: [inst]
-            m.mount_specs = lambda i: [{"sub": m.FCMNT_ROOT + "/vm1/0", "guest": "/home/node/data", "ro": True}]
+            m._mounts.mount_specs = lambda i: [{"sub": m._mounts.FCMNT_ROOT + "/vm1/0", "guest": "/home/node/data", "ro": True}]
             m._guests.instance_by_ip = lambda ip: inst if ip == "172.30.4.2" else None
             h = self._handler("/api/mounts", "172.30.4.2"); h._do_GET()
-            self.assertIn(m.FCMNT_ROOT.encode() + b"/vm1/0|/home/node/data|ro\n", h.wfile.getvalue())
+            self.assertIn(m._mounts.FCMNT_ROOT.encode() + b"/vm1/0|/home/node/data|ro\n", h.wfile.getvalue())
             h = self._handler("/api/mounts?instance=nope", "10.0.0.5"); h._do_GET()
             self.assertEqual(self._status(h), 404)
         finally:
-            m._browse.BROWSE_ROOTS, m._guests.instance_by_ip, m.mount_specs, m._instances.load_instances = old
+            m._browse.BROWSE_ROOTS, m._guests.instance_by_ip, m._mounts.mount_specs, m._instances.load_instances = old
 
     def test_set_mounts_refuses_bad_folders(self):
         m = self.m
@@ -3107,8 +3107,8 @@ class ManagerFunctions(unittest.TestCase):
             m._browse.BROWSE_ROOTS = (tmp,)
             inst = {"name": "vm1", "index": 4, "template": "openrouter", "rootfs": "instances/openrouter-rootfs.ext4", "mounts": []}
             m._instances.load_instances = lambda: [inst]
-            m.mount_specs = m.mount_specs
-            r = m.set_mounts("vm1", [{"host": tmp, "guest": "/bin"}])
+            m._mounts.mount_specs = m._mounts.mount_specs
+            r = m._mounts.set_mounts("vm1", [{"host": tmp, "guest": "/bin"}])
             self.assertTrue(r.startswith("error:"), r)
             self.assertFalse(os.path.exists(os.path.join(tmp, "vm1.json")))     # nothing saved
         finally:
@@ -3532,66 +3532,66 @@ class ManagerFunctions(unittest.TestCase):
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-nfs-")
         calls = []
-        old = (m.AGENT_ROOT, m.FCMNT_ROOT, m.EXPORTS_D, m.AGENT_EXPORTS, m._util.sh, m.mount_specs,
-               m.GUEST_UID, m.GUEST_GID, m.ensure_guest_user)
+        old = (m._mounts.AGENT_ROOT, m._mounts.FCMNT_ROOT, m._mounts.EXPORTS_D, m._mounts.AGENT_EXPORTS, m._util.sh, m._mounts.mount_specs,
+               m._mounts.GUEST_UID, m._mounts.GUEST_GID, m._mounts.ensure_guest_user)
         try:
-            m.AGENT_ROOT = os.path.join(tmp, "agent"); m.FCMNT_ROOT = os.path.join(m.AGENT_ROOT, ".fcmnt")
-            m.EXPORTS_D = os.path.join(tmp, "exports.d"); m.AGENT_EXPORTS = os.path.join(m.EXPORTS_D, "agent.exports")
-            os.makedirs(m.EXPORTS_D)
-            with open(m.AGENT_EXPORTS, "w") as fh:
-                fh.write(f"{m.AGENT_ROOT} {m.POOL}(rw,fsid=0,crossmnt)\n")
+            m._mounts.AGENT_ROOT = os.path.join(tmp, "agent"); m._mounts.FCMNT_ROOT = os.path.join(m._mounts.AGENT_ROOT, ".fcmnt")
+            m._mounts.EXPORTS_D = os.path.join(tmp, "exports.d"); m._mounts.AGENT_EXPORTS = os.path.join(m._mounts.EXPORTS_D, "agent.exports")
+            os.makedirs(m._mounts.EXPORTS_D)
+            with open(m._mounts.AGENT_EXPORTS, "w") as fh:
+                fh.write(f"{m._mounts.AGENT_ROOT} {m.POOL}(rw,fsid=0,crossmnt)\n")
             m._util.sh = lambda *a, check=True: (calls.append(a), types.SimpleNamespace(returncode=0, stdout="", stderr=""))[1]
-            m.GUEST_UID, m.GUEST_GID = 4242, 4243
-            m.ensure_guest_user = lambda: True
+            m._mounts.GUEST_UID, m._mounts.GUEST_GID = 4242, 4243
+            m._mounts.ensure_guest_user = lambda: True
             share = os.path.join(tmp, "share"); os.makedirs(share)
             inst = {"name": "vm1", "index": 7, "template": "openrouter", "rootfs": "instances/openrouter-rootfs.ext4",
                     "config": {}, "mounts": [{"host": share, "guest": "/home/node/data", "readonly": True}]}
-            m.mount_specs = lambda i: [{"idx": 0, "host": share, "guest": "/home/node/data", "ro": True,
-                                        "target": os.path.join(m.FCMNT_ROOT, "vm1", "0"),
-                                        "sub": os.path.join(m.FCMNT_ROOT, "vm1", "0"), "fsid": 4000 + 7 * 16}]
-            m.setup_mounts(inst)
-            ex = open(os.path.join(m.EXPORTS_D, "fc-vm1.exports")).read()
-            ws = os.path.join(m.AGENT_ROOT, "vm1")
+            m._mounts.mount_specs = lambda i: [{"idx": 0, "host": share, "guest": "/home/node/data", "ro": True,
+                                        "target": os.path.join(m._mounts.FCMNT_ROOT, "vm1", "0"),
+                                        "sub": os.path.join(m._mounts.FCMNT_ROOT, "vm1", "0"), "fsid": 4000 + 7 * 16}]
+            m._mounts.setup_mounts(inst)
+            ex = open(os.path.join(m._mounts.EXPORTS_D, "fc-vm1.exports")).read()
+            ws = os.path.join(m._mounts.AGENT_ROOT, "vm1")
             self.assertIn(f"{ws} 172.30.7.2(rw,sync,no_subtree_check,all_squash,anonuid=4242,anongid=4243,fsid={4000 + 7 * 16 + 14})", ex)
-            self.assertIn(f"{m.FCMNT_ROOT}/vm1/0 172.30.7.2(ro,", ex)
+            self.assertIn(f"{m._mounts.FCMNT_ROOT}/vm1/0 172.30.7.2(ro,", ex)
             self.assertNotIn(m.POOL, ex)                                   # nothing for the whole pool
             self.assertTrue(os.path.isdir(ws))
-            self.assertFalse(os.path.exists(m.AGENT_EXPORTS))              # root export retired …
-            self.assertTrue(os.path.exists(m.AGENT_EXPORTS + ".bak"))      # … with a backup
-            self.assertFalse(m.retire_root_export())                       # idempotent
+            self.assertFalse(os.path.exists(m._mounts.AGENT_EXPORTS))              # root export retired …
+            self.assertTrue(os.path.exists(m._mounts.AGENT_EXPORTS + ".bak"))      # … with a backup
+            self.assertFalse(m._mounts.retire_root_export())                       # idempotent
             self.assertEqual(m.guest_env(inst)["AGENT_EXPORT"], ws)
             self.assertEqual(m.guest_env(inst)["MEMORY_DIR"], "/memory")
             self.assertEqual(m.guest_env(inst)["GUEST_DNS"], m.GUEST_DNS)
             # real mount_specs: absolute host paths as NFS subpaths, fsid slots 0..13 for folders
-            m.mount_specs = old[5]
-            sp = m.mount_specs({**inst, "index": 3, "template": "claude", "rootfs": "instances/claude-rootfs.ext4"})
-            self.assertEqual(sp[0]["sub"], os.path.join(m.FCMNT_ROOT, "vm1", "0"))
+            m._mounts.mount_specs = old[5]
+            sp = m._mounts.mount_specs({**inst, "index": 3, "template": "claude", "rootfs": "instances/claude-rootfs.ext4"})
+            self.assertEqual(sp[0]["sub"], os.path.join(m._mounts.FCMNT_ROOT, "vm1", "0"))
             self.assertEqual(sp[0]["fsid"], 4000 + 3 * 16)
-            self.assertEqual(m.workspace_fsid({"index": 3}), 4000 + 3 * 16 + 14)
+            self.assertEqual(m._mounts.workspace_fsid({"index": 3}), 4000 + 3 * 16 + 14)
             self.assertTrue(any(c[:2] == ("exportfs", "-ra") for c in calls))
         finally:
-            (m.AGENT_ROOT, m.FCMNT_ROOT, m.EXPORTS_D, m.AGENT_EXPORTS, m._util.sh, m.mount_specs,
-             m.GUEST_UID, m.GUEST_GID, m.ensure_guest_user) = old
+            (m._mounts.AGENT_ROOT, m._mounts.FCMNT_ROOT, m._mounts.EXPORTS_D, m._mounts.AGENT_EXPORTS, m._util.sh, m._mounts.mount_specs,
+             m._mounts.GUEST_UID, m._mounts.GUEST_GID, m._mounts.ensure_guest_user) = old
 
     def test_guest_user_and_writability_hint(self):
         """Without root the squash user is not created (exports fall back to
         uid 1000); a rw share the guest user cannot write is flagged."""
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-gw-")
-        old = m.GUEST_UID, m.GUEST_GID, m.GUEST_USER
+        old = m._mounts.GUEST_UID, m._mounts.GUEST_GID, m._mounts.GUEST_USER
         try:
             if os.geteuid() != 0:
-                m.GUEST_USER = "kaim56-e2e-nonexistent"
-                self.assertFalse(m.ensure_guest_user())
-            m.GUEST_UID, m.GUEST_GID = 4242, 4243
+                m._mounts.GUEST_USER = "kaim56-e2e-nonexistent"
+                self.assertFalse(m._mounts.ensure_guest_user())
+            m._mounts.GUEST_UID, m._mounts.GUEST_GID = 4242, 4243
             os.chmod(tmp, 0o755)
-            self.assertFalse(m.guest_can_write(tmp))          # owned by us, not the guest user
+            self.assertFalse(m._mounts.guest_can_write(tmp))          # owned by us, not the guest user
             os.chmod(tmp, 0o777)
-            self.assertTrue(m.guest_can_write(tmp))
-            m.GUEST_UID = os.getuid(); os.chmod(tmp, 0o700)
-            self.assertTrue(m.guest_can_write(tmp))           # owner = guest user
+            self.assertTrue(m._mounts.guest_can_write(tmp))
+            m._mounts.GUEST_UID = os.getuid(); os.chmod(tmp, 0o700)
+            self.assertTrue(m._mounts.guest_can_write(tmp))           # owner = guest user
         finally:
-            m.GUEST_UID, m.GUEST_GID, m.GUEST_USER = old
+            m._mounts.GUEST_UID, m._mounts.GUEST_GID, m._mounts.GUEST_USER = old
 
     def test_login_lockout(self):
         """Ten wrong passwords in a row lock the client for a while — the right
