@@ -10,10 +10,7 @@ one place.
 """
 
 from mgr import instances as _instances
-from mgr import mcp as _mcp
-from mgr import paths as _paths
 from mgr import personas as _personas
-from mgr import policy as _policy
 from mgr import secrets as _secrets
 from mgr import skills as _skills
 
@@ -95,7 +92,7 @@ def sandbox_config(caller, sandbox):
         want = list(SANDBOX_DEFAULT_TOOLS)
     cfg = {}
     if want:
-        unknown = sorted(set(want) - _policy.AGENT_TOOL_NAMES)
+        unknown = sorted(set(want) - AGENT_TOOL_NAMES)
         if unknown:
             return {}, True, f"unknown tools: {', '.join(unknown)}"
         if caller_tools is not None:
@@ -161,13 +158,10 @@ def effective_policy(inst):
         "internet": inst.get("internet", True),
         "model": model,
         "tools_all": tools_allowed is None,
-        "tools": tools_allowed if tools_allowed is not None else [t["name"] for t in _policy.AGENT_TOOLS_CATALOG],
+        "tools": tools_allowed if tools_allowed is not None else [t["name"] for t in AGENT_TOOLS_CATALOG],
         "secrets": sorted(_secrets.allowed_secret_keys(inst)),
         "mcps": mcps,
         "katfs_share": cfg.get("KATFS_SHARE", ""),
         "auto_reset": str(cfg.get("AUTO_RESET_MIN", "") or "0"),
     }
 
-
-# mgr/mcp needs the secret functions; they are defined above by now.
-_mcp.configure(_paths.BASE, _instances.load_instances, _secrets.allowed_secret_keys, _secrets.secret_store)

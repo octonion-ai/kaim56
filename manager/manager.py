@@ -64,7 +64,7 @@ from mgr import settings as _settings  # noqa: E402
 from mgr import missions as _missions  # noqa: E402
 _missions.configure(_paths.BASE)
 from mgr import mcp as _mcp  # noqa: E402
-_mcp.configure(_paths.BASE)
+_mcp.configure(_paths.BASE, _instances.load_instances, _secrets.allowed_secret_keys, _secrets.secret_store)
 from mgr import memfs as _memfs  # noqa: E402
 _memfs.configure(_paths.BASE)
 from mgr import hindsight as _hindsight  # noqa: E402
