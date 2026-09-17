@@ -125,3 +125,11 @@ def katfs_status():
     return out
 
 
+def _katfs_answer(h, op, share, path, *extra):
+    try:
+        st, ct, data = katfs_proxy_fs(op, share, path, *extra)
+    except urllib.error.HTTPError as e:
+        st, ct, data = e.code, "application/json", e.read()
+    except Exception as e:
+        st, ct, data = 503, "application/json", json.dumps({"error": str(e)}).encode()
+    return st, ct, data

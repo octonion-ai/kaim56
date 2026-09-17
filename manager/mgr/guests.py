@@ -11,6 +11,14 @@ one place.
 from mgr import instances as _instances
 
 
+# Write routes that an agent VM IS ALLOWED to use. Everything else is
+# administration and belongs to the admin. Without this allowlist a
+# compromised VM could reach the host filesystem via /api/instances/<n>/mounts
+# (the manager runs as root and exports the folder into the guest via NFS)
+# or create a fresh instance for itself via /api/create — the secret allowlist,
+# the tool gating and the egress rules would then be moot.
+# An allowlist instead of individual checks: a new route is then closed by
+# default, not open by default.
 GUEST_POST_PATHS = ("/api/usage", "/api/audit", "/api/task", "/api/chat-log", "/api/trace",
                     "/api/skill-proposals", "/api/sessions-search",
                     "/api/stt", "/api/tts", "/api/signal", "/api/mcp",

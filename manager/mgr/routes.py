@@ -21,6 +21,10 @@ reading exercise.
 
 Part of the mgr package: no imports from manager.py (no cycles).
 """
+import json
+import urllib.request
+
+from mgr import util as _util
 
 
 class Router:
@@ -148,3 +152,42 @@ def shadowed(routes):
             if pkind == "prefix" and pline < line and path.startswith(ppath):
                 out.append((path, ppath, line))
     return out
+
+
+ROUTER = Router()
+
+
+
+def _msg_route(method, path, prefix=False, admin=True):
+    """Decorator for the {"msg": …} family (UI actions): the function returns
+    a status string; exceptions become "error: …" instead of a dropped
+    connection, exactly as the old chain did."""
+    def deco(fn):
+        def wrapped(h):
+            try:
+                msg = fn(h)
+            except _util.BodyTooLarge:
+                raise
+            except Exception as e:
+                msg = f"error: {e!r}"
+            return json.dumps({"msg": msg}).encode(), "application/json"
+        wrapped.__name__ = fn.__name__
+        ROUTER.add(method, path, wrapped, prefix=prefix, admin=admin)
+        return fn
+    return deco
+
+
+def _qs(h):
+    return urllib.parse.parse_qs(h.path.partition("?")[2])
+
+
+def _tail(h, prefix):
+    """Path remainder after `prefix`, query stripped, URL-decoded per segment."""
+    return [urllib.parse.unquote(x) for x in h.path.split("?", 1)[0][len(prefix):].split("/")]
+
+
+# Request bodies are read whole into the root process: cap them. A guest (or
+# anyone on the LAN) must not be able to hand the manager a gigabyte.
+BODY_MAX = 4 * 1024 * 1024            # JSON routes
+BODY_MAX_LLM = 8 * 1024 * 1024        # chat completions (long contexts, images)
+BODY_MAX_AUDIO = 32 * 1024 * 1024     # STT uploads

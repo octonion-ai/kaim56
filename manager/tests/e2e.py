@@ -1323,7 +1323,7 @@ class ManagerFunctions(unittest.TestCase):
         finally:
             m._settings.CODE_URL, m._settings.CODE_ROOT = old
         # the old in-manager viewer route is gone: guests never had it, admins use VS Code
-        self.assertNotIn(("GET", "/api/plugins/"), {(meth, p) for meth, _, p, _ in m.ROUTER.inventory()})
+        self.assertNotIn(("GET", "/api/plugins/"), {(meth, p) for meth, _, p, _ in m._routes.ROUTER.inventory()})
 
     def test_set_instance_tools_roundtrip(self):
         """Saving policy tools: a subset persists (tools_all=False), ALL tools
@@ -1911,7 +1911,7 @@ class ManagerFunctions(unittest.TestCase):
         """The inventory is what makes an access audit a loop instead of a
         reading exercise: every route says whether guests may call it."""
         m = self.m
-        inv = m.ROUTER.inventory()
+        inv = m._routes.ROUTER.inventory()
         self.assertTrue(inv, "the router should carry routes")
         for method, kind, path, admin in inv:
             self.assertIn(method, ("GET", "POST"))
@@ -2130,7 +2130,7 @@ class ManagerFunctions(unittest.TestCase):
         for i in range(m._voice.STT_RECENT_MAX + 5):
             m._voice.stt_remember(f"t{i}", 1, "x")
         self.assertEqual(len(m._voice.stt_recent()), m._voice.STT_RECENT_MAX)
-        by_path = {p: admin for _, _, p, admin in m.ROUTER.inventory()}
+        by_path = {p: admin for _, _, p, admin in m._routes.ROUTER.inventory()}
         self.assertTrue(by_path["/api/stt-recent"])
         self.assertTrue(by_path["/api/stt-recent/audio"])
         m._voice._stt_audio.clear()
@@ -2979,7 +2979,7 @@ class ManagerFunctions(unittest.TestCase):
             m._guests.instance_by_ip = lambda ip: None
             m._auth.PW = ""
             h = self._post_handler("/api/settings", "10.0.0.5", b"{}")
-            h.headers.replace_header("Content-Length", str(m.BODY_MAX + 1))
+            h.headers.replace_header("Content-Length", str(m._routes.BODY_MAX + 1))
             h.do_POST()
             self.assertEqual(self._status(h), 413)
             self.assertTrue(h.close_connection)
@@ -2989,7 +2989,7 @@ class ManagerFunctions(unittest.TestCase):
             h.headers.replace_header("Content-Length", "abc")
             self.assertEqual(h._raw(), b"")
             with self.assertRaises(m._util.BodyTooLarge):
-                h.headers.replace_header("Content-Length", str(m.BODY_MAX_AUDIO + 1)); h._raw(m.BODY_MAX_AUDIO)
+                h.headers.replace_header("Content-Length", str(m._routes.BODY_MAX_AUDIO + 1)); h._raw(m._routes.BODY_MAX_AUDIO)
         finally:
             m._guests.instance_by_ip, m._auth.PW = old
 
@@ -3132,13 +3132,13 @@ class ManagerFunctions(unittest.TestCase):
         try:
             m._settings.load_settings = lambda: {"LLM_KEY_PROXY": "1"}
             llama = {"name": "u", "config": {"LLAMA_ENDPOINT": "http://10.0.0.5:8080/"}}
-            self.assertTrue(m.usage_report_accepted(llama, {"direct": True}))
-            self.assertFalse(m.usage_report_accepted(llama, {}))                       # old agent: not flagged
-            self.assertFalse(m.usage_report_accepted({"name": "o", "config": {}}, {"direct": True}))  # proxied instance
-            self.assertTrue(m.usage_report_accepted({"name": "c", "template": "claude", "config": {}}, {"direct": True}))  # claude = direct
-            self.assertFalse(m.usage_report_accepted({"name": "c", "template": "claude", "config": {}}, {}))               # old bridge: not flagged
+            self.assertTrue(m._routes_guest.usage_report_accepted(llama, {"direct": True}))
+            self.assertFalse(m._routes_guest.usage_report_accepted(llama, {}))                       # old agent: not flagged
+            self.assertFalse(m._routes_guest.usage_report_accepted({"name": "o", "config": {}}, {"direct": True}))  # proxied instance
+            self.assertTrue(m._routes_guest.usage_report_accepted({"name": "c", "template": "claude", "config": {}}, {"direct": True}))  # claude = direct
+            self.assertFalse(m._routes_guest.usage_report_accepted({"name": "c", "template": "claude", "config": {}}, {}))               # old bridge: not flagged
             m._settings.load_settings = lambda: {"LLM_KEY_PROXY": ""}
-            self.assertTrue(m.usage_report_accepted({"name": "o", "config": {}}, {}))
+            self.assertTrue(m._routes_guest.usage_report_accepted({"name": "o", "config": {}}, {}))
         finally:
             m._settings.load_settings = old
 
