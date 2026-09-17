@@ -99,8 +99,26 @@ def harness_sources():
     return out
 
 
+HARNESS_FORMAT = "2"        # bumped when the staging changes; part of the digest, so the image is rebuilt
+
+
+def _harness_stage(srcs, d):
+    """Copy the sources into the staging dir with modes the guest can read.
+    The manager runs with umask 077: a directory it creates is 0700 root, and
+    mke2fs -d carries that into the image — the agent package was then a
+    namespace package without files for uid 1000 (2026-09-17)."""
+    for p in srcs:
+        dst = os.path.join(d, os.path.relpath(p, AGENT_SRC))
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(p, dst)
+        os.chmod(dst, 0o644)
+    for root, _dirs, _files in os.walk(d):
+        os.chmod(root, 0o755)
+
+
 def _harness_digest(srcs):
     h = hashlib.sha256()
+    h.update(HARNESS_FORMAT.encode() + b"\0")
     for p in srcs:
         h.update(os.path.relpath(p, AGENT_SRC).encode() + b"\0")
         with open(p, "rb") as fh:
@@ -129,10 +147,7 @@ def harness_image():
             return HARNESS_IMG
         d = tempfile.mkdtemp(prefix="harness-", dir=_paths.RUN_DIR)
         try:
-            for p in srcs:
-                dst = os.path.join(d, os.path.relpath(p, AGENT_SRC))
-                os.makedirs(os.path.dirname(dst), exist_ok=True)
-                shutil.copy2(p, dst)
+            _harness_stage(srcs, d)
             if not mkfs_image(HARNESS_IMG, 8, "kaim56-harness", srcdir=d):
                 return HARNESS_IMG if os.path.exists(HARNESS_IMG) else None
             with open(stamp, "w") as fh:
