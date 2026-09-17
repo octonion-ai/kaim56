@@ -63,6 +63,28 @@ def _own_tree(d):
             fp = os.path.join(p, f)
             if os.path.isfile(fp):
                 _own(fp)
+    _own_git(d)
+
+
+def _own_git(d):
+    """C-1: the .git tree must belong to the guest user too — git now runs AS
+    that user (see _git), so a root-owned .git (as older folders have) would
+    make every commit fail. Walk only when the top is not ours yet (cheap)."""
+    g = os.path.join(d, ".git")
+    if not OWNER or not os.path.isdir(g):
+        return
+    try:
+        st = os.stat(g)
+        if (st.st_uid, st.st_gid) == OWNER:
+            return
+        for root, dirs, files in os.walk(g):
+            for name in dirs:
+                _own(os.path.join(root, name), True)
+            for name in files:
+                _own(os.path.join(root, name))
+        _own(g, True)
+    except OSError:
+        pass
 
 
 def _safe(name):
@@ -96,11 +118,28 @@ def folder(instance):
     return d
 
 
+def _git_invocation(d, *args):
+    """C-1 (security review): the memory folder is exported READ-WRITE to the
+    guest, so a compromised agent can plant .git/hooks/* or set core.fsmonitor
+    in .git/config. Git therefore (1) runs as the GUEST user, never as root —
+    a hook that fires runs with the guest's rights only — and (2) has every
+    config-driven execution path switched off on the command line, which
+    overrides the guest-writable .git/config. Returns (argv, env, run_kwargs)."""
+    cmd = ["git", "-C", d, "-c", "safe.directory=*",
+           "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
+           "-c", "core.sshCommand=/bin/false", *args]
+    env = {**os.environ, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
+           "HOME": d, "GIT_TERMINAL_PROMPT": "0"}
+    kw = {}
+    if OWNER and os.geteuid() == 0:
+        kw = {"user": OWNER[0], "group": OWNER[1], "extra_groups": [OWNER[1]]}   # drop root's groups too
+    return cmd, env, kw
+
+
 def _git(d, *args):
     try:
-        # the folder belongs to the guest user, git runs as root: not "dubious"
-        return subprocess.run(["git", "-C", d, "-c", "safe.directory=*", *args],
-                              capture_output=True, text=True, timeout=30, check=False)
+        cmd, env, kw = _git_invocation(d, *args)
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=False, env=env, **kw)
     except (OSError, subprocess.SubprocessError):
         return None
 

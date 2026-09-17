@@ -2168,6 +2168,44 @@ class ManagerFunctions(unittest.TestCase):
         finally:
             m.load_mcps = old
 
+    def test_memfs_git_never_runs_as_root_with_hooks(self):
+        """C-1: git in the guest-writable memory folder must run as the guest
+        user (when the manager is root) with every config-driven execution
+        path disabled on the command line — a planted hook can neither run as
+        root nor run at all."""
+        import mgr.memfs as mf
+        old = mf.OWNER, mf.os.geteuid
+        try:
+            mf.OWNER = (1234, 5678); mf.os.geteuid = lambda: 0
+            cmd, env, kw = mf._git_invocation("/tmp/x", "commit", "-q", "-m", "m")
+            self.assertEqual((kw.get("user"), kw.get("group"), kw.get("extra_groups")), (1234, 5678, [5678]))
+            joined = " ".join(cmd)
+            self.assertIn("core.hooksPath=/dev/null", joined)
+            self.assertIn("core.fsmonitor=false", joined)
+            self.assertEqual(env["GIT_CONFIG_GLOBAL"], "/dev/null"); self.assertEqual(env["GIT_CONFIG_NOSYSTEM"], "1")
+            self.assertEqual(cmd[-4:], ["commit", "-q", "-m", "m"])
+            mf.os.geteuid = lambda: 1000                      # not root (tests, dev box): no user switch, flags stay
+            cmd, env, kw = mf._git_invocation("/tmp/x", "add", "-A")
+            self.assertEqual(kw, {}); self.assertIn("core.hooksPath=/dev/null", " ".join(cmd))
+            mf.OWNER = None
+            self.assertEqual(mf._git_invocation("/tmp/x", "add")[2], {})
+        finally:
+            mf.OWNER, mf.os.geteuid = old
+        # and a hook planted in a real repo does not fire through _git
+        import mgr.memfs as mf2
+        tmp = tempfile.mkdtemp(prefix="e2e-c1-")
+        r = mf2._git(tmp, "init", "-q"); self.assertIsNotNone(r)
+        hooks = os.path.join(tmp, ".git", "hooks"); os.makedirs(hooks, exist_ok=True)
+        marker = os.path.join(tmp, "PWNED")
+        with open(os.path.join(hooks, "pre-commit"), "w") as fh:
+            fh.write(f"#!/bin/sh\ntouch {marker}\n")
+        os.chmod(os.path.join(hooks, "pre-commit"), 0o755)
+        with open(os.path.join(tmp, "f.md"), "w") as fh:
+            fh.write("x")
+        mf2._git(tmp, "config", "user.email", "t@t"); mf2._git(tmp, "config", "user.name", "t")
+        mf2._git(tmp, "add", "-A"); mf2._git(tmp, "commit", "-q", "-m", "c")
+        self.assertFalse(os.path.exists(marker), "a planted pre-commit hook ran through the manager's git")
+
     def test_memory_folder_notes_timeline_coarsening(self):
         """Memory as files: a note per key with a regenerated index, one raw
         timeline entry per turn, coarsened deterministically (trimmed after
