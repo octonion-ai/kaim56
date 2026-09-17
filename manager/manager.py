@@ -10,7 +10,6 @@ library, no extra packages. Instances are stored as JSON under
 instances/<name>.json; the network is derived per instance from 'index':
   host  172.30.<index>.1/30   guest 172.30.<index>.2/30   tap fc<index>
 """
-import tempfile
 import base64
 import codecs
 import html
@@ -20,7 +19,6 @@ import os
 import re
 import shlex
 import glob
-import hashlib
 import hmac
 import pwd
 import shutil
@@ -38,6 +36,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import chatui   # chat interface (/chat), lives next to this file
 
 from mgr import paths as _paths  # noqa: E402
+from mgr import vm as _vm  # noqa: E402
 from mgr import guests as _guests  # noqa: E402
 from mgr import instances as _instances  # noqa: E402
 from mgr import secrets as _secrets  # noqa: E402
@@ -969,7 +968,7 @@ def _task_worker():
                 except Exception as e:
                     _util._wlog(f"task-target-sweep failed: {e!r}")
                 try:
-                    _memfs.sweep([i["name"] for i in _instances.load_instances() if uses_harness(i)])
+                    _memfs.sweep([i["name"] for i in _instances.load_instances() if _vm.uses_harness(i)])
                 except Exception as e:
                     _util._wlog(f"memfs-sweep failed: {e!r}")
                 try:
@@ -977,7 +976,7 @@ def _task_worker():
                 except Exception as e:
                     _util._wlog(f"turns-prune failed: {e!r}")
             try:
-                image_sweep()          # one stat per base image, every idle cycle
+                _vm.image_sweep()          # one stat per base image, every idle cycle
             except Exception as e:
                 _util._wlog(f"image-sweep failed: {e!r}")
 
@@ -1496,7 +1495,7 @@ def mount_specs(inst):
     # The instance's memory folder (mgr/memfs.py) rides the same mechanism:
     # exported to this guest only, mounted read-write at /memory. Slot 15 of
     # the fsid block is reserved for it, 14 for the workspace (user mounts 0..13).
-    mem = _memfs.folder(inst["name"]) if uses_harness(inst) else None
+    mem = _memfs.folder(inst["name"]) if _vm.uses_harness(inst) else None
     if mem:
         target = os.path.join(FCMNT_ROOT, inst["name"], "memory")
         specs.append({"idx": "memory", "host": mem, "guest": "/memory", "ro": False,
@@ -1604,8 +1603,8 @@ _GUEST_MOUNT_DENY = ("/bin", "/sbin", "/usr", "/lib", "/lib32", "/lib64", "/etc"
 
 def _protected_host_paths():
     out = [_paths.BASE, "/etc", "/root", "/var", "/usr", "/boot"]
-    if AGENT_SRC:
-        out.append(AGENT_SRC)                       # a VM writing agent.py = code in every VM
+    if _vm.AGENT_SRC:
+        out.append(_vm.AGENT_SRC)                       # a VM writing agent.py = code in every VM
     for home in glob.glob("/home/*"):
         out += [os.path.join(home, d) for d in (".config", ".ssh", ".gnupg", ".claude")]
     return [os.path.realpath(p) for p in out]
@@ -1689,7 +1688,7 @@ def guest_env(inst):
     cfg.setdefault("TZ", _host.HOST_TZ)        # the agent's clock: [Now] line per turn
     cfg["GUEST_DNS"] = GUEST_DNS         # guest-init writes resolv.conf from it (site.json, not the image)
     cfg["AGENT_EXPORT"] = workspace_dir(inst)   # its own workspace export, by absolute path
-    if uses_harness(inst):
+    if _vm.uses_harness(inst):
         cfg["MEMORY_DIR"] = "/memory"    # Markdown memory folder (mgr/memfs.py)
     if inst["name"] == _guests.ORCH_INSTANCE:   # only the orchestrator may manage tasks
         cfg["TASK_ADMIN"] = "1"
@@ -1731,164 +1730,10 @@ def make_config_disk(inst):
         for f0 in files:
             os.chmod(os.path.join(root, f0), 0o644)
     img = os.path.join(_paths.RUN_DIR, f"{inst['name']}.config.ext4")
-    mkfs_image(img, 16, "fcconfig", srcdir=d)
+    _vm.mkfs_image(img, 16, "fcconfig", srcdir=d)
     return img
 
 
-def mkfs_image(path, size_mb, label=None, srcdir=None):
-    """Build an ext4 image atomically: a sparse file of size_mb, mkfs
-    (populated from srcdir when given), renamed into place so a running VM
-    keeps its old inode. False when mkfs fails — the old image, if any, stays."""
-    fd, tmp = tempfile.mkstemp(prefix=os.path.basename(path) + ".", suffix=".new",
-                               dir=os.path.dirname(path) or ".")
-    with os.fdopen(fd, "wb") as fh:
-        fh.truncate(size_mb * 1024 * 1024)
-    mkfs = shutil.which("mkfs.ext4", path="/usr/sbin:/sbin:" + os.environ.get("PATH", "")) or "mkfs.ext4"
-    args = ["-F", "-q"] + (["-L", label] if label else []) + (["-d", srcdir] if srcdir else [])
-    r = _util.sh(mkfs, *args, tmp, check=False)
-    if r.returncode != 0:
-        print(f"[mkfs] {os.path.basename(path)}: {r.stderr.strip()[:200]}", flush=True)
-        os.unlink(tmp)
-        return False
-    os.replace(tmp, path)
-    return True
-
-
-# ---- Overlay rootfs ---------------------------------------------------------
-# For images in OVERLAY_ROOTFS the VM boots with the SHARED base read-only
-# (Firecracker blocks writes at the host level -> no journal conflict) plus a
-# small rw upper image per instance; the guest init assembles the root from
-# them via overlayfs+pivot_root. Advantage: no 2-GB copy per start, and with
-# inst["persist_disk"]=true the write layer (installations!) survives a
-# stop/start. Other images run unchanged via private_rootfs().
-OVERLAY_ROOTFS = {"instances/openrouter-rootfs.ext4", "instances/claude-rootfs.ext4"}
-
-# ---- Harness disk: the agent code as a read-only drive, not baked in ---------
-# Pattern from Claude Code's sandbox (harness and skills are read-only shared
-# layers next to the rootfs): the openrouter agent (agent.py, run_agent.py,
-# webterm.py) lives on a small ext4 image the manager rebuilds from AGENT_SRC
-# whenever the sources' CONTENT changes (a digest next to the image; mtimes
-# lie after rsync, checkouts and clock skew), attached read-only to every VM
-# on a rootfs that carries this agent. An agent change is then one instance
-# restart — no docker build, no 2 GB image. The guest mounts it at /harness
-# (boot arg fc_harness=/dev/vdX) and prefers it over /app; without the drive
-# it boots from the rootfs as before.
-AGENT_SRC = os.environ.get("AGENT_SRC") or _settings.SITE.get("AGENT_SRC") or ""
-HARNESS_FILES = ("agent.py", "run_agent.py", "webterm.py")
-HARNESS_IMG = os.path.join(_paths.RUN_DIR, "harness.ext4")
-HARNESS_ROOTFS = {"instances/openrouter-rootfs.ext4"}     # images built from AGENT_SRC
-_harness_lock = threading.Lock()
-
-
-def harness_sources():
-    """All HARNESS_FILES under AGENT_SRC — or nothing: a half-present set
-    (agent.py mid-rename, a partial rsync) must not become the drive a VM
-    boots from; run_agent.py imports agent with no fallback."""
-    if not AGENT_SRC:
-        return []
-    ps = [os.path.join(AGENT_SRC, f) for f in HARNESS_FILES]
-    return ps if all(os.path.isfile(p) for p in ps) else []
-
-
-def _harness_digest(srcs):
-    h = hashlib.sha256()
-    for p in srcs:
-        h.update(os.path.basename(p).encode() + b"\0")
-        with open(p, "rb") as fh:
-            h.update(fh.read())
-        h.update(b"\0")
-    return h.hexdigest()
-
-
-def harness_image():
-    """Path of the harness drive, (re)built when the sources' digest differs
-    from the one recorded at the last build; None when AGENT_SRC is not
-    configured or incomplete. Serialized: two starts (or the sweep and a
-    start) must not build into the same file."""
-    srcs = harness_sources()
-    if not srcs:
-        return None
-    with _harness_lock:
-        stamp = HARNESS_IMG + ".src"
-        try:
-            want = _harness_digest(srcs)
-            with open(stamp) as fh:
-                have = fh.read().strip()
-        except OSError:
-            have = ""
-        if have == want and os.path.exists(HARNESS_IMG):
-            return HARNESS_IMG
-        d = tempfile.mkdtemp(prefix="harness-", dir=_paths.RUN_DIR)
-        try:
-            for p in srcs:
-                shutil.copy2(p, os.path.join(d, os.path.basename(p)))
-            if not mkfs_image(HARNESS_IMG, 8, "kaim56-harness", srcdir=d):
-                return HARNESS_IMG if os.path.exists(HARNESS_IMG) else None
-            with open(stamp, "w") as fh:
-                fh.write(want)
-            print(f"[harness] rebuilt from {AGENT_SRC} ({len(srcs)} files)", flush=True)
-            return HARNESS_IMG
-        finally:
-            shutil.rmtree(d, ignore_errors=True)
-
-
-def uses_harness(inst):
-    """By image, not template name: llama/orcarouter share the openrouter
-    rootfs and its agent, so they take (and go stale with) the same drive."""
-    return inst.get("rootfs") in HARNESS_ROOTFS
-
-
-def image_state(inst):
-    """(stale, built, started): stale when a RUNNING VM on a shared base image
-    was started before that image was last rebuilt — it still runs the old
-    agent and will until stop/start. spawn_subagent was dead for three weeks
-    and a tool fix missed the voice instance this way; nobody could see it."""
-    if inst.get("rootfs") not in OVERLAY_ROOTFS or not _instances.is_running(inst):
-        return False, 0, 0
-    try:
-        built = os.path.getmtime(os.path.join(_paths.BASE, inst["rootfs"]))
-        if uses_harness(inst) and os.path.exists(HARNESS_IMG):
-            built = max(built, os.path.getmtime(HARNESS_IMG))   # agent code counts too
-        started = os.path.getmtime(_instances.pidfile(inst))
-    except OSError:
-        return False, 0, 0
-    return started < built, built, started
-
-
-def stale_instances():
-    return [i["name"] for i in _instances.load_instances() if image_state(i)[0]]
-
-
-_img_seen = {}      # rootfs path -> mtime last seen (filled at startup: no push for old news)
-
-
-def image_sweep():
-    """Idle worker: when a base image was rebuilt, push ONCE which running
-    instances still sit on the old one. Stays quiet if nobody is affected."""
-    hit = []
-    try:
-        harness_image()        # an edited agent.py shows up here, not at the next start
-    except Exception as e:
-        _util._wlog(f"image-sweep harness: {e!r}")
-    for rel in sorted(OVERLAY_ROOTFS) + [HARNESS_IMG]:
-        try:
-            mt = os.path.getmtime(rel if os.path.isabs(rel) else os.path.join(_paths.BASE, rel))
-        except OSError:
-            continue
-        if rel in _img_seen and mt > _img_seen[rel]:
-            hit.append(rel)
-        _img_seen[rel] = mt
-    if not hit:
-        return []
-    old = stale_instances()
-    if old:
-        try:
-            _notify.notify_add("rebuild", f"Rootfs rebuilt: {len(old)} instance(s) on the old image",
-                       ", ".join(old) + " — restart them to pick up the new agent.",
-                       link="instances")
-        except Exception as e:
-            _util._wlog(f"image-sweep notify: {e!r}")
-    return old
 UPPER_SIZE_MB = 1024          # throwaway layer per start
 UPPER_PERSIST_SIZE_MB = 4096  # persistent layer (apt/pip need room); sparse
 
@@ -1905,7 +1750,7 @@ def make_upper(inst):
     if inst.get("persist_disk") and os.path.exists(p):
         return p
     size = UPPER_PERSIST_SIZE_MB if inst.get("persist_disk") else UPPER_SIZE_MB
-    if not mkfs_image(p, size, "fcupper"):
+    if not _vm.mkfs_image(p, size, "fcupper"):
         raise RuntimeError(f"mkfs of the upper layer for {inst['name']} failed")
     return p
 
@@ -1931,7 +1776,7 @@ def set_persist_disk(name, on):
     inst = next((i for i in _instances.load_instances() if i["name"] == name), None)
     if not inst:
         return "unknown"
-    if inst.get("rootfs") not in OVERLAY_ROOTFS:
+    if inst.get("rootfs") not in _vm.OVERLAY_ROOTFS:
         return "error: this template's rootfs has no overlay support (yet)"
     inst["persist_disk"] = bool(on)
     _instances.save_instance(inst)
@@ -1970,7 +1815,7 @@ def gen_config(inst):
     n = _instances.net_of(inst)
     boot = (f"console=ttyS0 reboot=k panic=1 pci=off "
             f"ip={n['guest']}::{n['host']}:{n['mask']}::eth0:off init=/init")
-    overlay = inst.get("rootfs") in OVERLAY_ROOTFS
+    overlay = inst.get("rootfs") in _vm.OVERLAY_ROOTFS
     if overlay:
         drives = [{"drive_id": "rootfs", "path_on_host": os.path.join(_paths.BASE, inst["rootfs"]),
                    "is_root_device": True, "is_read_only": True}]
@@ -1984,8 +1829,8 @@ def gen_config(inst):
     for j, d in enumerate(inst.get("extra_drives", [])):
         drives.append({"drive_id": f"data{j}", "path_on_host": d["path"],
                        "is_root_device": False, "is_read_only": d.get("readonly", False)})
-    if uses_harness(inst):
-        himg = harness_image()
+    if _vm.uses_harness(inst):
+        himg = _vm.harness_image()
         if himg:
             drives.append({"drive_id": "harness", "path_on_host": himg,
                            "is_root_device": False, "is_read_only": True})
@@ -2408,7 +2253,7 @@ def render():
                 f" · {_fmt_cost(ud.get('cost'))}"
                 f" &nbsp;·&nbsp; total {_fmt_tok(ut['in'])}&nbsp;/&nbsp;{_fmt_tok(ut['out'])}"
                 f" · {_fmt_cost(ut['cost'])}</span>")
-        stale, built, started = image_state(inst)
+        stale, built, started = _vm.image_state(inst)
         if run and stale:
             st = ("<span class='tag' style='background:#c0392b;color:#fff' title='started "
                   + time.strftime("%d.%m. %H:%M", time.localtime(started))
@@ -2426,7 +2271,7 @@ def render():
         ttag = (f"<span class='tag tag-neutral' title='{h(tools_cfg)}'>🔧 {len(tools_cfg.split(','))} Tools</span>"
                 if tools_cfg else "")
         ptag = ""
-        if inst.get("rootfs") in OVERLAY_ROOTFS:
+        if inst.get("rootfs") in _vm.OVERLAY_ROOTFS:
             pers = bool(inst.get("persist_disk"))
             ptag = (f"<button class='tag {'tag-accent' if pers else 'tag-neutral'}' "
                     f"style='border:none;cursor:pointer' "
@@ -2613,7 +2458,7 @@ ROUTER = _routes.Router()
 
 @ROUTER.get("/api/instances", admin=True)
 def _rt_instances(h):
-    return (json.dumps([{**i, "running": _instances.is_running(i), "stale": image_state(i)[0]}
+    return (json.dumps([{**i, "running": _instances.is_running(i), "stale": _vm.image_state(i)[0]}
                         for i in _instances.load_instances()]).encode(),
             "application/json")
 
@@ -2655,7 +2500,7 @@ def session_info(inst):
     else:
         keyname = "ORCAROUTER_API_KEY" if tpl in ("orcarouter", "llama") else "OPENROUTER_API_KEY"
         login = "api key" if _secrets.secret_store().get(keyname) else "no key"
-    mem_dir = _memfs.folder(name) if uses_harness(inst) else None
+    mem_dir = _memfs.folder(name) if _vm.uses_harness(inst) else None
     notes = 0
     if mem_dir:
         try:
@@ -2682,7 +2527,7 @@ def session_info(inst):
     return {"name": name, "template": tpl, "runtime": TEMPLATE_RUNTIME.get(tpl, tpl or "agent"),
             "running": running, "uptime": int(time.time() - started) if started else 0,
             "model": cfg.get("OPENROUTER_MODEL") or cfg.get("ANTHROPIC_MODEL") or "",
-            "stale": image_state(inst)[0], "login": login,
+            "stale": _vm.image_state(inst)[0], "login": login,
             "platform": platform, "mcps": mcps,
             "need_secret": sum(1 for m in mcps if not m["ready"])}
 

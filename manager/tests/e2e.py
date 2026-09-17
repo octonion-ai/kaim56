@@ -2033,7 +2033,7 @@ class ManagerFunctions(unittest.TestCase):
     def test_overlay_bootarg_in_config(self):
         m = self.m
         inst = next((i for i in m._instances.load_instances()
-                     if i.get("rootfs") in m.OVERLAY_ROOTFS), None)
+                     if i.get("rootfs") in m._vm.OVERLAY_ROOTFS), None)
         if not inst:
             self.skipTest("no overlay instance available")
         old_mk = m.make_upper
@@ -2369,31 +2369,31 @@ class ManagerFunctions(unittest.TestCase):
         for n in ("agent.py", "run_agent.py", "webterm.py"):
             with open(os.path.join(src, n), "w") as fh:
                 fh.write(f"# {n}\n")
-        old = m.AGENT_SRC, m.HARNESS_IMG, m._paths.RUN_DIR
+        old = m._vm.AGENT_SRC, m._vm.HARNESS_IMG, m._paths.RUN_DIR
         try:
-            m.AGENT_SRC, m.HARNESS_IMG, m._paths.RUN_DIR = src, os.path.join(run, "harness.ext4"), run
-            img = m.harness_image()
-            self.assertEqual(img, m.HARNESS_IMG)
+            m._vm.AGENT_SRC, m._vm.HARNESS_IMG, m._paths.RUN_DIR = src, os.path.join(run, "harness.ext4"), run
+            img = m._vm.harness_image()
+            self.assertEqual(img, m._vm.HARNESS_IMG)
             self.assertTrue(os.path.exists(img) and os.path.exists(img + ".src"))
             ino1 = os.stat(img).st_ino
             os.utime(os.path.join(src, "agent.py"), (time.time() + 60,) * 2)   # a newer mtime alone
-            self.assertEqual(m.harness_image(), img)
+            self.assertEqual(m._vm.harness_image(), img)
             self.assertEqual(os.stat(img).st_ino, ino1)                         # is no rebuild
             with open(os.path.join(src, "agent.py"), "a") as fh:
                 fh.write("VERSION = 2\n")
-            m.harness_image()
+            m._vm.harness_image()
             self.assertNotEqual(os.stat(img).st_ino, ino1)                      # content change is
             self.assertEqual(len(os.listdir(run)), 2, os.listdir(run))          # no temp files left
             os.unlink(os.path.join(src, "agent.py"))
-            self.assertEqual(m.harness_sources(), [])                           # incomplete: no drive
+            self.assertEqual(m._vm.harness_sources(), [])                           # incomplete: no drive
             inst = {"name": "x", "template": "openrouter", "rootfs": "instances/openrouter-rootfs.ext4", "index": 9}
-            self.assertTrue(m.uses_harness(inst))
-            self.assertTrue(m.uses_harness({**inst, "template": "llama"}))      # same image, same agent
-            self.assertFalse(m.uses_harness({**inst, "template": "claude", "rootfs": "instances/claude-rootfs.ext4"}))
-            m.AGENT_SRC = ""
-            self.assertIsNone(m.harness_image())
+            self.assertTrue(m._vm.uses_harness(inst))
+            self.assertTrue(m._vm.uses_harness({**inst, "template": "llama"}))      # same image, same agent
+            self.assertFalse(m._vm.uses_harness({**inst, "template": "claude", "rootfs": "instances/claude-rootfs.ext4"}))
+            m._vm.AGENT_SRC = ""
+            self.assertIsNone(m._vm.harness_image())
         finally:
-            m.AGENT_SRC, m.HARNESS_IMG, m._paths.RUN_DIR = old
+            m._vm.AGENT_SRC, m._vm.HARNESS_IMG, m._paths.RUN_DIR = old
 
     def test_secret_policy_seeds_guest_readable_on_upgrade(self):
         """A policy file from before the two-rights model has no guest_readable:
@@ -2427,11 +2427,11 @@ class ManagerFunctions(unittest.TestCase):
         tmp = tempfile.mkdtemp(prefix="e2e-stale-")
         os.makedirs(os.path.join(tmp, "instances")); os.makedirs(os.path.join(tmp, "run"))
         img = os.path.join(tmp, "instances", "openrouter-rootfs.ext4")
-        old = m._paths.BASE, m._paths.RUN_DIR, m._instances.is_running, m._instances.load_instances, m._notify.notify_add, dict(m._img_seen), m.HARNESS_IMG
+        old = m._paths.BASE, m._paths.RUN_DIR, m._instances.is_running, m._instances.load_instances, m._notify.notify_add, dict(m._vm._img_seen), m._vm.HARNESS_IMG
         pushes = []
         try:
             m._paths.BASE, m._paths.RUN_DIR = tmp, os.path.join(tmp, "run")
-            m.HARNESS_IMG = os.path.join(tmp, "run", "harness.ext4")    # none built here: rootfs only
+            m._vm.HARNESS_IMG = os.path.join(tmp, "run", "harness.ext4")    # none built here: rootfs only
             m._instances.is_running = lambda i: i["name"] != "off"
             insts = [{"name": "old", "rootfs": "instances/openrouter-rootfs.ext4"},
                      {"name": "fresh", "rootfs": "instances/openrouter-rootfs.ext4"},
@@ -2442,19 +2442,19 @@ class ManagerFunctions(unittest.TestCase):
             for n, ts in (("old", 1000), ("fresh", 3000), ("off", 1000), ("priv", 1000)):
                 pf = os.path.join(tmp, "run", n + ".pid"); open(pf, "w").write("1"); os.utime(pf, (ts, ts))
             open(img, "w").write("x"); os.utime(img, (2000, 2000))
-            self.assertEqual([m.image_state(i)[0] for i in insts], [True, False, False, False])
-            self.assertEqual(m.stale_instances(), ["old"])
-            m._img_seen.clear()
-            self.assertEqual(m.image_sweep(), [])           # first sight: baseline, no push
-            self.assertEqual(m.image_sweep(), [])           # unchanged: quiet
+            self.assertEqual([m._vm.image_state(i)[0] for i in insts], [True, False, False, False])
+            self.assertEqual(m._vm.stale_instances(), ["old"])
+            m._vm._img_seen.clear()
+            self.assertEqual(m._vm.image_sweep(), [])           # first sight: baseline, no push
+            self.assertEqual(m._vm.image_sweep(), [])           # unchanged: quiet
             os.utime(img, (4000, 4000))                      # rebuilt -> both VMs older now
-            self.assertEqual(m.image_sweep(), ["old", "fresh"])
+            self.assertEqual(m._vm.image_sweep(), ["old", "fresh"])
             self.assertEqual(len(pushes), 1)
             self.assertIn("old, fresh", pushes[0][2])
-            self.assertEqual(m.image_sweep(), [])           # once per rebuild
+            self.assertEqual(m._vm.image_sweep(), [])           # once per rebuild
         finally:
             m._paths.BASE, m._paths.RUN_DIR, m._instances.is_running, m._instances.load_instances, m._notify.notify_add = old[:5]
-            m._img_seen.clear(); m._img_seen.update(old[5]); m.HARNESS_IMG = old[6]
+            m._vm._img_seen.clear(); m._vm._img_seen.update(old[5]); m._vm.HARNESS_IMG = old[6]
 
     def test_guest_config_carries_host_timezone(self):
         """Guests boot in UTC; the manager hands them the host's zone name."""
@@ -3973,13 +3973,13 @@ class ManagerFunctions(unittest.TestCase):
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-session-")
         old = (m._instances.load_instances, m._instances.is_running, m._instances.pidfile, m._settings.load_settings, m._secrets.secret_store, m._secrets.load_secret_policy,
-               m._mcp.load_mcps, m.load_skills, m._paths.RUN_DIR, m._guests.instance_by_ip, m._auth.PW, st.HISTORY_DB, m.image_state)
+               m._mcp.load_mcps, m.load_skills, m._paths.RUN_DIR, m._guests.instance_by_ip, m._auth.PW, st.HISTORY_DB, m._vm.image_state)
         try:
             inst = {"name": "vm1", "index": 3, "template": "openrouter", "rootfs": "instances/openrouter-rootfs.ext4",
                     "config": {"OPENROUTER_MODEL": "x/y", "MCP_SERVERS": "caldav,homeassistant"}}
             m._instances.load_instances = lambda: [inst]
             m._instances.is_running = lambda i: True
-            m.image_state = lambda i: (False, 0, 0)
+            m._vm.image_state = lambda i: (False, 0, 0)
             m._paths.RUN_DIR = tmp; st.HISTORY_DB = os.path.join(tmp, "history.db")
             pf = os.path.join(tmp, "vm1.pid"); open(pf, "w").write("1"); os.utime(pf, (time.time() - 7500,) * 2)
             m._instances.pidfile = lambda i: pf
@@ -4016,7 +4016,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertNotIn("commands", m.session_info(cl))                       # the / picker lists them
         finally:
             (m._instances.load_instances, m._instances.is_running, m._instances.pidfile, m._settings.load_settings, m._secrets.secret_store, m._secrets.load_secret_policy,
-             m._mcp.load_mcps, m.load_skills, m._paths.RUN_DIR, m._guests.instance_by_ip, m._auth.PW, st.HISTORY_DB, m.image_state) = old
+             m._mcp.load_mcps, m.load_skills, m._paths.RUN_DIR, m._guests.instance_by_ip, m._auth.PW, st.HISTORY_DB, m._vm.image_state) = old
 
     def test_chat_page_carries_panel_and_search(self):
         """The rendered chat page has the session panel, the search bar and
