@@ -4296,7 +4296,38 @@ class H(BaseHTTPRequestHandler):
         sub = tail[len("term"):].lstrip("/")  # "" | "ws"
         if "upgrade" in self.headers.get("Connection", "").lower() and \
            self.headers.get("Upgrade", "").lower() == "websocket":
+            # H-2 (security review): a WebSocket handshake is a GET, the browser
+            # attaches the cached Basic-auth and same-origin policy does not
+            # apply — so any page the admin visits could open a shell in a VM.
+            # Browsers ALWAYS send Origin on a WS handshake: require it and
+            # require it to be ours (the empty-Origin allowance of origin_allowed
+            # is for curl/app POSTs, not for this path).
+            origin = (self.headers.get("Origin") or "").strip()
+            if not origin or not origin_allowed(origin):
+                self.send_response(403)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(b"terminal websocket: origin not allowed")
+                return
             return self._ws_tunnel(net_of(inst)["guest"], TERM_GUEST_PORT, "/" + sub)
+        if sub == "":
+            # H-3 (security review): the terminal PAGE is served by the manager
+            # from its own copy of webterm.py, never fetched from the guest —
+            # an agent that replaced the page on :7682 (same uid as webterm)
+            # could otherwise run script on the manager origin with the
+            # admin's session. Only the /ws frames are tunneled to the VM.
+            try:
+                from webterm import PAGE as _term_page
+            except Exception:
+                _term_page = None
+            if _term_page:
+                body = _term_page.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
         return self._proxy("GET", port=TERM_GUEST_PORT, tail_override=sub)
 
     def _ws_tunnel(self, guest, port, path):
@@ -4462,7 +4493,14 @@ class H(BaseHTTPRequestHandler):
                 self.wfile.write(out)
                 return
             self.send_response(r.status)
-            self.send_header("Content-Type", r.headers.get("Content-Type", "text/html; charset=utf-8"))
+            ct = r.headers.get("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Type", ct)
+            if "html" in ct.lower():
+                # H-3: guest-authored HTML must not run on the manager's origin
+                # with the admin's session. `sandbox` gives it an opaque origin:
+                # no script, no credentialed access to /api/*. (The terminal page
+                # is served by the manager itself, see _term_route.)
+                self.send_header("Content-Security-Policy", "sandbox")
             if r.headers.get("X-Kaim-Turn"):        # the turn id: the app fetches its trace by it
                 self.send_header("X-Kaim-Turn", r.headers["X-Kaim-Turn"])
             self.end_headers()

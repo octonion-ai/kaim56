@@ -2168,6 +2168,65 @@ class ManagerFunctions(unittest.TestCase):
         finally:
             m.load_mcps = old
 
+    def test_terminal_ws_requires_our_origin_and_page_is_served_by_manager(self):
+        """H-2: the terminal WebSocket handshake needs a present, allowed Origin
+        (403 otherwise). H-3: the terminal page comes from the manager's own
+        webterm.py, never proxied from the guest."""
+        m = self.m
+        tunneled = []
+        old = m.load_instances, m.is_running, m.net_of
+        try:
+            inst = {"name": "vm1", "index": 3, "template": "openrouter"}
+            m.load_instances = lambda: [inst]; m.is_running = lambda i: True
+            m.net_of = lambda i: {"guest": "172.30.3.2", "tap": "fc3"}
+            def ws(path, origin=None):
+                h = self._handler(path, "10.0.0.9")
+                h.headers["Connection"] = "Upgrade"; h.headers["Upgrade"] = "websocket"
+                if origin is not None:
+                    h.headers["Origin"] = origin
+                h._ws_tunnel = lambda guest, port, p: tunneled.append((guest, port, p)) or None
+                h._term_route("vm1", "term/ws")
+                return h
+            self.assertEqual(self._status(ws("/i/vm1/term/ws")), 403)                              # no Origin
+            self.assertEqual(self._status(ws("/i/vm1/term/ws", "http://evil.example")), 403)        # foreign
+            self.assertEqual(tunneled, [])
+            h = ws("/i/vm1/term/ws", "http://localhost:8700")                                        # ours
+            self.assertEqual(tunneled, [("172.30.3.2", m.TERM_GUEST_PORT, "/ws")])
+            # the page: manager-served, the guest proxy must NOT be consulted
+            h = self._handler("/i/vm1/term/", "10.0.0.9")
+            h._proxy = lambda *a, **k: (_ for _ in ()).throw(AssertionError("terminal page was proxied from the guest"))
+            h._term_route("vm1", "term/")
+            self.assertEqual(self._status(h), 200)
+            self.assertIn(b"<!doctype html>", h.wfile.getvalue().lower())
+        finally:
+            m.load_instances, m.is_running, m.net_of = old
+
+    def test_proxied_guest_html_is_sandboxed(self):
+        """H-3: HTML relayed from a guest carries Content-Security-Policy: sandbox;
+        JSON/plain answers (the chat API) do not."""
+        m = self.m
+        import types
+        old = m.load_instances, m.is_running, m.net_of, m.urllib.request.urlopen, m.instance_by_ip
+        try:
+            inst = {"name": "vm1", "index": 3, "template": "openrouter"}
+            m.load_instances = lambda: [inst]; m.is_running = lambda i: True
+            m.net_of = lambda i: {"guest": "172.30.3.2", "tap": "fc3"}; m.instance_by_ip = lambda ip: None
+            class Resp:
+                def __init__(self, ct, body): self.status, self.headers, self._b = 200, {"Content-Type": ct}, body
+                def read(self, n=-1):
+                    b, self._b = self._b, b""; return b
+                def __enter__(self): return self
+                def __exit__(self, *a): return False
+            for ct, path, want in (("text/html; charset=utf-8", "/i/vm1/", True),
+                                   ("application/json", "/i/vm1/api/tools", False)):
+                m.urllib.request.urlopen = lambda req, timeout=0, _ct=ct: Resp(_ct, b"<p>hi</p>" if "html" in _ct else b"{}")
+                h = self._handler(path, "10.0.0.9"); h._do_GET()
+                raw = h.wfile.getvalue()
+                self.assertEqual(self._status(h), 200)
+                self.assertEqual(b"content-security-policy: sandbox" in raw.lower(), want, (ct, raw[:200]))
+        finally:
+            m.load_instances, m.is_running, m.net_of, m.urllib.request.urlopen, m.instance_by_ip = old
+
     def test_memfs_git_never_runs_as_root_with_hooks(self):
         """C-1: git in the guest-writable memory folder must run as the guest
         user (when the manager is root) with every config-driven execution

@@ -6,6 +6,8 @@ history — `git log -p -- manager/CHANGELOG.md` before 2026-09-08 — and in th
 commit messages.
 
 ## 2026-09-17
+- Security H-2: the browser-terminal WebSocket handshake now requires a present, allowed Origin (403 otherwise) — any page the admin visited could open a shell in a VM with the cached login
+- Security H-3: the terminal page is served by the manager from its own webterm.py (only the /ws frames are tunneled), and any other HTML relayed from a guest gets `Content-Security-Policy: sandbox` — guest-authored HTML can no longer run script on the manager origin with the admin's session
 - Security C-1 (critical): git in the guest-writable memory folder no longer runs as root — it runs as the guest user with hooks, fsmonitor and sshCommand disabled on the command line and no global/system config; older root-owned `.git` trees are chowned to the guest on first use; a planted `.git/hooks/pre-commit` can neither run as root nor run at all (test)
 - Repository moved back to `github.com/uneidel/kaim56` (remote, installer default, README, update check); the old octonion-ai path redirects
 - Office output for agents: tools `write_xlsx` (rows → spreadsheet, header bold, columns sized) and `write_docx` (Markdown subset → Word: headings, bullets, paragraphs, bold) write into the workspace; `python3-openpyxl` and `python3-docx` in the openrouter rootfs (rebuild); without the libs the tools say so; catalog/Policy entries
