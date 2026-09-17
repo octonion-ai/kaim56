@@ -333,18 +333,6 @@ def t_web_search(query, count=5):
             "NOT an empty result: tell the user instead of concluding "
             "nothing exists.")
 
-def _llm_headers():
-    """Request headers for chat requests. In proxy mode WITHOUT Authorization —
-    the manager sets it while forwarding; a bearer from the VM would be
-    at best a dummy and only suggest a key were present here."""
-    h = {"Content-Type": "application/json",
-         "HTTP-Referer": "https://agents.example.com", "X-Title": "kaim56-agent",
-         "X-Kaim-Turn": _observe._turn_id[0], "X-Kaim-Step": str(_observe._turn_step[0])}   # the span, for the proxy's books
-    if not _mgrclient._llm_proxy_active():
-        h["Authorization"] = f"Bearer {_mgrclient.ensure_or_key()}"
-    return h
-
-
 def t_spawn_subagent(task, model=None, tools=None, egress=None, skill=None, persona=None):
     """Delegate a self-contained subtask to a FRESH ephemeral VM and return its
     answer. Runs over the manager's task path (create_task target=ephemeral,
@@ -1435,33 +1423,6 @@ def exec_tool(name, args):
     return _finalize_output(name, out)
 
 
-# --- report usage -----------------------------------------------------------
-def report_usage(u, ms=None, ok=True, err=""):
-    """Report tokens/cost of a call to the manager (fire-and-forget) — plus the
-    span: turn, step (LLM call index in the turn), duration, and for a call
-    that failed after all retries ok:false with the error. The manager
-    recognizes the instance by its source IP; we send only numbers and the
-    error text. If the manager fails, that must not disturb the chat."""
-    if not isinstance(u, dict):
-        u = {}
-    try:
-        payload = json.dumps({
-            "model": _config.OR_MODEL,
-            "prompt_tokens": u.get("prompt_tokens") or 0,
-            "completion_tokens": u.get("completion_tokens") or 0,
-            "cost": u.get("cost") or 0.0,
-            "turn": _observe._turn_id[0], "step": _observe._turn_step[0], "ms": ms,
-            "ok": bool(ok), "err": str(err or "")[:400],
-            "direct": bool(_config.LLAMA_ENDPOINT),     # a local model is called directly, not through the key proxy
-        }).encode()
-        req = urllib.request.Request(f"{_mgrclient._manager_base()}/api/usage", data=payload,
-                                     method="POST",
-                                     headers={"Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=5).read()
-    except Exception:
-        pass
-
-
 # ===== Harness patterns (inspired by strands-agents/harness-sdk, Apache-2.0) ====
 # Four building blocks, all stdlib, without a new dependency:
 #  1) Retry with backoff around the model call
@@ -1865,11 +1826,11 @@ def or_chat(messages, tools, model=None):
     t0 = time.monotonic()
     for attempt in range(LLM_RETRIES + 1):
         req = urllib.request.Request(_mgrclient._llm_url(), data=body, method="POST",
-                                     headers=_llm_headers())
+                                     headers=_mgrclient._llm_headers())
         try:
             r = urllib.request.urlopen(req, timeout=LLM_TIMEOUT)
             d = json.loads(r.read().decode())
-            report_usage(d.get("usage"), ms=int((time.monotonic() - t0) * 1000))
+            _mgrclient.report_usage(d.get("usage"), ms=int((time.monotonic() - t0) * 1000))
             return d["choices"][0]["message"]
         except urllib.error.HTTPError as e:
             err_body = e.read().decode("utf-8", "replace")[:400]
@@ -1883,7 +1844,7 @@ def or_chat(messages, tools, model=None):
                 last = _LOADING_MSG
             elif e.code in _RETRY_CODES and attempt < LLM_RETRIES:
                 _retry_sleep(attempt); continue
-            report_usage({}, ms=int((time.monotonic() - t0) * 1000), ok=False, err=last)
+            _mgrclient.report_usage({}, ms=int((time.monotonic() - t0) * 1000), ok=False, err=last)
             return {"role": "assistant", "content": last}
         except Exception as e:
             last = f"⚠️ {_config.LLM_NAME} error: {e!r}"
@@ -1891,7 +1852,7 @@ def or_chat(messages, tools, model=None):
                 last = _llama_dropped_msg(messages)
             elif _retry_after(e, attempt):
                 _retry_sleep(attempt); continue
-            report_usage({}, ms=int((time.monotonic() - t0) * 1000), ok=False, err=last)
+            _mgrclient.report_usage({}, ms=int((time.monotonic() - t0) * 1000), ok=False, err=last)
             return {"role": "assistant", "content": last}
     return {"role": "assistant", "content": last}
 
@@ -2435,7 +2396,7 @@ def or_chat_stream(messages, tools, on_token):
     _t0 = time.monotonic()
     for attempt in range(LLM_RETRIES + 1):
         req = urllib.request.Request(_mgrclient._llm_url(), data=body, method="POST",
-                                     headers=_llm_headers())
+                                     headers=_mgrclient._llm_headers())
         try:
             r = urllib.request.urlopen(req, timeout=LLM_STREAM_TIMEOUT)
             break
@@ -2465,7 +2426,7 @@ def or_chat_stream(messages, tools, on_token):
                 m = _LOADING_MSG
             elif e.code in _RETRY_CODES and attempt < LLM_RETRIES:
                 _retry_sleep(attempt); continue
-            report_usage({}, ms=int((time.monotonic() - _t0) * 1000), ok=False, err=m)
+            _mgrclient.report_usage({}, ms=int((time.monotonic() - _t0) * 1000), ok=False, err=m)
             on_token(m); return {"role": "assistant", "content": m}
         except Exception as e:
             m = f"⚠️ {_config.LLM_NAME} error: {e!r}"
@@ -2473,7 +2434,7 @@ def or_chat_stream(messages, tools, on_token):
                 m = _llama_dropped_msg(messages)
             elif _retry_after(e, attempt):
                 _retry_sleep(attempt); continue
-            report_usage({}, ms=int((time.monotonic() - _t0) * 1000), ok=False, err=m)
+            _mgrclient.report_usage({}, ms=int((time.monotonic() - _t0) * 1000), ok=False, err=m)
             on_token(m); return {"role": "assistant", "content": m}
     got_usage = False
     try:
@@ -2490,7 +2451,7 @@ def or_chat_stream(messages, tools, on_token):
                 continue
             if chunk.get("usage"):          # the last chunk carries the billing
                 got_usage = True
-                report_usage(chunk["usage"], ms=int((time.monotonic() - _t0) * 1000))
+                _mgrclient.report_usage(chunk["usage"], ms=int((time.monotonic() - _t0) * 1000))
             try:
                 delta = chunk["choices"][0]["delta"]
             except (KeyError, IndexError):
@@ -2533,7 +2494,7 @@ def or_chat_stream(messages, tools, on_token):
         # llama.cpp answered 200 and then died (an image did that): the stream
         # ends cleanly with nothing in it — not an empty reply, a dropped one.
         m = _llama_dropped_msg(messages)
-        report_usage({}, ms=int((time.monotonic() - _t0) * 1000), ok=False, err=m)
+        _mgrclient.report_usage({}, ms=int((time.monotonic() - _t0) * 1000), ok=False, err=m)
         on_token(m)
         content = m
     # Some reasoning models emit EVERYTHING as thinking and leave content empty

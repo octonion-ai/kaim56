@@ -14,6 +14,7 @@ import socket
 import urllib.error
 
 from . import config as _config
+from . import observe as _observe
 
 
 def _manager_base():
@@ -77,3 +78,43 @@ def _llm_url():
 def _mgr_get(base, path, timeout=30):
     req = urllib.request.Request(base + path, method="GET")
     return urllib.request.urlopen(req, timeout=timeout).read().decode("utf-8", "replace")
+
+
+def _llm_headers():
+    """Request headers for chat requests. In proxy mode WITHOUT Authorization —
+    the manager sets it while forwarding; a bearer from the VM would be
+    at best a dummy and only suggest a key were present here."""
+    h = {"Content-Type": "application/json",
+         "HTTP-Referer": "https://agents.example.com", "X-Title": "kaim56-agent",
+         "X-Kaim-Turn": _observe._turn_id[0], "X-Kaim-Step": str(_observe._turn_step[0])}   # the span, for the proxy's books
+    if not _llm_proxy_active():
+        h["Authorization"] = f"Bearer {ensure_or_key()}"
+    return h
+
+
+
+# --- report usage -----------------------------------------------------------
+def report_usage(u, ms=None, ok=True, err=""):
+    """Report tokens/cost of a call to the manager (fire-and-forget) — plus the
+    span: turn, step (LLM call index in the turn), duration, and for a call
+    that failed after all retries ok:false with the error. The manager
+    recognizes the instance by its source IP; we send only numbers and the
+    error text. If the manager fails, that must not disturb the chat."""
+    if not isinstance(u, dict):
+        u = {}
+    try:
+        payload = json.dumps({
+            "model": _config.OR_MODEL,
+            "prompt_tokens": u.get("prompt_tokens") or 0,
+            "completion_tokens": u.get("completion_tokens") or 0,
+            "cost": u.get("cost") or 0.0,
+            "turn": _observe._turn_id[0], "step": _observe._turn_step[0], "ms": ms,
+            "ok": bool(ok), "err": str(err or "")[:400],
+            "direct": bool(_config.LLAMA_ENDPOINT),     # a local model is called directly, not through the key proxy
+        }).encode()
+        req = urllib.request.Request(f"{_manager_base()}/api/usage", data=payload,
+                                     method="POST",
+                                     headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=5).read()
+    except Exception:
+        pass
