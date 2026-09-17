@@ -1948,7 +1948,7 @@ class ManagerFunctions(unittest.TestCase):
         try:
             m._skills.load_skills = lambda: [{"name": "e2e-skill", "description": "kurz",
                                       "content": marker + " x" * 5000}]
-            page = m.render()
+            page = m._ui.render()
             self.assertIn("e2e-skill", page)          # name/description are in
             self.assertIn("kurz", page)
             self.assertNotIn(marker, page)            # the body is NOT
@@ -1962,11 +1962,11 @@ class ManagerFunctions(unittest.TestCase):
         old = m._settings.CODE_URL
         try:
             m._settings.CODE_URL = "http://example.invalid:8443/"
-            page = m.render()
+            page = m._ui.render()
             self.assertIn('href="http://example.invalid:8443/"', page)
             self.assertIn('rel="noopener noreferrer"', page)
             m._settings.CODE_URL = ""
-            page = m.render()
+            page = m._ui.render()
             self.assertNotIn("__CODE_LINK__", page)
         finally:
             m._settings.CODE_URL = old
