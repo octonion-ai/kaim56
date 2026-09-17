@@ -44,6 +44,7 @@ WEB_GUEST_PORT = 8080   # port of the web bridge in the microVM
 TERM_GUEST_PORT = 7682  # port of the webterm (browser terminal) in the microVM
 
 from mgr import paths as _paths  # noqa: E402
+from mgr import audit as _audit  # noqa: E402
 from mgr import auth as _auth  # noqa: E402
 from mgr import host as _host  # noqa: E402
 from mgr import util as _util  # noqa: E402
@@ -2844,45 +2845,6 @@ _irohgw.configure(_paths.BASE)
 from mgr.irohgw import (status as irohgw_status,  # noqa: E402,F401
                         allow_add as irohgw_allow_add, allow_remove as irohgw_allow_remove)
 
-# ---- Audit log per instance (tool calls, URLs) -----------------------------
-# Lives on the host (survives VM restarts). JSONL, one file per instance,
-# hard-capped to the last N lines.
-AUDIT_DIR = os.path.join(_paths.BASE, "audit")
-AUDIT_MAX_LINES = 2000
-
-
-def audit_append(inst_name, tool, target, ok, err="", result="", turn="", ms=None):
-    os.makedirs(AUDIT_DIR, exist_ok=True)
-    p = os.path.join(AUDIT_DIR, f"{inst_name}.jsonl")
-    rec = {"ts": int(time.time()), "tool": str(tool)[:64],
-           "target": str(target)[:400], "ok": bool(ok)}
-    # Rich fields (additive, old readers unaffected): the error text and a
-    # result excerpt are what makes the trail reviewable — ok alone cannot
-    # distinguish a healthy call from one that failed politely.
-    if err:
-        rec["err"] = str(err)[:300]
-    if result:
-        rec["result"] = str(result)[:300]
-    if turn:
-        rec["turn"] = str(turn)[:16]
-    if ms is not None:
-        try:
-            rec["ms"] = int(ms)          # the span's duration (additive field)
-        except (TypeError, ValueError):
-            pass
-    with open(p, "a") as fh:
-        fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
-    # trim occasionally so the file doesn't grow without bound
-    try:
-        with open(p) as fh:
-            lines = fh.readlines()
-        if len(lines) > AUDIT_MAX_LINES + 200:
-            with open(p, "w") as fh:
-                fh.writelines(lines[-AUDIT_MAX_LINES:])
-    except OSError as e:
-        print(f"[quiet] audit trim for {inst_name} failed: {e!r}", flush=True)
-
-
 def hindsight_retains(inst_name):
     """A-1: whether the second memory (Hindsight) keeps this instance's turns.
     Default on; HINDSIGHT_RETAIN=0 in the instance config turns it off entirely
@@ -2927,22 +2889,6 @@ def effective_policy(inst):
 
 # mgr/mcp needs the secret functions; they are defined above by now.
 _mcp.configure(_paths.BASE, load_instances, allowed_secret_keys, secret_store)
-
-def audit_read(inst_name, limit=200):
-    p = os.path.join(AUDIT_DIR, f"{inst_name}.jsonl")
-    try:
-        with open(p) as fh:
-            lines = fh.readlines()[-limit:]
-    except OSError:
-        return []
-    out = []
-    for ln in lines:
-        try:
-            out.append(json.loads(ln))
-        except ValueError:
-            pass
-    return list(reversed(out))   # newest first
-
 
 # ---- web -------------------------------------------------------------------
 # PAGE (HTML/JS of the manager UI) now lives in mgr/ui.py.
@@ -3271,7 +3217,7 @@ def _guard_check(inst):
 # Kette. Eine Route liefert (body, content_type) und ueberlaesst das Senden dem
 # Verteiler — oder None, wenn sie selbst geantwortet hat.
 from mgr import saddler as _saddler_mod  # noqa: E402
-_saddler_mod.configure(AUDIT_DIR, HISTORY_DB)
+_saddler_mod.configure(_audit.AUDIT_DIR, HISTORY_DB)
 
 from mgr import websearch as _websearch_mod  # noqa: E402
 _websearch_mod.configure(lambda key: (_settings.load_settings().get(key) or ""))
@@ -4407,7 +4353,7 @@ def _rt_mcp_call(h):
     st, out = mcp_hub_call(inst, str(b.get("server") or ""), b.get("payload") or {})
     if (b.get("payload") or {}).get("method", "") == "tools/call":
         try:
-            audit_append(inst["name"], "mcp:" + str(b.get("server")),
+            _audit.audit_append(inst["name"], "mcp:" + str(b.get("server")),
                          ((b.get("payload") or {}).get("params") or {}).get("name", ""),
                          st == 200 and "error" not in out)
         except Exception:
@@ -4743,7 +4689,7 @@ def _rt_trace_read(h):
     t = turn_trace(nm, turn)
     # audit_read is newest-first; the file order is the call order (ts has
     # only seconds, so a stable sort on ts alone would swap calls of one second)
-    tools = [e for e in reversed(audit_read(nm, limit=AUDIT_MAX_LINES)) if e.get("turn") == turn]
+    tools = [e for e in reversed(_audit.audit_read(nm, limit=_audit.AUDIT_MAX_LINES)) if e.get("turn") == turn]
     return h._json({"instance": nm, "turn": t["turn"], "llm": t["llm"], "tools": tools})
 
 
@@ -4753,7 +4699,7 @@ def _rt_audit_report(h):
     body = h._body()
     if inst is not None:   # only log real guests, silently discard otherwise
         try:
-            audit_append(inst["name"], body.get("tool", ""), body.get("target", ""),
+            _audit.audit_append(inst["name"], body.get("tool", ""), body.get("target", ""),
                          body.get("ok", True), err=body.get("err", ""),
                          result=body.get("result", ""), turn=body.get("turn", ""),
                          ms=body.get("ms"))
@@ -4784,7 +4730,7 @@ def _rt_notify(h):
             print(f"[quiet] notify -> task chat failed: {e!r}", flush=True)
     try:
         # The WHY travels along ("empty" / "rate limit: …").
-        audit_append(nm, "notify", (body.get("title") or "")[:60], bool(nid), err="" if nid else str(note))
+        _audit.audit_append(nm, "notify", (body.get("title") or "")[:60], bool(nid), err="" if nid else str(note))
     except Exception:
         pass
     return h._json({"id": nid, "note": note}, 200 if nid else 429)
@@ -4816,7 +4762,7 @@ def _rt_signal_send(h):
         return h._json({"ok": False, "note": "send_signal not allowed for this instance"}, 403)
     ok, note = signal_send(body.get("text") or body.get("message"), body.get("to"))
     try:
-        audit_append(inst["name"] if inst else "admin", "send_signal", (body.get("to") or "default"), ok)
+        _audit.audit_append(inst["name"] if inst else "admin", "send_signal", (body.get("to") or "default"), ok)
     except Exception:
         pass
     return h._json({"ok": ok, "note": note}, 200 if ok else 400)
@@ -5004,7 +4950,7 @@ def _rt_policy(h):
 @ROUTER.get("/api/audit/", prefix=True, admin=True)
 def _rt_audit_read(h):
     nm = re.sub(r"[^a-zA-Z0-9_-]", "", _tail(h, "/api/audit/")[0])
-    return h._json({"instance": nm, "events": audit_read(nm, limit=1000)})
+    return h._json({"instance": nm, "events": _audit.audit_read(nm, limit=1000)})
 
 
 @ROUTER.get("/api/models")

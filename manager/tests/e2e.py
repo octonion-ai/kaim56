@@ -1526,21 +1526,21 @@ class ManagerFunctions(unittest.TestCase):
         the turn id (that is what makes a saddler review possible at all)."""
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-audit-")
-        old = m.AUDIT_DIR
+        old = m._audit.AUDIT_DIR
         try:
-            m.AUDIT_DIR = tmp
-            m.audit_append("inst-a", "http_fetch", "https://x.example", False,
+            m._audit.AUDIT_DIR = tmp
+            m._audit.audit_append("inst-a", "http_fetch", "https://x.example", False,
                            err="⚠️ HTTP 403: blocked", turn="t1234")
-            m.audit_append("inst-a", "web_search", "cronn", True,
+            m._audit.audit_append("inst-a", "web_search", "cronn", True,
                            result="1. cronn GmbH …", turn="t1234")
-            recs = m.audit_read("inst-a")     # newest first
+            recs = m._audit.audit_read("inst-a")     # newest first
             self.assertEqual(len(recs), 2)
             self.assertEqual(recs[1]["err"], "⚠️ HTTP 403: blocked")
             self.assertNotIn("result", recs[1])
             self.assertEqual(recs[0]["result"], "1. cronn GmbH …")
             self.assertEqual({r["turn"] for r in recs}, {"t1234"})
         finally:
-            m.AUDIT_DIR = old
+            m._audit.AUDIT_DIR = old
 
     def test_ha_alias_learns_via_fake_websocket(self):
         """learn_alias speaks the HA WebSocket protocol: handshake -> auth ->
@@ -3324,12 +3324,12 @@ class ManagerFunctions(unittest.TestCase):
         touches no chat."""
         m = self.m
         seen = []
-        old = m.instance_by_ip, m.notify_add, m.chat_log_append, m.audit_append
+        old = m.instance_by_ip, m.notify_add, m.chat_log_append, m._audit.audit_append
         try:
             m.instance_by_ip = lambda ip: {"name": "orch"} if ip == "172.30.1.2" else None
             m.notify_add = lambda inst, title, body, link="": ("id1", "")
             m.chat_log_append = lambda inst, sender, u, r, kind="signal": seen.append((inst, u, r, kind)) or 1
-            m.audit_append = lambda *a, **k: None
+            m._audit.audit_append = lambda *a, **k: None
             h = self._post_handler("/api/notify", "172.30.1.2", json.dumps({"title": "Saddler weekly", "message": "Failures 67 (was 20)"}).encode())
             h._do_POST()
             self.assertEqual(seen, [("orch", "", "🔔 Saddler weekly\n\nFailures 67 (was 20)", "task")])
@@ -3344,7 +3344,7 @@ class ManagerFunctions(unittest.TestCase):
             h._do_POST()
             self.assertEqual(len(seen), 1)
         finally:
-            m.instance_by_ip, m.notify_add, m.chat_log_append, m.audit_append = old
+            m.instance_by_ip, m.notify_add, m.chat_log_append, m._audit.audit_append = old
 
     def test_tool_allowlist_enforced_at_the_host(self):
         """A-2: a restricted instance is refused a capability it did not list;
@@ -3355,10 +3355,10 @@ class ManagerFunctions(unittest.TestCase):
         self.assertFalse(m.tool_allowed({"config": {"AGENT_TOOLS": "bash,read_file"}}, "send_signal"))
         self.assertFalse(m.tool_allowed({"config": {"AGENT_TOOLS": "bash"}}, "ha_control"))
         seen = []
-        old = m.instance_by_ip, m.notify_add, m.audit_append, m.chat_log_append
+        old = m.instance_by_ip, m.notify_add, m._audit.audit_append, m.chat_log_append
         try:
             m.notify_add = lambda *a, **k: seen.append(a) or ("id", "")
-            m.audit_append = lambda *a, **k: None; m.chat_log_append = lambda *a, **k: 1
+            m._audit.audit_append = lambda *a, **k: None; m.chat_log_append = lambda *a, **k: 1
             m.instance_by_ip = lambda ip: {"name": "r", "config": {"AGENT_TOOLS": "bash"}} if ip == "172.30.1.2" else None
             h = self._post_handler("/api/notify", "172.30.1.2", json.dumps({"title": "t", "message": "m"}).encode())
             h._do_POST()
@@ -3368,7 +3368,7 @@ class ManagerFunctions(unittest.TestCase):
             h._do_POST()
             self.assertEqual(self._status(h), 200); self.assertEqual(len(seen), 1)
         finally:
-            m.instance_by_ip, m.notify_add, m.audit_append, m.chat_log_append = old
+            m.instance_by_ip, m.notify_add, m._audit.audit_append, m.chat_log_append = old
 
     def test_persona_carries_tools_and_model(self):
         """Feature 3: a persona keeps an optional recommended tool subset and
@@ -3685,17 +3685,17 @@ class ManagerFunctions(unittest.TestCase):
         'admin/notify empty' line in the live audit each time (138 of them
         looked like a misbehaving admin instance)."""
         m = self.m
-        old = m.instance_by_ip, m.audit_append, m._auth.PW
+        old = m.instance_by_ip, m._audit.audit_append, m._auth.PW
         try:
             m.instance_by_ip = lambda ip: None
-            m.audit_append = lambda *a, **k: None
+            m._audit.audit_append = lambda *a, **k: None
             m._auth.PW = ""
             h = self._post_handler("/api/notify", "10.0.0.5", b'{"title": "", "message": ""}')
             h.do_POST()
             self.assertEqual(self._status(h), 429)
             self.assertIsNone(json.loads(h.wfile.getvalue().split(b"\r\n\r\n", 1)[1]).get("id"))
         finally:
-            m.instance_by_ip, m.audit_append, m._auth.PW = old
+            m.instance_by_ip, m._audit.audit_append, m._auth.PW = old
 
     def test_task_runs_carry_a_deadline_and_the_worker_timeout(self):
         """The bridge call carries deadline = now + timeout - margin; the worker
@@ -3744,10 +3744,10 @@ class ManagerFunctions(unittest.TestCase):
         import sqlite3
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-trace-")
-        old = st.HISTORY_DB, m.AUDIT_DIR, m.instance_by_ip, m._settings.load_settings, list(st._migrated)
+        old = st.HISTORY_DB, m._audit.AUDIT_DIR, m.instance_by_ip, m._settings.load_settings, list(st._migrated)
         try:
             st.HISTORY_DB = os.path.join(tmp, "history.db")
-            m.AUDIT_DIR = os.path.join(tmp, "audit")
+            m._audit.AUDIT_DIR = os.path.join(tmp, "audit")
             with sqlite3.connect(st.HISTORY_DB) as c:        # a DB from before the span columns
                 c.execute("CREATE TABLE llm_usage(id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, "
                           "instance TEXT, model TEXT, prompt_tokens INTEGER, completion_tokens INTEGER, cost REAL)")
@@ -3791,7 +3791,7 @@ class ManagerFunctions(unittest.TestCase):
             lst = json.loads(h.wfile.getvalue().split(b"\r\n\r\n", 1)[1])["turns"]
             self.assertEqual([t["turn"] for t in lst], ["t1"])
             # the audit reader is unchanged apart from ms
-            recs = m.audit_read("vm1")
+            recs = m._audit.audit_read("vm1")
             self.assertEqual(set(recs[0]) - {"ms"}, {"ts", "tool", "target", "ok", "err", "turn"})
             # an end without a start still yields a full row; old rows have no turn
             st.turn_end("vm1", "t9", ms=10, steps=1, outcome="error")
@@ -3799,7 +3799,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual(st.usage_for("vm1")["calls"], 3)          # the old row still counts
             self.assertEqual(st.turns_prune(30), 0)
         finally:
-            st.HISTORY_DB, m.AUDIT_DIR, m.instance_by_ip, m._settings.load_settings = old[:4]
+            st.HISTORY_DB, m._audit.AUDIT_DIR, m.instance_by_ip, m._settings.load_settings = old[:4]
             st._migrated[0] = old[4][0]
 
     def test_instance_proxy_forwards_the_turn_header(self):
