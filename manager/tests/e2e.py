@@ -1343,12 +1343,12 @@ class ManagerFunctions(unittest.TestCase):
             m.set_instance_tools("toolinst", picks)
             cfg = _readj(os.path.join(tmp, "toolinst.json"))["config"]
             self.assertEqual(set(cfg["AGENT_TOOLS"].split(",")), set(picks))   # Subset bleibt
-            self.assertFalse(m.effective_policy(_readj(os.path.join(tmp, "toolinst.json")))["tools_all"])
+            self.assertFalse(m._policy.effective_policy(_readj(os.path.join(tmp, "toolinst.json")))["tools_all"])
 
             m.set_instance_tools("toolinst", list(m._policy.AGENT_TOOL_NAMES))
             cfg2 = _readj(os.path.join(tmp, "toolinst.json"))["config"]
             self.assertNotIn("AGENT_TOOLS", cfg2)                              # alle -> Feld raus
-            self.assertTrue(m.effective_policy(_readj(os.path.join(tmp, "toolinst.json")))["tools_all"])
+            self.assertTrue(m._policy.effective_policy(_readj(os.path.join(tmp, "toolinst.json")))["tools_all"])
 
             m.set_instance_tools("toolinst", ["kein_tool", picks[0]])
             cfg3 = _readj(os.path.join(tmp, "toolinst.json"))["config"]
@@ -3350,10 +3350,10 @@ class ManagerFunctions(unittest.TestCase):
         """A-2: a restricted instance is refused a capability it did not list;
         an instance with no allowlist keeps everything; admin is never gated."""
         m = self.m
-        self.assertTrue(m.tool_allowed({"config": {}}, "send_signal"))
-        self.assertTrue(m.tool_allowed({"config": {"AGENT_TOOLS": "bash,send_signal"}}, "send_signal"))
-        self.assertFalse(m.tool_allowed({"config": {"AGENT_TOOLS": "bash,read_file"}}, "send_signal"))
-        self.assertFalse(m.tool_allowed({"config": {"AGENT_TOOLS": "bash"}}, "ha_control"))
+        self.assertTrue(m._policy.tool_allowed({"config": {}}, "send_signal"))
+        self.assertTrue(m._policy.tool_allowed({"config": {"AGENT_TOOLS": "bash,send_signal"}}, "send_signal"))
+        self.assertFalse(m._policy.tool_allowed({"config": {"AGENT_TOOLS": "bash,read_file"}}, "send_signal"))
+        self.assertFalse(m._policy.tool_allowed({"config": {"AGENT_TOOLS": "bash"}}, "ha_control"))
         seen = []
         old = m._guests.instance_by_ip, m._notify.notify_add, m._audit.audit_append, m._chats.chat_log_append
         try:
@@ -3421,14 +3421,14 @@ class ManagerFunctions(unittest.TestCase):
                                         "tools": ["bash", "read_file"], "model": "google/gemini-2.5-flash"}]
             m._skills.load_skills = lambda: []
             caller = {"name": "orch", "config": {}}
-            cfg, net, err = m.sandbox_config(caller, {"persona": "code-reviewer"})
+            cfg, net, err = m._policy.sandbox_config(caller, {"persona": "code-reviewer"})
             self.assertEqual(err, "")
             self.assertEqual(cfg["AGENT_TOOLS"], "bash,read_file")          # persona's tools
             self.assertEqual(cfg["AGENT_SYSTEM"], "You review code.")       # persona's prompt
             self.assertEqual(cfg["OPENROUTER_MODEL"], "google/gemini-2.5-flash")
-            self.assertIn("unknown", m.sandbox_config(caller, {"persona": "ghost"})[2])
+            self.assertIn("unknown", m._policy.sandbox_config(caller, {"persona": "ghost"})[2])
             # an explicit tools list still overrides the persona's, and must stay a subset
-            cfg2, _, err2 = m.sandbox_config(caller, {"persona": "code-reviewer", "tools": "read_file"})
+            cfg2, _, err2 = m._policy.sandbox_config(caller, {"persona": "code-reviewer", "tools": "read_file"})
             self.assertEqual((cfg2["AGENT_TOOLS"], err2), ("read_file", ""))
             # an explicit model must win over the persona's model in the VM config
             seen = []
@@ -3459,23 +3459,23 @@ class ManagerFunctions(unittest.TestCase):
             m._skills.load_skills = lambda: [{"name": "pdf-digest", "description": "d", "content": "Read the PDF, summarise."}]
             m._personas.load_personas = lambda: [{"name": "assistant", "prompt": "You are helpful."}]
             caller = {"name": "orch", "config": {}}
-            self.assertEqual(m.sandbox_config(caller, None), ({}, True, ""))
-            cfg, net, err = m.sandbox_config(caller, {"tools": "bash, read_file,spawn_subagent"})
+            self.assertEqual(m._policy.sandbox_config(caller, None), ({}, True, ""))
+            cfg, net, err = m._policy.sandbox_config(caller, {"tools": "bash, read_file,spawn_subagent"})
             self.assertEqual((cfg["AGENT_TOOLS"], net, err), ("bash,read_file", True, ""))     # spawn never inherited
-            self.assertIn("unknown tools", m.sandbox_config(caller, {"tools": ["bash", "nope"]})[2])
+            self.assertIn("unknown tools", m._policy.sandbox_config(caller, {"tools": ["bash", "nope"]})[2])
             narrow = {"name": "n", "config": {"AGENT_TOOLS": "bash,read_file", "EGRESS_ALLOW": "api.example.com,cdn.example.com"}}
-            self.assertIn("does not hold", m.sandbox_config(narrow, {"tools": ["bash", "web_search"]})[2])
-            self.assertNotIn("notify", m.sandbox_config(caller, {"tools": "bash,notify"})[0]["AGENT_TOOLS"])   # notify never inherited
-            self.assertIn("outside the caller", m.sandbox_config(narrow, {"egress": "api.example.com,evil.example.org"})[2])
-            cfg, net, err = m.sandbox_config(narrow, {"egress": ["API.example.com"]})
+            self.assertIn("does not hold", m._policy.sandbox_config(narrow, {"tools": ["bash", "web_search"]})[2])
+            self.assertNotIn("notify", m._policy.sandbox_config(caller, {"tools": "bash,notify"})[0]["AGENT_TOOLS"])   # notify never inherited
+            self.assertIn("outside the caller", m._policy.sandbox_config(narrow, {"egress": "api.example.com,evil.example.org"})[2])
+            cfg, net, err = m._policy.sandbox_config(narrow, {"egress": ["API.example.com"]})
             self.assertEqual((cfg["EGRESS_ALLOW"], net, err), ("api.example.com", True, ""))
-            self.assertEqual(m.sandbox_config(caller, {"egress": "none"})[1], False)
-            self.assertIn("list hosts", m.sandbox_config(caller, {"egress": [" "]})[2])
-            cfg, net, err = m.sandbox_config(caller, {"skill": "pdf-digest"})
-            self.assertEqual(cfg["AGENT_TOOLS"], ",".join(sorted(m.SANDBOX_DEFAULT_TOOLS)))
+            self.assertEqual(m._policy.sandbox_config(caller, {"egress": "none"})[1], False)
+            self.assertIn("list hosts", m._policy.sandbox_config(caller, {"egress": [" "]})[2])
+            cfg, net, err = m._policy.sandbox_config(caller, {"skill": "pdf-digest"})
+            self.assertEqual(cfg["AGENT_TOOLS"], ",".join(sorted(m._policy.SANDBOX_DEFAULT_TOOLS)))
             self.assertIn("[Skill: pdf-digest]", cfg["AGENT_SYSTEM"]); self.assertTrue(cfg["AGENT_SYSTEM"].startswith("You are helpful."))
-            self.assertIn("unknown", m.sandbox_config(caller, {"skill": "ghost"})[2])
-            self.assertIn("object", m.sandbox_config(caller, "bash")[2])
+            self.assertIn("unknown", m._policy.sandbox_config(caller, {"skill": "ghost"})[2])
+            self.assertIn("object", m._policy.sandbox_config(caller, "bash")[2])
         finally:
             m._skills.load_skills, m._personas.load_personas = old
 
