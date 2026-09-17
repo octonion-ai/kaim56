@@ -44,6 +44,7 @@ WEB_GUEST_PORT = 8080   # port of the web bridge in the microVM
 TERM_GUEST_PORT = 7682  # port of the webterm (browser terminal) in the microVM
 
 from mgr import paths as _paths  # noqa: E402
+from mgr import util as _util  # noqa: E402
 from mgr import models as _models  # noqa: E402
 from mgr import about as _about  # noqa: E402
 from mgr import settings as _settings  # noqa: E402
@@ -90,35 +91,6 @@ BODY_MAX_LLM = 8 * 1024 * 1024        # chat completions (long contexts, images)
 BODY_MAX_AUDIO = 32 * 1024 * 1024     # STT uploads
 
 
-class BodyTooLarge(Exception):
-    pass
-
-
-def js_json(obj, **kw):
-    """json.dumps for a value embedded in a <script> block: '</script>' inside
-    a persona or an imported skill description must not end the block."""
-    return (json.dumps(obj, **kw).replace("<", "\\u003c")
-            .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"))
-
-
-def download_name(name, default="file"):
-    """A filename safe inside Content-Disposition (no quotes, no CR/LF)."""
-    return re.sub(r"[^A-Za-z0-9._-]+", "_", str(name or ""))[:120].strip("._") or default
-
-
-_rate_hits, _rate_lock = {}, threading.Lock()
-
-
-def rate_ok(key, limit, window):
-    """Sliding window per key: True while fewer than `limit` hits in `window` s."""
-    now = time.time()
-    with _rate_lock:
-        lst = _rate_hits.setdefault(key, [])
-        lst[:] = [t for t in lst if now - t < window]
-        if len(lst) >= limit:
-            return False
-        lst.append(now)
-        return True
 # GET paths a guest VM must never reach: the admin UI, the web chat, the katfs
 # browser and the per-instance proxy /i/<name>/… (incl. the WebSocket
 # terminal). Only POST was gated so far — a VM could open the SHELL of every
@@ -293,7 +265,7 @@ def ensure_guest_user():
     except KeyError:
         if os.geteuid() != 0:
             return False
-        sh("useradd", "-r", "-M", "-d", "/nonexistent", "-s", "/usr/sbin/nologin", GUEST_USER, check=False)
+        _util.sh("useradd", "-r", "-M", "-d", "/nonexistent", "-s", "/usr/sbin/nologin", GUEST_USER, check=False)
         try:
             pw_ = pwd.getpwnam(GUEST_USER)
         except KeyError:
@@ -323,10 +295,6 @@ def export_opts(ro, fsid):
             f"anonuid={GUEST_UID},anongid={GUEST_GID},fsid={fsid}")
 
 os.makedirs(_paths.RUN_DIR, exist_ok=True)
-
-
-def sh(*args, check=True):
-    return subprocess.run(args, capture_output=True, text=True, check=check)
 
 
 # ---- instances -------------------------------------------------------------
@@ -1063,7 +1031,7 @@ def task_target_sweep():
             notify_add("task", f"Task target unknown: {tid}",
                        f"instance '{inst}' does not exist — {msg}", link="tasks")
         except Exception as e:
-            _wlog(f"{tid}: target-sweep notify: {e!r}")
+            _util._wlog(f"{tid}: target-sweep notify: {e!r}")
     return hit
 
 
@@ -1227,22 +1195,6 @@ def _orch_fire():
 _mi_sweep_ts = [0.0]
 
 
-WORKER_LOG = os.path.join(_paths.RUN_DIR, "worker.log")
-
-
-def _wlog(msg):
-    """Worker diagnostics into a file — journalctl is only accessible to root,
-    and that is exactly why the exception was missing in the orphaned-task bug
-    (Aug 20)."""
-    line = time.strftime("%Y-%m-%d %H:%M:%S ") + str(msg)
-    print("[worker]", msg, flush=True)
-    try:
-        with open(WORKER_LOG, "a") as fh:
-            fh.write(line + "\n")
-    except OSError:
-        pass
-
-
 def reclaim_stuck_tasks():
     """Reset orphaned 'running' tasks at startup. Exactly ONE worker runs — what
     is still 'running' at startup belongs to a crashed run (e.g. the store bug
@@ -1339,9 +1291,9 @@ def _task_worker():
             t = with_tasks(lambda ts: worker_claim(ts, now, heartbeat_idle,
                                                    skipped_hb, throttled))
             for tid in skipped_hb:
-                _wlog(f"{tid}: heartbeat skipped (idle — no inbox, no mission)")
+                _util._wlog(f"{tid}: heartbeat skipped (idle — no inbox, no mission)")
             for tid, tmsg in throttled:
-                _wlog(f"{tid}: >6 runs/h — paused for 1 h (loop protection)")
+                _util._wlog(f"{tid}: >6 runs/h — paused for 1 h (loop protection)")
                 try:
                     notify_add("guardrail", f"Task loop throttled: {tid}",
                                tmsg + " — ran >6x/h, paused 1 h.", link="tasks")
@@ -1358,7 +1310,7 @@ def _task_worker():
                                             sandbox=t.get("sandbox"))
                 except Exception as e:
                     ok, res = False, f"worker-exception (run): {e!r}"
-                    _wlog(f"{t['id']}: {res}")
+                    _util._wlog(f"{t['id']}: {res}")
                 def done_mut(fresh, _tid=t["id"], _ok=ok, _res=res, _sched=sched):
                     tt = next((x for x in fresh if x["id"] == _tid), None)
                     if tt is None:
@@ -1374,21 +1326,21 @@ def _task_worker():
                 try:
                     with_tasks(done_mut)
                 except Exception as e:
-                    _wlog(f"{t['id']}: status update failed: {e!r}")
+                    _util._wlog(f"{t['id']}: status update failed: {e!r}")
                 try:
                     chat_log_append(t.get("instance", "task"), "task",
                                     t.get("message", ""), res, kind="task")
                 except Exception as e:
-                    _wlog(f"{t['id']}: chat_log_append: {e!r}")
+                    _util._wlog(f"{t['id']}: chat_log_append: {e!r}")
                 try:
                     history_add(t.get("instance", ""), t.get("message", ""), res, ok,
                                 t.get("schedule", ""), origin="worker")
                 except Exception as e:
-                    _wlog(f"{t['id']}: history_add: {e!r}")
+                    _util._wlog(f"{t['id']}: history_add: {e!r}")
                 try:
                     _mission_advance_fire(t["id"])
                 except Exception as e:
-                    _wlog(f"{t['id']}: mission-advance: {e!r}")
+                    _util._wlog(f"{t['id']}: mission-advance: {e!r}")
                 # A scheduled task that fails would otherwise fail again
                 # tomorrow, silently — the result only sits in the Tasks tab.
                 # One push per DISTINCT failure text (not one per day).
@@ -1399,10 +1351,10 @@ def _task_worker():
                                    (str(t.get("message", ""))[:120] + " — " + str(res))[:900],
                                    link="tasks")
                     except Exception as e:
-                        _wlog(f"{t['id']}: failure notify: {e!r}")
+                        _util._wlog(f"{t['id']}: failure notify: {e!r}")
                 ran = True
         except Exception as e:
-            _wlog(f"worker-loop: {e!r}")
+            _util._wlog(f"worker-loop: {e!r}")
         if not ran:
             time.sleep(5)
             # Orphan watch: if a task hangs on "running" for more than 30 min,
@@ -1418,9 +1370,9 @@ def _task_worker():
                             hit.append(t2.get("id"))
                     return bool(hit), hit
                 for tid in with_tasks(orphan_mut):
-                    _wlog(f"{tid}: running orphan reset")
+                    _util._wlog(f"{tid}: running orphan reset")
             except Exception as e:
-                _wlog(f"orphan-watch: {e!r}")
+                _util._wlog(f"orphan-watch: {e!r}")
             # TTL sweep while idle, at most once per hour.
             now = time.time()
             if now - _mi_sweep_ts[0] > 3600:
@@ -1428,23 +1380,23 @@ def _task_worker():
                 try:
                     mission_ttl_sweep()
                 except Exception as e:
-                    _wlog(f"mission-ttl-sweep failed: {e!r}")
+                    _util._wlog(f"mission-ttl-sweep failed: {e!r}")
                 try:
                     task_target_sweep()
                 except Exception as e:
-                    _wlog(f"task-target-sweep failed: {e!r}")
+                    _util._wlog(f"task-target-sweep failed: {e!r}")
                 try:
                     _memfs.sweep([i["name"] for i in load_instances() if uses_harness(i)])
                 except Exception as e:
-                    _wlog(f"memfs-sweep failed: {e!r}")
+                    _util._wlog(f"memfs-sweep failed: {e!r}")
                 try:
                     turns_prune(30)          # traces older than the weekly digest's reach
                 except Exception as e:
-                    _wlog(f"turns-prune failed: {e!r}")
+                    _util._wlog(f"turns-prune failed: {e!r}")
             try:
                 image_sweep()          # one stat per base image, every idle cycle
             except Exception as e:
-                _wlog(f"image-sweep failed: {e!r}")
+                _util._wlog(f"image-sweep failed: {e!r}")
 
 
 def load_templates():
@@ -1721,20 +1673,20 @@ def resource_stats():
 
 # ---- networking ------------------------------------------------------------
 def ensure_net_base():
-    sh("sysctl", "-w", "net.ipv4.ip_forward=1", check=False)
-    r = sh("iptables", "-t", "nat", "-C", "POSTROUTING", "-s", POOL, "-o", HOSTIF,
+    _util.sh("sysctl", "-w", "net.ipv4.ip_forward=1", check=False)
+    r = _util.sh("iptables", "-t", "nat", "-C", "POSTROUTING", "-s", POOL, "-o", HOSTIF,
            "-j", "MASQUERADE", check=False)
     if r.returncode != 0:
-        sh("iptables", "-t", "nat", "-A", "POSTROUTING", "-s", POOL, "-o", HOSTIF,
+        _util.sh("iptables", "-t", "nat", "-A", "POSTROUTING", "-s", POOL, "-o", HOSTIF,
            "-j", "MASQUERADE", check=False)
     # Guest isolation: microVMs must NOT route to each other. A compromised
     # agent could otherwise reach another instance's chat/term ports (8080/7682,
     # bound to 0.0.0.0, no auth). Backstop DROP for pool->pool; the tap ACCEPTs
     # below are additionally scoped so they never even match guest-to-guest.
     # Guest->gateway (8700 broker) is host-local (INPUT) and unaffected by this.
-    if sh("iptables", "-C", "FORWARD", "-s", POOL, "-d", POOL, "-j", "DROP",
+    if _util.sh("iptables", "-C", "FORWARD", "-s", POOL, "-d", POOL, "-j", "DROP",
           check=False).returncode != 0:
-        sh("iptables", "-A", "FORWARD", "-s", POOL, "-d", POOL, "-j", "DROP", check=False)
+        _util.sh("iptables", "-A", "FORWARD", "-s", POOL, "-d", POOL, "-j", "DROP", check=False)
     ensure_guest_input_rules()
 
 
@@ -1752,21 +1704,21 @@ def ensure_guest_input_rules():
     host service listening on 0.0.0.0 (sshd, rpcbind, …) is one hop away from
     each VM. The DROP goes in first so the ACCEPTs inserted afterwards sit
     above it; idempotent, so a restart adds nothing twice."""
-    if sh("iptables", "-C", "INPUT", "-i", "fc+", "-j", "DROP", check=False).returncode != 0:
-        sh("iptables", "-I", "INPUT", "1", "-i", "fc+", "-j", "DROP", check=False)
+    if _util.sh("iptables", "-C", "INPUT", "-i", "fc+", "-j", "DROP", check=False).returncode != 0:
+        _util.sh("iptables", "-I", "INPUT", "1", "-i", "fc+", "-j", "DROP", check=False)
     for spec in GUEST_INPUT_ACCEPT:
         # Position matters, not just presence: an ACCEPT appended BELOW the
         # DROP (an older setup script did that for NFS) never matches, and a
         # presence check would leave it there. Remove every copy, insert on top.
         for _ in range(8):
-            if sh("iptables", "-D", "INPUT", "-i", "fc+", *spec, "-j", "ACCEPT", check=False).returncode != 0:
+            if _util.sh("iptables", "-D", "INPUT", "-i", "fc+", *spec, "-j", "ACCEPT", check=False).returncode != 0:
                 break
-        sh("iptables", "-I", "INPUT", "1", "-i", "fc+", *spec, "-j", "ACCEPT", check=False)
+        _util.sh("iptables", "-I", "INPUT", "1", "-i", "fc+", *spec, "-j", "ACCEPT", check=False)
     # A pool address arriving on the LAN interface is forged (a LAN box posing
     # as a stopped VM would pass every by-IP check): drop it first.
-    if HOSTIF and sh("iptables", "-C", "INPUT", "-i", HOSTIF, "-s", POOL, "-j", "DROP",
+    if HOSTIF and _util.sh("iptables", "-C", "INPUT", "-i", HOSTIF, "-s", POOL, "-j", "DROP",
                      check=False).returncode != 0:
-        sh("iptables", "-I", "INPUT", "1", "-i", HOSTIF, "-s", POOL, "-j", "DROP", check=False)
+        _util.sh("iptables", "-I", "INPUT", "1", "-i", HOSTIF, "-s", POOL, "-j", "DROP", check=False)
 
 
 def _antispoof_rules(n):
@@ -1779,23 +1731,23 @@ def ensure_antispoof(inst):
     guest's identity for the manager (instance_by_ip), so a forged source would
     be a forged identity. Always on top — above the instance's FORWARD chain."""
     for chain, spec in _antispoof_rules(net_of(inst)):
-        while sh("iptables", "-C", chain, *spec, check=False).returncode == 0:
-            sh("iptables", "-D", chain, *spec, check=False)
-        sh("iptables", "-I", chain, "1", *spec, check=False)
+        while _util.sh("iptables", "-C", chain, *spec, check=False).returncode == 0:
+            _util.sh("iptables", "-D", chain, *spec, check=False)
+        _util.sh("iptables", "-I", chain, "1", *spec, check=False)
 
 
 def clear_antispoof(inst):
     for chain, spec in _antispoof_rules(net_of(inst)):
-        while sh("iptables", "-C", chain, *spec, check=False).returncode == 0:
-            sh("iptables", "-D", chain, *spec, check=False)
+        while _util.sh("iptables", "-C", chain, *spec, check=False).returncode == 0:
+            _util.sh("iptables", "-D", chain, *spec, check=False)
 
 
 def setup_tap(inst):
     n = net_of(inst)
-    sh("ip", "link", "del", n["tap"], check=False)
-    sh("ip", "tuntap", "add", n["tap"], "mode", "tap")
-    sh("ip", "addr", "add", f"{n['host']}/30", "dev", n["tap"])
-    sh("ip", "link", "set", n["tap"], "up")
+    _util.sh("ip", "link", "del", n["tap"], check=False)
+    _util.sh("ip", "tuntap", "add", n["tap"], "mode", "tap")
+    _util.sh("ip", "addr", "add", f"{n['host']}/30", "dev", n["tap"])
+    _util.sh("ip", "link", "set", n["tap"], "up")
     # The host has FORWARD policy DROP + Docker chains in front of it -> generic
     # rules don't apply reliably. So allow tap traffic RIGHT AT THE TOP (before
     # DROP/Docker) — but ONLY to/from outside the pool. This lets the guest reach
@@ -1805,8 +1757,8 @@ def setup_tap(inst):
     # Clear old, unrestricted ACCEPTs of the same tap first (the tap name is
     # reused on restart, otherwise the old hole would stay open).
     for spec in (["-i", n["tap"]], ["-o", n["tap"]]):
-        while sh("iptables", "-C", "FORWARD", *spec, "-j", "ACCEPT", check=False).returncode == 0:
-            sh("iptables", "-D", "FORWARD", *spec, "-j", "ACCEPT", check=False)
+        while _util.sh("iptables", "-C", "FORWARD", *spec, "-j", "ACCEPT", check=False).returncode == 0:
+            _util.sh("iptables", "-D", "FORWARD", *spec, "-j", "ACCEPT", check=False)
     apply_internet(inst, inst.get("internet", True))
 
 
@@ -1888,43 +1840,43 @@ def apply_internet(inst, allow):
     chain = _fc_chain(inst)
 
     # Clear out leftovers, idempotent: jump rule, chain, old direct rule.
-    sh("iptables", "-D", "FORWARD", "-i", n["tap"], "-j", chain, check=False)
-    sh("iptables", "-F", chain, check=False)
-    sh("iptables", "-X", chain, check=False)
-    while sh("iptables", "-C", "FORWARD", "-i", n["tap"], "!", "-d", POOL,
+    _util.sh("iptables", "-D", "FORWARD", "-i", n["tap"], "-j", chain, check=False)
+    _util.sh("iptables", "-F", chain, check=False)
+    _util.sh("iptables", "-X", chain, check=False)
+    while _util.sh("iptables", "-C", "FORWARD", "-i", n["tap"], "!", "-d", POOL,
              "-j", "ACCEPT", check=False).returncode == 0:
-        sh("iptables", "-D", "FORWARD", "-i", n["tap"], "!", "-d", POOL,
+        _util.sh("iptables", "-D", "FORWARD", "-i", n["tap"], "!", "-d", POOL,
            "-j", "ACCEPT", check=False)
 
     back = ["-o", n["tap"], "!", "-s", POOL]
-    have_back = sh("iptables", "-C", "FORWARD", *back, "-j", "ACCEPT", check=False).returncode == 0
+    have_back = _util.sh("iptables", "-C", "FORWARD", *back, "-j", "ACCEPT", check=False).returncode == 0
     if not allow:
         if have_back:
-            sh("iptables", "-D", "FORWARD", *back, "-j", "ACCEPT", check=False)
+            _util.sh("iptables", "-D", "FORWARD", *back, "-j", "ACCEPT", check=False)
         # Explicit, not by omission: "no network" used to rely on the FORWARD
         # policy being DROP — on a host where it is ACCEPT the switch did
         # nothing (found by a sandboxed sub-agent that curled the internet with
         # egress=none). The chain rejects everything outside the pool; the
         # manager at the gateway is INPUT, not FORWARD, and stays reachable.
-        sh("iptables", "-N", chain, check=False)
-        sh("iptables", "-A", chain, "!", "-d", POOL, "-j", "REJECT", check=False)
-        sh("iptables", "-I", "FORWARD", "1", "-i", n["tap"], "-j", chain, check=False)
+        _util.sh("iptables", "-N", chain, check=False)
+        _util.sh("iptables", "-A", chain, "!", "-d", POOL, "-j", "REJECT", check=False)
+        _util.sh("iptables", "-I", "FORWARD", "1", "-i", n["tap"], "-j", chain, check=False)
         ensure_antispoof(inst)
         return
 
-    sh("iptables", "-N", chain, check=False)
+    _util.sh("iptables", "-N", chain, check=False)
     allow = list(_mcp_endpoints(inst))
     lp = _llama_endpoint(inst)
     if lp:
         allow.append(lp)
     for ip, port in allow:
-        sh("iptables", "-A", chain, "-d", ip, "-p", "tcp", "--dport", str(port),
+        _util.sh("iptables", "-A", chain, "-d", ip, "-p", "tcp", "--dport", str(port),
            "-j", "ACCEPT", check=False)
     for proto in ("udp", "tcp"):
-        sh("iptables", "-A", chain, "-d", GUEST_DNS, "-p", proto, "--dport", "53",
+        _util.sh("iptables", "-A", chain, "-d", GUEST_DNS, "-p", proto, "--dport", "53",
            "-j", "ACCEPT", check=False)
     for net in _PRIVATE_NETS:
-        sh("iptables", "-A", chain, "-d", net, "-j", "REJECT", check=False)
+        _util.sh("iptables", "-A", chain, "-d", net, "-j", "REJECT", check=False)
     # Egress allowlist (guardrail): if EGRESS_ALLOW is in the instance config
     # (comma list of domains/IPs), the VM may go ONLY there — instead of
     # "everything except private". Domains are resolved at start (A records); a
@@ -1943,13 +1895,13 @@ def apply_internet(inst, allow):
             for ip in ips:
                 if ip not in seen:
                     seen.add(ip)
-                    sh("iptables", "-A", chain, "-d", ip, "-j", "ACCEPT", check=False)
-        sh("iptables", "-A", chain, "!", "-d", POOL, "-j", "REJECT", check=False)
+                    _util.sh("iptables", "-A", chain, "-d", ip, "-j", "ACCEPT", check=False)
+        _util.sh("iptables", "-A", chain, "!", "-d", POOL, "-j", "REJECT", check=False)
     else:
-        sh("iptables", "-A", chain, "!", "-d", POOL, "-j", "ACCEPT", check=False)
-    sh("iptables", "-I", "FORWARD", "1", "-i", n["tap"], "-j", chain, check=False)
+        _util.sh("iptables", "-A", chain, "!", "-d", POOL, "-j", "ACCEPT", check=False)
+    _util.sh("iptables", "-I", "FORWARD", "1", "-i", n["tap"], "-j", chain, check=False)
     if not have_back:
-        sh("iptables", "-I", "FORWARD", "1", *back, "-j", "ACCEPT", check=False)
+        _util.sh("iptables", "-I", "FORWARD", "1", *back, "-j", "ACCEPT", check=False)
     ensure_antispoof(inst)
 
 
@@ -1958,11 +1910,11 @@ def teardown_tap(inst):
     # cleanup, dead chains pile up.
     n = net_of(inst)
     chain = _fc_chain(inst)
-    sh("iptables", "-D", "FORWARD", "-i", n["tap"], "-j", chain, check=False)
-    sh("iptables", "-F", chain, check=False)
-    sh("iptables", "-X", chain, check=False)
+    _util.sh("iptables", "-D", "FORWARD", "-i", n["tap"], "-j", chain, check=False)
+    _util.sh("iptables", "-F", chain, check=False)
+    _util.sh("iptables", "-X", chain, check=False)
     clear_antispoof(inst)
-    sh("ip", "link", "del", n["tap"], check=False)
+    _util.sh("ip", "link", "del", n["tap"], check=False)
 
 
 # ---- host folders (NFS bind-mounts) ----------------------------------------
@@ -1976,7 +1928,7 @@ def retire_root_export():
             os.replace(AGENT_EXPORTS, AGENT_EXPORTS + ".bak")
         else:
             os.remove(AGENT_EXPORTS)
-        sh("exportfs", "-ra", check=False)
+        _util.sh("exportfs", "-ra", check=False)
         print(f"[nfs] retired the pool-wide export {AGENT_EXPORTS}", flush=True)
         return True
     except OSError as e:
@@ -2047,16 +1999,16 @@ def setup_mounts(inst):
         if not os.path.isdir(s["host"]):
             continue  # missing host folder -> skip (do not create)
         os.makedirs(s["target"], exist_ok=True)
-        sh("umount", "-l", s["target"], check=False)   # release any old bind
-        if sh("mount", "--bind", s["host"], s["target"], check=False).returncode != 0:
+        _util.sh("umount", "-l", s["target"], check=False)   # release any old bind
+        if _util.sh("mount", "--bind", s["host"], s["target"], check=False).returncode != 0:
             continue
         if s["ro"]:
-            sh("mount", "-o", "remount,ro,bind", s["target"], check=False)
+            _util.sh("mount", "-o", "remount,ro,bind", s["target"], check=False)
         lines.append(f"{s['target']} {n['guest']}({export_opts(s['ro'], s['fsid'])})\n")
     os.makedirs(EXPORTS_D, exist_ok=True)
     with open(os.path.join(EXPORTS_D, f"fc-{inst['name']}.exports"), "w") as fh:
         fh.writelines(lines)
-    sh("exportfs", "-ra", check=False)
+    _util.sh("exportfs", "-ra", check=False)
     write_desired(inst)   # the reconciler in the guest picks up the mounts
 
 
@@ -2079,7 +2031,7 @@ def teardown_mounts(inst):
     ef = os.path.join(EXPORTS_D, f"fc-{inst['name']}.exports")
     if os.path.exists(ef):
         os.remove(ef)
-        sh("exportfs", "-ra", check=False)
+        _util.sh("exportfs", "-ra", check=False)
     d = os.path.join(FCMNT_ROOT, inst["name"])
     if os.path.isdir(d):
         # scan the actual contents (robust against leftovers): release
@@ -2087,7 +2039,7 @@ def teardown_mounts(inst):
         for sub in os.listdir(d):
             p = os.path.join(d, sub)
             if os.path.isdir(p):
-                sh("umount", "-l", p, check=False)
+                _util.sh("umount", "-l", p, check=False)
         try:
             os.remove(os.path.join(d, "desired.list"))
         except OSError:
@@ -2165,7 +2117,7 @@ def set_mounts(name, mounts):
         new_subs = {s["sub"] for s in mount_specs(inst)}
         for s in old_specs:
             if s["sub"] not in new_subs:
-                sh("umount", "-l", s["target"], check=False)
+                _util.sh("umount", "-l", s["target"], check=False)
                 try:
                     os.rmdir(s["target"])
                 except OSError:
@@ -2251,7 +2203,7 @@ def mkfs_image(path, size_mb, label=None, srcdir=None):
         fh.truncate(size_mb * 1024 * 1024)
     mkfs = shutil.which("mkfs.ext4", path="/usr/sbin:/sbin:" + os.environ.get("PATH", "")) or "mkfs.ext4"
     args = ["-F", "-q"] + (["-L", label] if label else []) + (["-d", srcdir] if srcdir else [])
-    r = sh(mkfs, *args, tmp, check=False)
+    r = _util.sh(mkfs, *args, tmp, check=False)
     if r.returncode != 0:
         print(f"[mkfs] {os.path.basename(path)}: {r.stderr.strip()[:200]}", flush=True)
         os.unlink(tmp)
@@ -2375,7 +2327,7 @@ def image_sweep():
     try:
         harness_image()        # an edited agent.py shows up here, not at the next start
     except Exception as e:
-        _wlog(f"image-sweep harness: {e!r}")
+        _util._wlog(f"image-sweep harness: {e!r}")
     for rel in sorted(OVERLAY_ROOTFS) + [HARNESS_IMG]:
         try:
             mt = os.path.getmtime(rel if os.path.isabs(rel) else os.path.join(_paths.BASE, rel))
@@ -2393,7 +2345,7 @@ def image_sweep():
                        ", ".join(old) + " — restart them to pick up the new agent.",
                        link="instances")
         except Exception as e:
-            _wlog(f"image-sweep notify: {e!r}")
+            _util._wlog(f"image-sweep notify: {e!r}")
     return old
 UPPER_SIZE_MB = 1024          # throwaway layer per start
 UPPER_PERSIST_SIZE_MB = 4096  # persistent layer (apt/pip need room); sparse
@@ -2462,7 +2414,7 @@ def private_rootfs(inst):
     # --sparse=always: the 2-GB image carries ~550 MB; the copy should occupy
     # just as little. First .new, then rename — a half copy must never start as
     # a rootfs.
-    sh("cp", "--sparse=always", src, tmp)
+    _util.sh("cp", "--sparse=always", src, tmp)
     os.replace(tmp, dst)
     return dst
 
@@ -3275,14 +3227,14 @@ def render():
     return (PAGE.replace("__LOGO__", LOGO_INLINE)
                 .replace("__ROWS__", rows or empty)
                 .replace("__TPLS__", tpls or "<option>no templates</option>")
-                .replace("__TPLJSON__", js_json(load_templates()))
-                .replace("__SETTINGS__", js_json(_settings.settings_for_ui()))
-                .replace("__SETTINGS_SCHEMA__", js_json(_settings.settings_schema()))
-                .replace("__PERSONAS__", js_json(load_personas(), ensure_ascii=False))
+                .replace("__TPLJSON__", _util.js_json(load_templates()))
+                .replace("__SETTINGS__", _util.js_json(_settings.settings_for_ui()))
+                .replace("__SETTINGS_SCHEMA__", _util.js_json(_settings.settings_schema()))
+                .replace("__PERSONAS__", _util.js_json(load_personas(), ensure_ascii=False))
                 # Only name + description into the page: with an imported
                 # catalog the contents are ~1 MB, and the UI needs them only
                 # when editing (then it fetches GET /api/skills/<name>).
-                .replace("__SKILLS__", js_json(
+                .replace("__SKILLS__", _util.js_json(
                     [{"name": x.get("name", ""), "description": x.get("description", "")}
                      for x in load_skills()], ensure_ascii=False))
                 .replace("__HOSTIF__", HOSTIF).replace("__POOL__", POOL)
@@ -3731,7 +3683,7 @@ def _rt_websearch(h):
     g = h._guest()
     if g is not None and not tool_allowed(g, "web_search"):
         return h._json({"error": "web_search not allowed for this instance"}, 403)
-    if g is not None and not rate_ok(("websearch", g["name"]), 30, 300):
+    if g is not None and not _util.rate_ok(("websearch", g["name"]), 30, 300):
         return h._json({"error": "rate limit: 30 searches per 5 minutes"}, 429)
     q = urllib.parse.parse_qs(h.path.partition("?")[2])
     query = q.get("q", [""])[0].strip()
@@ -3836,7 +3788,7 @@ class H(BaseHTTPRequestHandler):
         self._sent = False
         try:
             self._do_POST()
-        except BodyTooLarge as e:
+        except _util.BodyTooLarge as e:
             self.close_connection = True          # the body was never read
             if not getattr(self, "_sent", False):
                 self._json({"error": f"body too large ({e} bytes)"}, 413)
@@ -4374,7 +4326,7 @@ class H(BaseHTTPRequestHandler):
         except ValueError:
             ln = 0
         if ln > (limit or BODY_MAX):
-            raise BodyTooLarge(ln)
+            raise _util.BodyTooLarge(ln)
         return self.rfile.read(ln) if ln > 0 else b""
 
     def _body(self, default=None):
@@ -4437,7 +4389,7 @@ def _msg_route(method, path, prefix=False, admin=True):
         def wrapped(h):
             try:
                 msg = fn(h)
-            except BodyTooLarge:
+            except _util.BodyTooLarge:
                 raise
             except Exception as e:
                 msg = f"error: {e!r}"
@@ -4880,7 +4832,7 @@ def _rt_trace(h):
     body = h._body()
     if inst is None:
         return h._forbid()
-    if not rate_ok(("trace", inst["name"]), 120, 300):
+    if not _util.rate_ok(("trace", inst["name"]), 120, 300):
         return h._json({"error": "rate limit"}, 429)
     turn = str(body.get("turn") or "")[:16]
     if turn:
@@ -4998,7 +4950,7 @@ def _rt_chat_log(h):
     body = h._body()
     if inst is None or (inst.get("config") or {}).get("TRANSPORT", "signal") != "signal":
         return h._forbid()
-    if not rate_ok(("chat-log", inst["name"]), 60, 300):
+    if not _util.rate_ok(("chat-log", inst["name"]), 60, 300):
         return h._json({"error": "rate limit"}, 429)
     if inst is not None:
         try:
@@ -5114,7 +5066,7 @@ def _rt_katfs_zip(h):
     leaf = os.path.basename(root.rstrip("/")) if root not in (".", "") else "katfs"
     h.send_response(200)
     h.send_header("Content-Type", "application/zip")
-    h.send_header("Content-Disposition", f'attachment; filename="{download_name(leaf, "katfs")}.zip"')
+    h.send_header("Content-Disposition", f'attachment; filename="{_util.download_name(leaf, "katfs")}.zip"')
     h.send_header("X-Katfs-Files", str(stats.get("files", 0)))
     h.send_header("Content-Length", str(len(data)))
     h.end_headers(); h.wfile.write(data)
@@ -5133,7 +5085,7 @@ def _rt_katfs_browse(h):
         disp = "attachment" if q.get("dl", [""])[0] == "1" else "inline"
         h.send_response(200)
         h.send_header("Content-Type", ct)
-        h.send_header("Content-Disposition", f'{disp}; filename="{download_name(os.path.basename(path))}"')
+        h.send_header("Content-Disposition", f'{disp}; filename="{_util.download_name(os.path.basename(path))}"')
         h.send_header("Content-Length", str(len(data)))
         h.end_headers(); h.wfile.write(data)
         return
@@ -5465,7 +5417,7 @@ def _rt_skill_propose(h):
     inst = h._guest()
     if inst is None:
         return h._forbid()
-    if not rate_ok(("skill-proposal", inst["name"]), 10, 300):
+    if not _util.rate_ok(("skill-proposal", inst["name"]), 10, 300):
         return h._json({"error": "rate limit"}, 429)
     b = h._body()
     pid, why = proposal_add(inst["name"], b.get("name", ""), b.get("description", ""), b.get("content", ""),
@@ -5495,7 +5447,7 @@ def _rt_sessions_search(h):
     b = h._body()
     inst = h._guest()
     if inst is not None:
-        if not rate_ok(("sessions-search", inst["name"]), 60, 300):
+        if not _util.rate_ok(("sessions-search", inst["name"]), 60, 300):
             return h._json({"error": "rate limit"}, 429)
         scope = None if inst["name"] == ORCH_INSTANCE else inst["name"]
         if scope is None and b.get("instance"):

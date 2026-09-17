@@ -2988,7 +2988,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual(h._raw(), b"")
             h.headers.replace_header("Content-Length", "abc")
             self.assertEqual(h._raw(), b"")
-            with self.assertRaises(m.BodyTooLarge):
+            with self.assertRaises(m._util.BodyTooLarge):
                 h.headers.replace_header("Content-Length", str(m.BODY_MAX_AUDIO + 1)); h._raw(m.BODY_MAX_AUDIO)
         finally:
             m.instance_by_ip, m.PW = old
@@ -3116,13 +3116,13 @@ class ManagerFunctions(unittest.TestCase):
 
     def test_js_json_and_download_name_and_rate(self):
         m = self.m
-        self.assertNotIn("</script>", m.js_json({"d": "</script><img src=x>"}))
-        self.assertEqual(json.loads(m.js_json({"d": "</script>"}))["d"], "</script>")
-        self.assertEqual(m.download_name('a"b\r\nc.txt'), "a_b_c.txt")
-        self.assertEqual(m.download_name(""), "file")
+        self.assertNotIn("</script>", m._util.js_json({"d": "</script><img src=x>"}))
+        self.assertEqual(json.loads(m._util.js_json({"d": "</script>"}))["d"], "</script>")
+        self.assertEqual(m._util.download_name('a"b\r\nc.txt'), "a_b_c.txt")
+        self.assertEqual(m._util.download_name(""), "file")
         key = ("t", "x")
-        self.assertTrue(all(m.rate_ok(key, 3, 60) for _ in range(3)))
-        self.assertFalse(m.rate_ok(key, 3, 60))
+        self.assertTrue(all(m._util.rate_ok(key, 3, 60) for _ in range(3)))
+        self.assertFalse(m._util.rate_ok(key, 3, 60))
 
     def test_usage_report_accepted_for_local_models_only_when_proxied(self):
         """Key proxy on: the agent's figures are ignored — except a local model
@@ -3227,9 +3227,9 @@ class ManagerFunctions(unittest.TestCase):
         def fake_sh(*a, **k):
             calls.append(a)
             return R(1 if "-C" in a else 0)
-        old = m.sh, m.ensure_antispoof
+        old = m._util.sh, m.ensure_antispoof
         try:
-            m.sh = fake_sh; m.ensure_antispoof = lambda inst: None
+            m._util.sh = fake_sh; m.ensure_antispoof = lambda inst: None
             inst = {"name": "vm1", "index": 3, "config": {}}
             m.apply_internet(inst, False)
             chain = m._fc_chain(inst)
@@ -3241,7 +3241,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertIn(("iptables", "-A", chain, "!", "-d", m.POOL, "-j", "ACCEPT"), calls)
             self.assertFalse(any(a[-1] == "REJECT" and "!" in a for a in calls))
         finally:
-            m.sh, m.ensure_antispoof = old
+            m._util.sh, m.ensure_antispoof = old
 
     def test_sandbox_through_the_task_route_and_the_queue(self):
         """A guest's spawn_subagent/create_task with a sandbox: the route turns
@@ -3298,9 +3298,9 @@ class ManagerFunctions(unittest.TestCase):
         calls = []
         class R:
             def __init__(self, rc): self.returncode = rc
-        old = m.sh, m.ensure_antispoof, m.socket.getaddrinfo, m._mcp_endpoints, m._llama_endpoint
+        old = m._util.sh, m.ensure_antispoof, m.socket.getaddrinfo, m._mcp_endpoints, m._llama_endpoint
         try:
-            m.sh = lambda *a, **k: (calls.append(a), R(1 if "-C" in a else 0))[1]
+            m._util.sh = lambda *a, **k: (calls.append(a), R(1 if "-C" in a else 0))[1]
             m.ensure_antispoof = lambda inst: None
             m._mcp_endpoints = lambda inst: []; m._llama_endpoint = lambda inst: None
             def gai(host, *a, **k):
@@ -3316,7 +3316,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertNotIn(("iptables", "-A", chain, "!", "-d", m.POOL, "-j", "ACCEPT"), calls)
             self.assertFalse(any("typo.invalid" in a for a in calls))
         finally:
-            m.sh, m.ensure_antispoof, m.socket.getaddrinfo, m._mcp_endpoints, m._llama_endpoint = old
+            m._util.sh, m.ensure_antispoof, m.socket.getaddrinfo, m._mcp_endpoints, m._llama_endpoint = old
 
     def test_notification_text_lands_in_the_task_chat(self):
         """A guest's notification is also appended to the instance's task chat
@@ -3532,7 +3532,7 @@ class ManagerFunctions(unittest.TestCase):
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-nfs-")
         calls = []
-        old = (m.AGENT_ROOT, m.FCMNT_ROOT, m.EXPORTS_D, m.AGENT_EXPORTS, m.sh, m.mount_specs,
+        old = (m.AGENT_ROOT, m.FCMNT_ROOT, m.EXPORTS_D, m.AGENT_EXPORTS, m._util.sh, m.mount_specs,
                m.GUEST_UID, m.GUEST_GID, m.ensure_guest_user)
         try:
             m.AGENT_ROOT = os.path.join(tmp, "agent"); m.FCMNT_ROOT = os.path.join(m.AGENT_ROOT, ".fcmnt")
@@ -3540,7 +3540,7 @@ class ManagerFunctions(unittest.TestCase):
             os.makedirs(m.EXPORTS_D)
             with open(m.AGENT_EXPORTS, "w") as fh:
                 fh.write(f"{m.AGENT_ROOT} {m.POOL}(rw,fsid=0,crossmnt)\n")
-            m.sh = lambda *a, check=True: (calls.append(a), types.SimpleNamespace(returncode=0, stdout="", stderr=""))[1]
+            m._util.sh = lambda *a, check=True: (calls.append(a), types.SimpleNamespace(returncode=0, stdout="", stderr=""))[1]
             m.GUEST_UID, m.GUEST_GID = 4242, 4243
             m.ensure_guest_user = lambda: True
             share = os.path.join(tmp, "share"); os.makedirs(share)
@@ -3570,7 +3570,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual(m.workspace_fsid({"index": 3}), 4000 + 3 * 16 + 14)
             self.assertTrue(any(c[:2] == ("exportfs", "-ra") for c in calls))
         finally:
-            (m.AGENT_ROOT, m.FCMNT_ROOT, m.EXPORTS_D, m.AGENT_EXPORTS, m.sh, m.mount_specs,
+            (m.AGENT_ROOT, m.FCMNT_ROOT, m.EXPORTS_D, m.AGENT_EXPORTS, m._util.sh, m.mount_specs,
              m.GUEST_UID, m.GUEST_GID, m.ensure_guest_user) = old
 
     def test_guest_user_and_writability_hint(self):
@@ -4181,10 +4181,10 @@ class ManagerFunctions(unittest.TestCase):
         import types
         m = self.m
         calls = []
-        old_sh = m.sh
+        old_sh = m._util.sh
         try:
             # every -C fails -> "rule missing" -> everything gets inserted
-            m.sh = lambda *a, check=True: (calls.append(a), types.SimpleNamespace(returncode=1))[1]
+            m._util.sh = lambda *a, check=True: (calls.append(a), types.SimpleNamespace(returncode=1))[1]
             m.ensure_guest_input_rules()
             ins = [c for c in calls if c[1] == "-I"]
             self.assertEqual(ins[0][2:], ("INPUT", "1", "-i", "fc+", "-j", "DROP"))
@@ -4202,7 +4202,7 @@ class ManagerFunctions(unittest.TestCase):
                 if a[1] == "-D" and "2049" in a and state["nfs"] > 0:
                     state["nfs"] -= 1; return types.SimpleNamespace(returncode=0)
                 return types.SimpleNamespace(returncode=1)
-            m.sh = sh2
+            m._util.sh = sh2
             m.ensure_guest_input_rules()
             nfs = [c for c in calls if "2049" in c]
             self.assertEqual([c[1] for c in nfs], ["-D", "-D", "-I"])      # delete until gone, then insert at 1
@@ -4215,7 +4215,7 @@ class ManagerFunctions(unittest.TestCase):
                 if c[1] == "-I":
                     self.assertEqual(c[4:], spec)
         finally:
-            m.sh = old_sh
+            m._util.sh = old_sh
 
 
 # ===========================================================================
