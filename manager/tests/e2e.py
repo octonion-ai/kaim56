@@ -1241,7 +1241,7 @@ class ManagerFunctions(unittest.TestCase):
         old_load = m._instances.load_instances
         m._instances.load_instances = lambda: [{"name": "e2e-res-xyz", "vcpus": 4, "mem_mib": 2048, "config": {}}]
         try:
-            r = next(x for x in m.resource_stats() if x["name"] == "e2e-res-xyz")
+            r = next(x for x in m._resources.resource_stats() if x["name"] == "e2e-res-xyz")
             self.assertEqual(r["vcpus"], 4)
             self.assertEqual(r["mem_mib"], 2048)
             self.assertFalse(r["running"])
