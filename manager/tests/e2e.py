@@ -29,6 +29,8 @@ import unittest
 import urllib.error
 import urllib.request
 import zipfile
+import re
+import socket
 
 # --- paths to the modules under test ----------------------------------------
 FC_DIR = os.environ.get("FC_DIR", "/home/ulrich/firecracker")
@@ -2206,7 +2208,7 @@ class ManagerFunctions(unittest.TestCase):
         JSON/plain answers (the chat API) do not."""
         m = self.m
         import types
-        old = m._instances.load_instances, m._instances.is_running, m._instances.net_of, m.urllib.request.urlopen, m._guests.instance_by_ip
+        old = m._instances.load_instances, m._instances.is_running, m._instances.net_of, urllib.request.urlopen, m._guests.instance_by_ip
         try:
             inst = {"name": "vm1", "index": 3, "template": "openrouter"}
             m._instances.load_instances = lambda: [inst]; m._instances.is_running = lambda i: True
@@ -2219,13 +2221,13 @@ class ManagerFunctions(unittest.TestCase):
                 def __exit__(self, *a): return False
             for ct, path, want in (("text/html; charset=utf-8", "/i/vm1/", True),
                                    ("application/json", "/i/vm1/api/tools", False)):
-                m.urllib.request.urlopen = lambda req, timeout=0, _ct=ct: Resp(_ct, b"<p>hi</p>" if "html" in _ct else b"{}")
+                urllib.request.urlopen = lambda req, timeout=0, _ct=ct: Resp(_ct, b"<p>hi</p>" if "html" in _ct else b"{}")
                 h = self._handler(path, "10.0.0.9"); h._do_GET()
                 raw = h.wfile.getvalue()
                 self.assertEqual(self._status(h), 200)
                 self.assertEqual(b"content-security-policy: sandbox" in raw.lower(), want, (ct, raw[:200]))
         finally:
-            m._instances.load_instances, m._instances.is_running, m._instances.net_of, m.urllib.request.urlopen, m._guests.instance_by_ip = old
+            m._instances.load_instances, m._instances.is_running, m._instances.net_of, urllib.request.urlopen, m._guests.instance_by_ip = old
 
     def test_memfs_git_never_runs_as_root_with_hooks(self):
         """C-1: git in the guest-writable memory folder must run as the guest
@@ -3039,7 +3041,7 @@ class ManagerFunctions(unittest.TestCase):
         items = [("Host", "agents.example.com"), ("Authorization", "Basic abc"), ("Cookie", "s=1"),
                  ("Upgrade", "websocket"), ("Connection", "Upgrade"), ("Sec-WebSocket-Key", "k"),
                  ("Sec-WebSocket-Version", "13"), ("X-Forwarded-For", "1.2.3.4")]
-        kept = dict(m.ws_forward_headers(items))
+        kept = dict(m._guestproxy.ws_forward_headers(items))
         self.assertEqual(set(kept), {"Host", "Upgrade", "Connection", "Sec-WebSocket-Key", "Sec-WebSocket-Version"})
 
     def test_chat_log_only_from_signal_guests_and_marked_in_inbox(self):
@@ -3298,7 +3300,7 @@ class ManagerFunctions(unittest.TestCase):
         calls = []
         class R:
             def __init__(self, rc): self.returncode = rc
-        old = m._util.sh, m._netfw.ensure_antispoof, m.socket.getaddrinfo, m._netfw._mcp_endpoints, m._netfw._llama_endpoint
+        old = m._util.sh, m._netfw.ensure_antispoof, socket.getaddrinfo, m._netfw._mcp_endpoints, m._netfw._llama_endpoint
         try:
             m._util.sh = lambda *a, **k: (calls.append(a), R(1 if "-C" in a else 0))[1]
             m._netfw.ensure_antispoof = lambda inst: None
@@ -3307,7 +3309,7 @@ class ManagerFunctions(unittest.TestCase):
                 if host == "api.example.com":
                     return [(2, 1, 6, "", ("93.184.216.34", 0))]
                 raise OSError("no such host")
-            m.socket.getaddrinfo = gai
+            socket.getaddrinfo = gai
             inst = {"name": "vm1", "index": 3, "config": {"EGRESS_ALLOW": "api.example.com, typo.invalid"}}
             m._netfw.apply_internet(inst, True)
             chain = m._netfw._fc_chain(inst)
@@ -3316,7 +3318,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertNotIn(("iptables", "-A", chain, "!", "-d", m._netfw.POOL, "-j", "ACCEPT"), calls)
             self.assertFalse(any("typo.invalid" in a for a in calls))
         finally:
-            m._util.sh, m._netfw.ensure_antispoof, m.socket.getaddrinfo, m._netfw._mcp_endpoints, m._netfw._llama_endpoint = old
+            m._util.sh, m._netfw.ensure_antispoof, socket.getaddrinfo, m._netfw._mcp_endpoints, m._netfw._llama_endpoint = old
 
     def test_notification_text_lands_in_the_task_chat(self):
         """A guest's notification is also appended to the instance's task chat
@@ -3703,7 +3705,7 @@ class ManagerFunctions(unittest.TestCase):
         as a timeout, not as a stack trace."""
         m = self.m
         sent = []
-        old = m.urllib.request.urlopen, m._instances.net_of, m._instances.load_instances, m._instances.is_running, m._tasks._run_named
+        old = urllib.request.urlopen, m._instances.net_of, m._instances.load_instances, m._instances.is_running, m._tasks._run_named
 
         class _R:
             def __init__(self, body): self.body = body
@@ -3715,7 +3717,7 @@ class ManagerFunctions(unittest.TestCase):
                 if timeout == 5:
                     raise TimeoutError("timed out")
                 return _R(b'{"reply": "done"}')
-            m.urllib.request.urlopen = fake_open
+            urllib.request.urlopen = fake_open
             inst = {"name": "vm1", "index": 9}
             self.assertEqual(m._tasks._chat_post(inst, "hi", timeout=1800), "done")
             body, to = sent[-1]
@@ -3732,7 +3734,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual(got, [m._tasks.TASK_TIMEOUT, 600])
             self.assertGreaterEqual(m._tasks.TASK_TIMEOUT, 1800)
         finally:
-            m.urllib.request.urlopen, m._instances.net_of, m._instances.load_instances, m._instances.is_running, m._tasks._run_named = old
+            urllib.request.urlopen, m._instances.net_of, m._instances.load_instances, m._instances.is_running, m._tasks._run_named = old
 
     def test_trace_stitches_turn_llm_and_tool_spans(self):
         """One turn = one span tree. The agent sends a start marker, its LLM
@@ -3820,7 +3822,7 @@ class ManagerFunctions(unittest.TestCase):
                 if n is None:
                     out, self.pos = self.body[self.pos:], len(self.body); return out
                 out = self.body[self.pos:self.pos + n]; self.pos += len(out); return out
-        old = m.urllib.request.urlopen, m._instances.load_instances, m._instances.is_running, m._instances.net_of, m._guests.instance_by_ip, m._auth.PW
+        old = urllib.request.urlopen, m._instances.load_instances, m._instances.is_running, m._instances.net_of, m._guests.instance_by_ip, m._auth.PW
         try:
             inst = {"name": "vm1", "index": 4, "config": {"TRANSPORT": "web"}}
             m._instances.load_instances = lambda: [inst]
@@ -3828,23 +3830,23 @@ class ManagerFunctions(unittest.TestCase):
             m._instances.net_of = lambda i: {"guest": "172.30.4.2"}
             m._guests.instance_by_ip = lambda ip: None
             m._auth.PW = ""
-            m.urllib.request.urlopen = lambda req, timeout=None: _R(b"Hallo", "text/plain; charset=utf-8", "t0ken001")
+            urllib.request.urlopen = lambda req, timeout=None: _R(b"Hallo", "text/plain; charset=utf-8", "t0ken001")
             h = self._post_handler("/i/vm1/api/chat/stream", "10.0.0.5", b'{"message":"hi"}')
             h._proxy("POST")
             raw = h.wfile.getvalue()
             self.assertIn(b"X-Kaim-Turn: t0ken001", raw.split(b"\r\n\r\n", 1)[0])
             self.assertTrue(raw.endswith(b"Hallo"))
-            m.urllib.request.urlopen = lambda req, timeout=None: _R(b'{"reply": "Hi", "turn": "t0ken002"}', "application/json", "t0ken002")
+            urllib.request.urlopen = lambda req, timeout=None: _R(b'{"reply": "Hi", "turn": "t0ken002"}', "application/json", "t0ken002")
             h = self._post_handler("/i/vm1/api/chat", "10.0.0.5", b'{"message":"hi"}')
             h._proxy("POST")
             raw = h.wfile.getvalue()
             self.assertIn(b"X-Kaim-Turn: t0ken002", raw.split(b"\r\n\r\n", 1)[0])
             self.assertTrue(raw.endswith(b"Hi"))                                  # unpacked for the app
-            m.urllib.request.urlopen = lambda req, timeout=None: _R(b"<p>x</p>", "text/html", "")
+            urllib.request.urlopen = lambda req, timeout=None: _R(b"<p>x</p>", "text/html", "")
             h = self._handler("/i/vm1/", "10.0.0.5"); h._proxy("GET")
             self.assertNotIn(b"X-Kaim-Turn", h.wfile.getvalue())                # nothing to forward
         finally:
-            m.urllib.request.urlopen, m._instances.load_instances, m._instances.is_running, m._instances.net_of, m._guests.instance_by_ip, m._auth.PW = old
+            urllib.request.urlopen, m._instances.load_instances, m._instances.is_running, m._instances.net_of, m._guests.instance_by_ip, m._auth.PW = old
 
     def test_task_run_now(self):
         """The Tasks tab's play button: a scheduled task runs at the next tick
