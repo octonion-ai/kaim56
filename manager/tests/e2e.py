@@ -134,7 +134,7 @@ class AgentLogic(unittest.TestCase):
         a._mgrclient._llm_url = lambda: "http://x/v1/chat/completions"
         toks = []
         try:
-            msg = a.or_chat_stream([{"role": "user", "content": "hi"}],
+            msg = a._llm.or_chat_stream([{"role": "user", "content": "hi"}],
                                    [{"type": "function", "function": {"name": "t", "parameters": {}}}],
                                    toks.append)
         finally:
@@ -162,7 +162,7 @@ class AgentLogic(unittest.TestCase):
         a._mgrclient._llm_url = lambda: "http://x/v1/chat/completions"
         toks = []
         try:
-            msg = a.or_chat_stream([{"role": "user", "content": "hi"}], None, toks.append)
+            msg = a._llm.or_chat_stream([{"role": "user", "content": "hi"}], None, toks.append)
         finally:
             (a.urllib.request.urlopen, a._mgrclient._llm_headers, a._mgrclient._llm_url) = saved
         out = "".join(toks)
@@ -185,7 +185,7 @@ class AgentLogic(unittest.TestCase):
         a._mgrclient._llm_headers = lambda: {"Content-Type": "application/json"}
         a._mgrclient._llm_url = lambda: "http://x/v1/chat/completions"
         try:
-            msg = a.or_chat_stream([{"role": "user", "content": "hi"}], None, lambda t: None)
+            msg = a._llm.or_chat_stream([{"role": "user", "content": "hi"}], None, lambda t: None)
         finally:
             (a.urllib.request.urlopen, a._mgrclient._llm_headers, a._mgrclient._llm_url) = saved
         self.assertEqual(msg["content"], "only thought")  # no None -> no _(empty reply)_
@@ -220,14 +220,14 @@ class AgentLogic(unittest.TestCase):
             on_token("done"); return {"role": "assistant", "content": "done"}
         def fake_exec(name, args):
             _t.sleep(0.15); return "ok"
-        saved = (a.or_chat_stream, a.exec_tool, a._config.HEARTBEAT_SEC, a._drain_steer, a._goal)
-        a.or_chat_stream = fake_stream; a.exec_tool = fake_exec
+        saved = (a._llm.or_chat_stream, a.exec_tool, a._config.HEARTBEAT_SEC, a._drain_steer, a._goal)
+        a._llm.or_chat_stream = fake_stream; a.exec_tool = fake_exec
         a._config.HEARTBEAT_SEC = 0.03; a._drain_steer = lambda *x: False; a._goal = None
         try:
             del a._history[1:]
             a.run_stream("build something", toks.append)
         finally:
-            (a.or_chat_stream, a.exec_tool, a._config.HEARTBEAT_SEC, a._drain_steer, a._goal) = saved
+            (a._llm.or_chat_stream, a.exec_tool, a._config.HEARTBEAT_SEC, a._drain_steer, a._goal) = saved
         out = "".join(toks)
         self.assertIn("\U0001f527", out)   # Tool-Status
         self.assertIn("\u00b7", out)        # Heartbeat waehrend Tool-Lauf
@@ -490,13 +490,13 @@ class AgentLogic(unittest.TestCase):
                 {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,BBBB"}},
             ]},
         ]
-        n = a._strip_history_images(hist)
+        n = a._llm._strip_history_images(hist)
         self.assertEqual(n, 2)
         flat = __import__("json").dumps(hist)
         self.assertNotIn("image_url", flat)             # no image parts left
         self.assertIn("was ist das?", flat)             # text survives
         self.assertIn("image removed", flat)
-        self.assertEqual(a._strip_history_images(hist), 0)   # idempotent
+        self.assertEqual(a._llm._strip_history_images(hist), 0)   # idempotent
 
     def test_offload_preview_outlines_json(self):
         """A head-slice of a big JSON is an unclosed brace of the first record.
@@ -644,7 +644,7 @@ class AgentLogic(unittest.TestCase):
         answers with what it has; '/steps N <text>' (alias /maxSteps) caps the
         steps for that turn only."""
         a = self.a
-        old = a.or_chat, a.exec_tool, a._config.MAX_STEPS, a._deadline[0], list(a._history)
+        old = a._llm.or_chat, a.exec_tool, a._config.MAX_STEPS, a._deadline[0], list(a._history)
         calls = []
         try:
             def chat(msgs, tools, model=None):
@@ -654,7 +654,7 @@ class AgentLogic(unittest.TestCase):
                     return {"role": "assistant", "content": None,
                             "tool_calls": [{"id": "1", "function": {"name": "web_search", "arguments": "{}"}}]}
                 return {"role": "assistant", "content": "partial: 2 hits so far"}
-            a.or_chat = chat
+            a._llm.or_chat = chat
             a.exec_tool = lambda name, args: "hit"
             hist = [{"role": "system", "content": "s"}, {"role": "user", "content": "search"}]
             a._deadline[0] = time.time() + a.DEADLINE_MARGIN - 1          # already inside the margin
@@ -683,7 +683,7 @@ class AgentLogic(unittest.TestCase):
             self.assertEqual(seen, [3])
             self.assertEqual(a._config.MAX_STEPS, 12)
         finally:
-            a.or_chat, a.exec_tool, a._config.MAX_STEPS, a._deadline[0] = old[:4]
+            a._llm.or_chat, a.exec_tool, a._config.MAX_STEPS, a._deadline[0] = old[:4]
             a._history[:] = old[4]
 
     def test_turn_markers_and_spans(self):
@@ -692,7 +692,7 @@ class AgentLogic(unittest.TestCase):
         ms; slash commands produce no trace."""
         a = self.a
         posts = []
-        old = a._mgrclient._mgr, a.or_chat, a.exec_tool, a._mgrclient.report_usage, list(a._history), a._config.MAX_STEPS, a.BUILTIN.get("web_search")
+        old = a._mgrclient._mgr, a._llm.or_chat, a.exec_tool, a._mgrclient.report_usage, list(a._history), a._config.MAX_STEPS, a.BUILTIN.get("web_search")
         try:
             a._mgrclient._mgr = lambda base, path, payload=None, timeout=60: posts.append((path, payload))
             a._mgrclient.report_usage = lambda u, ms=None, ok=True, err="": posts.append(("/api/usage", {"turn": a._observe._turn_id[0], "step": a._observe._turn_step[0], "ms": ms, "ok": ok, "err": err}))
@@ -704,7 +704,7 @@ class AgentLogic(unittest.TestCase):
                     return {"role": "assistant", "content": None,
                             "tool_calls": [{"id": "1", "function": {"name": "web_search", "arguments": "{}"}}]}
                 return {"role": "assistant", "content": "done"}
-            a.or_chat = chat
+            a._llm.or_chat = chat
             a.BUILTIN["web_search"] = (lambda **kw: "1. hit", {}, [])
             a._config.MAX_STEPS = 5
             self.assertEqual(a.run("/fresh find it", kind="task", turn="abc12345"), "done")
@@ -729,7 +729,7 @@ class AgentLogic(unittest.TestCase):
             self.assertEqual(a._outcome_of("x ⏱️ (time budget exhausted — partial result)"), "deadline")
             self.assertEqual(a._outcome_of("⚠️ LLM HTTP 500"), "error")
         finally:
-            a._mgrclient._mgr, a.or_chat, a.exec_tool, a._mgrclient.report_usage = old[:4]
+            a._mgrclient._mgr, a._llm.or_chat, a.exec_tool, a._mgrclient.report_usage = old[:4]
             a._history[:] = old[4]; a._config.MAX_STEPS = old[5]
             if old[6] is not None:
                 a.BUILTIN["web_search"] = old[6]
@@ -742,7 +742,7 @@ class AgentLogic(unittest.TestCase):
         nothing; short turns, failed turns and slash commands never trigger."""
         a = self.a
         posts = []
-        old = a.or_chat, a._mgrclient._mgr, a.SKILL_LEARN, a.SKILL_LEARN_MIN_STEPS, a._observe._turn_step[0], a.threading.Thread
+        old = a._llm.or_chat, a._mgrclient._mgr, a.SKILL_LEARN, a.SKILL_LEARN_MIN_STEPS, a._observe._turn_step[0], a.threading.Thread
 
         class SyncThread:
             def __init__(self, target=None, args=(), daemon=None): self.t, self.a = target, args
@@ -760,7 +760,7 @@ class AgentLogic(unittest.TestCase):
             sl = a._turn_slice(hist, "find jobs")
             self.assertEqual(sl[0]["content"], "find jobs"); self.assertEqual(len(sl), 4)
             self.assertEqual(len(sl[2]["content"]), 1500)                       # tool output trimmed
-            a.or_chat = lambda msgs, tools, model=None: {"role": "assistant", "content":
+            a._llm.or_chat = lambda msgs, tools, model=None: {"role": "assistant", "content":
                 '```json\n{"name": "job-search", "description": "Daily search", "content": "# Purpose\\n..."}\n```'}
             a._observe._turn_step[0] = 4
             self.assertTrue(a._maybe_learn(hist, "find jobs", "ok"))
@@ -768,7 +768,7 @@ class AgentLogic(unittest.TestCase):
             self.assertEqual(posts[-1][1]["name"], "job-search")
             self.assertIn("find jobs", posts[-1][1]["note"])
             posts.clear()
-            a.or_chat = lambda msgs, tools, model=None: {"role": "assistant", "content": "NONE"}
+            a._llm.or_chat = lambda msgs, tools, model=None: {"role": "assistant", "content": "NONE"}
             self.assertTrue(a._maybe_learn(hist, "find jobs", "ok")); self.assertEqual(posts, [])
             a._observe._turn_step[0] = 2
             self.assertFalse(a._maybe_learn(hist, "find jobs", "ok"))              # too short
@@ -778,17 +778,17 @@ class AgentLogic(unittest.TestCase):
             a.SKILL_LEARN = False
             self.assertFalse(a._maybe_learn(hist, "find jobs", "ok"))
         finally:
-            a.or_chat, a._mgrclient._mgr, a.SKILL_LEARN, a.SKILL_LEARN_MIN_STEPS, a._observe._turn_step[0], a.threading.Thread = old
+            a._llm.or_chat, a._mgrclient._mgr, a.SKILL_LEARN, a.SKILL_LEARN_MIN_STEPS, a._observe._turn_step[0], a.threading.Thread = old
 
     # --- Tree-Chat: /branch + /back -------------------------------------------
     def test_branch_and_back(self):
         a = self.a
         old_hist = list(a._history)
-        old_chat = a.or_chat
+        old_chat = a._llm.or_chat
         try:
             a._history[:] = [{"role": "system", "content": "s"},
                              {"role": "user", "content": "main topic"}]
-            a.or_chat = lambda msgs, tools, model=None: {"role": "assistant",
+            a._llm.or_chat = lambda msgs, tools, model=None: {"role": "assistant",
                                                          "content": "essence of the follow-up"}
             out = a._branch_open("/branch piper")
             self.assertIn("depth 1", out)
@@ -806,7 +806,7 @@ class AgentLogic(unittest.TestCase):
             # /back without a branch
             self.assertIn("No open", a._branch_close("/back"))
         finally:
-            a.or_chat = old_chat
+            a._llm.or_chat = old_chat
             a._history[:] = old_hist
 
     def test_branch_drop(self):
@@ -842,33 +842,33 @@ class AgentLogic(unittest.TestCase):
         clear line. A 503 while the model loads is answered the same way."""
         import http.client, urllib.error
         a = self.a
-        old = a._config.LLAMA_ENDPOINT, a.urllib.request.urlopen, a._retry_sleep
+        old = a._config.LLAMA_ENDPOINT, a.urllib.request.urlopen, a._llm._retry_sleep
         slept = []
         try:
             a._config.LLAMA_ENDPOINT = "http://10.0.0.5:8080/"
-            a._retry_sleep = lambda n: slept.append(n)
+            a._llm._retry_sleep = lambda n: slept.append(n)
             msgs = [{"role": "system", "content": "S"},
                     {"role": "user", "content": [{"type": "text", "text": "was siehst du?"},
                                                  {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}}]}]
             def drop(req, timeout=None):
                 raise http.client.RemoteDisconnected("Remote end closed connection without response")
             a.urllib.request.urlopen = drop
-            r = a.or_chat(msgs, [])
+            r = a._llm.or_chat(msgs, [])
             self.assertIn("image was removed", r["content"])
             self.assertEqual(slept, [])                                              # no retry
             self.assertFalse(any(isinstance(p, dict) and p.get("type") == "image_url"
                                  for m in msgs if isinstance(m.get("content"), list) for p in m["content"]))
-            r = a.or_chat(msgs, [])
+            r = a._llm.or_chat(msgs, [])
             self.assertIn("probably restarting", r["content"])                      # no image any more
             def loading(req, timeout=None):
                 raise urllib.error.HTTPError(req.full_url, 503, "Service Unavailable", {}, io.BytesIO(b'{"error":{"message":"Loading model"}}'))
             a.urllib.request.urlopen = loading
-            r = a.or_chat(msgs, [])
+            r = a._llm.or_chat(msgs, [])
             self.assertIn("loading its model", r["content"])
             self.assertEqual(r.get("role"), "assistant")   # the error reply lands in the history: it needs a role (llama.cpp 500 "Missing 'role'")
             self.assertEqual(slept, [])
         finally:
-            a._config.LLAMA_ENDPOINT, a.urllib.request.urlopen, a._retry_sleep = old
+            a._config.LLAMA_ENDPOINT, a.urllib.request.urlopen, a._llm._retry_sleep = old
 
     def test_local_model_empty_stream_after_image_counts_as_dropped(self):
         """The streaming variant of the crash: llama.cpp sends the 200 headers,
@@ -886,7 +886,7 @@ class AgentLogic(unittest.TestCase):
                     {"role": "user", "content": [{"type": "text", "text": "was siehst du?"},
                                                  {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}}]}]
             out = []
-            r = a.or_chat_stream(msgs, [], out.append)
+            r = a._llm.or_chat_stream(msgs, [], out.append)
             self.assertIn("image was removed", r["content"])
             self.assertIn("image was removed", "".join(out))
             self.assertEqual(reported, [(False, r["content"])])
@@ -937,14 +937,14 @@ class AgentLogic(unittest.TestCase):
         a = self.a
         old = a._config.LLAMA_ENDPOINT
         try:
-            self.assertGreaterEqual(a.LLM_STREAM_TIMEOUT, a.LLM_TIMEOUT)
+            self.assertGreaterEqual(a._llm.LLM_STREAM_TIMEOUT, a._llm.LLM_TIMEOUT)
             a._config.LLAMA_ENDPOINT = "http://10.0.0.5:8080/"
-            self.assertFalse(a._retry_after(TimeoutError("timed out"), 0))
-            self.assertFalse(a._retry_after(OSError("The read operation timed out"), 0))
-            self.assertTrue(a._retry_after(OSError("connection reset"), 0))
+            self.assertFalse(a._llm._retry_after(TimeoutError("timed out"), 0))
+            self.assertFalse(a._llm._retry_after(OSError("The read operation timed out"), 0))
+            self.assertTrue(a._llm._retry_after(OSError("connection reset"), 0))
             a._config.LLAMA_ENDPOINT = ""
-            self.assertTrue(a._retry_after(TimeoutError("timed out"), 0))
-            self.assertFalse(a._retry_after(TimeoutError("timed out"), a.LLM_RETRIES))
+            self.assertTrue(a._llm._retry_after(TimeoutError("timed out"), 0))
+            self.assertFalse(a._llm._retry_after(TimeoutError("timed out"), a._llm.LLM_RETRIES))
         finally:
             a._config.LLAMA_ENDPOINT = old
 
@@ -953,14 +953,14 @@ class AgentLogic(unittest.TestCase):
         folding the notes for a local model must not leave two assistant
         messages adjacent (Qwen: HTTP 400 "2 or more assistant messages")."""
         a = self.a
-        old = a.FOLD_SYSTEM
+        old = a._llm.FOLD_SYSTEM
         try:
-            a.FOLD_SYSTEM = True
+            a._llm.FOLD_SYSTEM = True
             msgs = [{"role": "system", "content": "S"}, {"role": "user", "content": "u"},
                     {"role": "assistant", "content": "first"},
                     {"role": "system", "content": "critique"},          # folded away
                     {"role": "assistant", "content": "second"}]
-            w = a._wire_messages(msgs)
+            w = a._llm._wire_messages(msgs)
             roles = [m["role"] for m in w]
             self.assertEqual(roles, ["system", "user", "assistant"])     # the two answers merged
             self.assertIn("first", w[-1]["content"]); self.assertIn("second", w[-1]["content"])
@@ -969,10 +969,10 @@ class AgentLogic(unittest.TestCase):
                      {"role": "assistant", "content": "", "tool_calls": [{"id": "1"}]},
                      {"role": "tool", "tool_call_id": "1", "content": "r"},
                      {"role": "assistant", "content": "done"}]
-            self.assertEqual([m["role"] for m in a._wire_messages(msgs2)],
+            self.assertEqual([m["role"] for m in a._llm._wire_messages(msgs2)],
                              ["system", "user", "assistant", "tool", "assistant"])
         finally:
-            a.FOLD_SYSTEM = old
+            a._llm.FOLD_SYSTEM = old
 
     def test_recall_dedups_and_budgets(self):
         """A-3: a recall hit already in the memory index is dropped, exact
@@ -1068,9 +1068,9 @@ class AgentLogic(unittest.TestCase):
         """A-5: after wiring for a local model, no two adjacent messages share a
         role (user OR assistant), and tool_calls/tool sequences are untouched."""
         a = self.a
-        old = a.FOLD_SYSTEM
+        old = a._llm.FOLD_SYSTEM
         try:
-            a.FOLD_SYSTEM = True
+            a._llm.FOLD_SYSTEM = True
             msgs = [{"role": "system", "content": "S"},
                     {"role": "user", "content": "u1"},
                     {"role": "user", "content": "u2 (steer)"},          # two users -> must merge
@@ -1080,7 +1080,7 @@ class AgentLogic(unittest.TestCase):
                     {"role": "assistant", "content": "", "tool_calls": [{"id": "1"}]},
                     {"role": "tool", "tool_call_id": "1", "content": "r"},
                     {"role": "assistant", "content": "done"}]
-            w = a._wire_messages(msgs)
+            w = a._llm._wire_messages(msgs)
             roles = [m["role"] for m in w]
             for i in range(1, len(roles)):
                 self.assertFalse(roles[i] == roles[i-1] and roles[i] in ("user", "assistant")
@@ -1090,7 +1090,7 @@ class AgentLogic(unittest.TestCase):
             self.assertEqual(roles.count("tool"), 1)                    # tool sequence intact
             self.assertEqual(roles[-1], "assistant"); self.assertEqual(w[-1]["content"], "done")
         finally:
-            a.FOLD_SYSTEM = old
+            a._llm.FOLD_SYSTEM = old
 
     def test_wire_messages_folds_system_notes_for_local_models(self):
         """Qwen3's chat template in llama.cpp rejects a system message that is
@@ -1098,22 +1098,22 @@ class AgentLogic(unittest.TestCase):
         such messages. For the llama backend they fold into the first system
         message, in order; other backends get the history untouched."""
         a = self.a
-        old = a.FOLD_SYSTEM
+        old = a._llm.FOLD_SYSTEM
         msgs = [{"role": "system", "content": "SYS"}, {"role": "user", "content": "u1"},
                 {"role": "system", "content": "[Memory] m"}, {"role": "assistant", "content": "a1"},
                 {"role": "system", "content": "   "}, {"role": "system", "content": "[Now] d"},
                 {"role": "user", "content": "u2"}]
         try:
-            a.FOLD_SYSTEM = True
-            w = a._wire_messages(msgs)
+            a._llm.FOLD_SYSTEM = True
+            w = a._llm._wire_messages(msgs)
             self.assertEqual([m["role"] for m in w], ["system", "user", "assistant", "user"])
             self.assertEqual(w[0]["content"], "SYS\n\n[Memory] m\n\n[Now] d")
             self.assertEqual(msgs[0]["content"], "SYS")                           # the history itself is untouched
-            self.assertEqual(a._wire_messages([{"role": "user", "content": "x"}]), [{"role": "user", "content": "x"}])
-            a.FOLD_SYSTEM = False
-            self.assertIs(a._wire_messages(msgs), msgs)
+            self.assertEqual(a._llm._wire_messages([{"role": "user", "content": "x"}]), [{"role": "user", "content": "x"}])
+            a._llm.FOLD_SYSTEM = False
+            self.assertIs(a._llm._wire_messages(msgs), msgs)
         finally:
-            a.FOLD_SYSTEM = old
+            a._llm.FOLD_SYSTEM = old
 
     def test_summarizing_split(self):
         a = self.a
@@ -1171,10 +1171,10 @@ class AgentLogic(unittest.TestCase):
         orig = a.urllib.request.urlopen
         try:
             a.urllib.request.urlopen = fake_urlopen
-            a.or_chat([{"role": "user", "content": "hi"}], [])       # leere Tools
+            a._llm.or_chat([{"role": "user", "content": "hi"}], [])       # leere Tools
             self.assertNotIn("tools", captured["body"])
             self.assertNotIn("tool_choice", captured["body"])
-            a.or_chat([{"role": "user", "content": "hi"}],
+            a._llm.or_chat([{"role": "user", "content": "hi"}],
                       [{"type": "function", "function": {"name": "x", "parameters": {}}}])
             self.assertIn("tools", captured["body"])
             self.assertEqual(captured["body"]["tool_choice"], "auto")
@@ -1211,7 +1211,7 @@ class AgentLogic(unittest.TestCase):
             self.assertEqual(
                 a._mgrclient._llm_url(),
                 "http://172.30.0.1:8700/api/llm/openrouter/chat/completions")
-            a.or_chat([{"role": "user", "content": "hi"}], [])
+            a._llm.or_chat([{"role": "user", "content": "hi"}], [])
             self.assertEqual(
                 captured["url"],
                 "http://172.30.0.1:8700/api/llm/openrouter/chat/completions")
