@@ -32,7 +32,7 @@ FC_VERSION="v1.16.1"                       # same version as the reference insta
 # project), so nothing has to be built or redistributed here. Override with
 # VMLINUX_URL=… or drop a vmlinux into $FC_DIR/bin/ beforehand.
 VMLINUX_URL="${VMLINUX_URL:-https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.12/x86_64/vmlinux-6.1.128}"
-REPO_URL="${REPO_URL:-https://github.com/octonion-ai/kaim56.git}"
+REPO_URL="${REPO_URL:-https://github.com/uneidel/kaim56.git}"
 BASE="${KAIM56_BASE:-$HOME}"
 FC_DIR="$BASE/firecracker"
 GUEST_DNS="${GUEST_DNS:-1.1.1.1}"

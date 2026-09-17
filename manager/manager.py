@@ -205,7 +205,7 @@ PUBLIC_HOST = SITE.get("PUBLIC_HOST") or "example.com"
 # describe`) against the newest GitHub release; the update itself is the
 # installer again, run by the oneshot unit install.sh installs alongside.
 VERSION_FILE = os.path.join(BASE, "VERSION")
-UPDATE_REPO = SITE.get("UPDATE_REPO") or "octonion-ai/kaim56"
+UPDATE_REPO = SITE.get("UPDATE_REPO") or "uneidel/kaim56"
 UPDATE_UNIT = "kaim56-update.service"
 UPDATE_LOG = os.path.join(RUN_DIR, "update.log")
 _update = {"ts": 0.0, "latest": "", "url": "", "notes": "", "error": ""}

@@ -74,7 +74,7 @@ The installer adds the NFS server itself (`manager/setup-nfs-host.sh`).
 ## 4. Install kAIm56
 
 ```bash
-git clone https://github.com/octonion-ai/kaim56 && cd kaim56
+git clone https://github.com/uneidel/kaim56 && cd kaim56
 ./install.sh --check
 ./install.sh --with-voice
 ```

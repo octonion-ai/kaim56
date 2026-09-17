@@ -6,6 +6,7 @@ history — `git log -p -- manager/CHANGELOG.md` before 2026-09-08 — and in th
 commit messages.
 
 ## 2026-09-17
+- Repository moved back to `github.com/uneidel/kaim56` (remote, installer default, README, update check); the old octonion-ai path redirects
 - Office output for agents: tools `write_xlsx` (rows → spreadsheet, header bold, columns sized) and `write_docx` (Markdown subset → Word: headings, bullets, paragraphs, bold) write into the workspace; `python3-openpyxl` and `python3-docx` in the openrouter rootfs (rebuild); without the libs the tools say so; catalog/Policy entries
 - Claude instances become observable: the bridge logs one summary line per turn, reports usage to `/api/usage` (Resources tab) and emits a `/api/trace` start+end (trace view), and sets `X-Kaim-Turn` so the app can open the trace; the manager accepts a claude instance's own usage (it runs on the host subscription, not the key proxy). Content-Length in the bridge is now guarded
 
