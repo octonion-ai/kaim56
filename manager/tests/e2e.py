@@ -2014,19 +2014,19 @@ class ManagerFunctions(unittest.TestCase):
             m._paths.RUN_DIR = tmp; m._paths.INST_DIR = tmp
             inst = {"name": "e2e-ov", "rootfs": "instances/openrouter-rootfs.ext4"}
             # Wegwerf-Upper landet in RUN_DIR
-            self.assertTrue(m.upper_path(inst).startswith(tmp))
-            self.assertIn(".upper.ext4", m.upper_path(inst))
+            self.assertTrue(m._vm.upper_path(inst).startswith(tmp))
+            self.assertIn(".upper.ext4", m._vm.upper_path(inst))
             # Persistenter Upper in INST_DIR mit anderem Namen
             inst["persist_disk"] = True
-            self.assertIn("-upper.ext4", m.upper_path(inst))
-            p = m.make_upper(inst)
+            self.assertIn("-upper.ext4", m._vm.upper_path(inst))
+            p = m._vm.make_upper(inst)
             self.assertTrue(os.path.exists(p))
             size1 = os.path.getsize(p)
-            self.assertEqual(size1, m.UPPER_PERSIST_SIZE_MB * 1024 * 1024)
+            self.assertEqual(size1, m._vm.UPPER_PERSIST_SIZE_MB * 1024 * 1024)
             # persist: second call uses the existing file (no reset)
             with open(p, "r+b") as fh:
                 fh.seek(0); marker = fh.read(4)
-            self.assertEqual(m.make_upper(inst), p)
+            self.assertEqual(m._vm.make_upper(inst), p)
         finally:
             m._paths.RUN_DIR, m._paths.INST_DIR = old_run, old_inst
 
@@ -2036,12 +2036,12 @@ class ManagerFunctions(unittest.TestCase):
                      if i.get("rootfs") in m._vm.OVERLAY_ROOTFS), None)
         if not inst:
             self.skipTest("no overlay instance available")
-        old_mk = m.make_upper
+        old_mk = m._vm.make_upper
         try:
-            m.make_upper = lambda i: "/tmp/fake-upper.ext4"   # no real mkfs in the test
-            cfg = m.gen_config(inst)
+            m._vm.make_upper = lambda i: "/tmp/fake-upper.ext4"   # no real mkfs in the test
+            cfg = m._vm.gen_config(inst)
         finally:
-            m.make_upper = old_mk
+            m._vm.make_upper = old_mk
         self.assertIn("fc_upper=/dev/vd", cfg["boot-source"]["boot_args"])
         root = next(d for d in cfg["drives"] if d["drive_id"] == "rootfs")
         self.assertTrue(root["is_read_only"], "Basis muss read-only sein")
@@ -3432,19 +3432,19 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual((cfg2["AGENT_TOOLS"], err2), ("read_file", ""))
             # an explicit model must win over the persona's model in the VM config
             seen = []
-            old2 = m.create_instance, m._instances.load_instances, m.wait_web, m._chat_post, m.stop, m.delete_instance
+            old2 = m.create_instance, m._instances.load_instances, m.wait_web, m._chat_post, m._vm.stop, m.delete_instance
             try:
                 def create(name, tpl, cfg=None, mounts=None, internet=True):
                     seen.append(dict(cfg or {}))
                     m._instances.load_instances = lambda: [{"name": name, "template": "openrouter"}]
                     return "ok"
                 m.create_instance = create; m.wait_web = lambda i, timeout=120: True
-                m._chat_post = lambda i, msg, timeout=600: "r"; m.stop = lambda i: None; m.delete_instance = lambda n: None
+                m._chat_post = lambda i, msg, timeout=600: "r"; m._vm.stop = lambda i: None; m.delete_instance = lambda n: None
                 sb = {"cfg": {"OPENROUTER_MODEL": "persona/model", "AGENT_SYSTEM": "You review."}, "internet": True}
                 m._run_ephemeral_vm("do", "explicit/model", 60, sb)
                 self.assertEqual(seen[-1]["OPENROUTER_MODEL"], "explicit/model")
             finally:
-                m.create_instance, m._instances.load_instances, m.wait_web, m._chat_post, m.stop, m.delete_instance = old2
+                m.create_instance, m._instances.load_instances, m.wait_web, m._chat_post, m._vm.stop, m.delete_instance = old2
         finally:
             m._personas.load_personas, m._skills.load_skills = old
 
@@ -3485,14 +3485,14 @@ class ManagerFunctions(unittest.TestCase):
         without internet; without a sandbox nothing changes."""
         m = self.m
         seen = []
-        old = m.create_instance, m._instances.load_instances, m.wait_web, m._chat_post, m.stop, m.delete_instance
+        old = m.create_instance, m._instances.load_instances, m.wait_web, m._chat_post, m._vm.stop, m.delete_instance
         try:
             m.create_instance = lambda name, tpl, cfg=None, mounts=None, internet=True: seen.append((tpl, dict(cfg or {}), internet)) or "ok"
             m._instances.load_instances = lambda: [{"name": n, "template": "openrouter"} for n in ["x"]] if False else [{"name": seen[-1] and "task-x", "template": "openrouter"}]
             m._instances.load_instances = lambda: [{"name": next((k for k in ["any"]), ""), "template": "openrouter"}]
             m.wait_web = lambda inst, timeout=120: True
             m._chat_post = lambda inst, message, timeout=600: "child says hi"
-            m.stop = lambda inst: None; m.delete_instance = lambda name: None
+            m._vm.stop = lambda inst: None; m.delete_instance = lambda name: None
             # load_instances must return the instance the run just created: match on prefix
             m._instances.load_instances = lambda: [{"name": "task-" + "".join(c for c in "0" * 6), "template": "openrouter"}]
             real_create = m.create_instance
@@ -3506,7 +3506,7 @@ class ManagerFunctions(unittest.TestCase):
             ok, res = m._run_ephemeral_vm("do", "google/gemini-2.5-flash", 60)
             self.assertNotIn("AGENT_TOOLS", seen[-1][1]); self.assertTrue(seen[-1][2]); self.assertEqual(seen[-1][1]["OPENROUTER_MODEL"], "google/gemini-2.5-flash")
         finally:
-            m.create_instance, m._instances.load_instances, m.wait_web, m._chat_post, m.stop, m.delete_instance = old
+            m.create_instance, m._instances.load_instances, m.wait_web, m._chat_post, m._vm.stop, m.delete_instance = old
 
     def test_proxy_books_upstream_usage(self):
         m = self.m
@@ -3559,9 +3559,9 @@ class ManagerFunctions(unittest.TestCase):
             self.assertFalse(os.path.exists(m._mounts.AGENT_EXPORTS))              # root export retired …
             self.assertTrue(os.path.exists(m._mounts.AGENT_EXPORTS + ".bak"))      # … with a backup
             self.assertFalse(m._mounts.retire_root_export())                       # idempotent
-            self.assertEqual(m.guest_env(inst)["AGENT_EXPORT"], ws)
-            self.assertEqual(m.guest_env(inst)["MEMORY_DIR"], "/memory")
-            self.assertEqual(m.guest_env(inst)["GUEST_DNS"], m._netfw.GUEST_DNS)
+            self.assertEqual(m._vm.guest_env(inst)["AGENT_EXPORT"], ws)
+            self.assertEqual(m._vm.guest_env(inst)["MEMORY_DIR"], "/memory")
+            self.assertEqual(m._vm.guest_env(inst)["GUEST_DNS"], m._netfw.GUEST_DNS)
             # real mount_specs: absolute host paths as NFS subpaths, fsid slots 0..13 for folders
             m._mounts.mount_specs = old[5]
             sp = m._mounts.mount_specs({**inst, "index": 3, "template": "claude", "rootfs": "instances/claude-rootfs.ext4"})
@@ -3668,7 +3668,7 @@ class ManagerFunctions(unittest.TestCase):
         try:
             m._paths.RUN_DIR = tmp
             inst = {"name": "vm1", "index": 5, "template": "openrouter", "rootfs": "instances/openrouter-rootfs.ext4", "config": {}}
-            m.make_config_disk(inst)
+            m._vm.make_config_disk(inst)
             d = os.path.join(tmp, "vm1.cfgdir")
             self.assertEqual(os.stat(d).st_mode & 0o777, 0o755)
             self.assertEqual(os.stat(os.path.join(d, "config.env")).st_mode & 0o777, 0o644)
