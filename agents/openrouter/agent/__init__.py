@@ -14,12 +14,10 @@ import re
 import threading
 import time
 import datetime
-import urllib.parse
-import urllib.request
-import urllib.error
 import uuid
 
 # ---- package modules ----
+from . import tools_manager as _tools_manager
 from . import offload as _offload
 from . import learn as _learn
 from . import llm as _llm
@@ -28,525 +26,6 @@ from . import tools_local as _tools_local
 from . import observe as _observe
 from . import mgrclient as _mgrclient
 from . import config as _config
-
-def t_spawn_subagent(task, model=None, tools=None, egress=None, skill=None, persona=None):
-    """Delegate a self-contained subtask to a FRESH ephemeral VM and return its
-    answer. Runs over the manager's task path (create_task target=ephemeral,
-    wait=true) — the manager creates, drives and deletes the VM; the guest
-    never touches the admin routes (which it may not call anyway). `model`
-    picks the subagent's OpenRouter model, default: the template's.
-    tools / egress / skill narrow the cage: a subset of this agent's tools,
-    an egress allowlist (or "none"), one skill baked into the system prompt.
-    With a skill and no tools, the sandbox gets the file/web tools only."""
-    payload = {"message": str(task or "").strip(), "target": "ephemeral",
-               "wait": True, "model": (model or "").strip()}
-    sb = {}
-    if tools:
-        sb["tools"] = tools if isinstance(tools, list) else str(tools)
-    if egress:
-        sb["egress"] = egress if isinstance(egress, list) else str(egress)
-    if skill:
-        sb["skill"] = str(skill).strip()
-    if persona:
-        sb["persona"] = str(persona).strip()
-    if sb:
-        payload["sandbox"] = sb
-    if not payload["message"]:
-        return "⚠️ task missing"
-    try:
-        body = _mgrclient._mgr(_mgrclient._manager_base(), "/api/task", payload, timeout=630)
-        d = json.loads(body)
-    except Exception as e:
-        return f"Subagent failed: {e!r}"
-    if d.get("error"):
-        return f"⚠️ {d['error']}"
-    if "result" in d:
-        return str(d["result"]) or "(subagent returned no result)"
-    return "(subagent returned no result)"
-
-
-def t_create_task(task, target="ephemeral", schedule="", wait=False, model=""):
-    """Queue a task for execution — on a CAPABLE instance or
-    isolated in an ephemeral VM. The manager runs it; the result
-    appears in the shared chat history (app/web). `model` applies to
-    ephemeral targets only (the VM is created with it)."""
-    payload = {"message": task, "target": (target or "ephemeral").strip(),
-               "schedule": (schedule or "").strip(), "wait": bool(wait),
-               "model": (model or "").strip()}
-    try:
-        body = _mgrclient._mgr(_mgrclient._manager_base(), "/api/task", payload,
-                    timeout=630 if wait else 30)
-        d = json.loads(body)
-        if d.get("error"):
-            return f"⚠️ {d['error']}"
-        if "result" in d:                      # wait=True -> result directly
-            return str(d["result"])
-        return (f"Task queued (id {d.get('id')}, target {d.get('target')}, "
-                f"{d.get('status')}). The result will appear in the chat.")
-    except Exception as e:
-        return f"Error: {e!r}"
-
-
-def t_mission_start(goal, steps):
-    """Create a multi-stage assignment as a mission: goal + planned steps.
-    The progress lives in the manager and survives restart/reset."""
-    if isinstance(steps, str):
-        steps = [x.strip() for x in steps.split("\n") if x.strip()]
-    try:
-        d = json.loads(_mgrclient._mgr(_mgrclient._manager_base(), "/api/mission-start",
-                            {"goal": goal, "steps": steps}, timeout=10))
-        return f"Mission {d['id']} created." if d.get("id") else f"Not created: {d.get('note','')}"
-    except Exception as e:
-        return f"Error: {e!r}"
-
-
-def t_missions():
-    """List active/paused missions with steps and status."""
-    try:
-        ms = json.loads(_mgrclient._mgr_get(_mgrclient._manager_base(), "/api/missions", timeout=8)).get("missions", [])
-        if not ms:
-            return "no missions"
-        out = []
-        for m in ms:
-            if m.get("status") in ("done", "failed"):
-                continue
-            steps = " | ".join(f"{st['n']}[{st['status']}] {st['text'][:60]}"
-                               + (f" (task {st['task_id']})" if st.get("task_id") else "")
-                               for st in m.get("steps", []))
-            out.append(f"{m['id']} [{m['status']}] {m['goal'][:80]} :: {steps}")
-        return "\n".join(out) or "no open missions"
-    except Exception as e:
-        return f"Error: {e!r}"
-
-
-def t_mission_update(id, step=None, status="", result="", task_id="", add_step="",
-                     note="", target=""):
-    """Advance a mission step: status open|doing|done|failed, result brief,
-    record the task_id of the kicked-off task and the target instance it went
-    to; add_step appends a new step; note only writes to the log."""
-    try:
-        body = {"id": id, "status": status, "result": result,
-                "task_id": task_id, "add_step": add_step, "note": note,
-                "target": target}
-        if step is not None:
-            body["step"] = int(step)
-        d = json.loads(_mgrclient._mgr(_mgrclient._manager_base(), "/api/mission-update", body, timeout=10))
-        return d.get("msg", "?")
-    except Exception as e:
-        return f"Error: {e!r}"
-
-
-def t_mission_finish(id, summary, failed=False):
-    """Finish a mission (or end it as failed with failed=true).
-    The conclusion goes into long-term memory, the user gets a notification."""
-    try:
-        d = json.loads(_mgrclient._mgr(_mgrclient._manager_base(), "/api/mission-finish",
-                            {"id": id, "summary": summary, "failed": bool(failed)}, timeout=10))
-        return d.get("msg", "?")
-    except Exception as e:
-        return f"Error: {e!r}"
-
-
-ORACLE_MODEL = os.environ.get("ORACLE_MODEL", "").strip()   # empty = current model
-ORACLE_PROMPT = (
-    "You are a skeptical advisor (Oracle): a second opinion BEFORE an action. "
-    "You NEVER act yourself. Question the assumptions: Does the action fit the "
-    "actual assignment? Is the target unambiguously identified (ID + content, "
-    "not just time/name)? What would the damage be if the assumption is wrong? "
-    "Answer concisely: first 'OBJECTION:' with the strongest counter-argument "
-    "(or 'NO OBJECTION'), then at most 3 lines of reasoning/recommendation.")
-
-
-def t_oracle(plan, kontext=""):
-    """Second opinion before an action (pi.dev idea 'oracle'): challenge the
-    assumptions, without acting yourself. An extra LLM call without tools; via
-    ORACLE_MODEL optionally a stronger model."""
-    msgs = [{"role": "system", "content": ORACLE_PROMPT},
-            {"role": "user", "content": f"PLANNED ACTION:\n{plan}\n\nCONTEXT:\n{kontext or '(none)'}"}]
-    r = _llm.or_chat(msgs, [], model=ORACLE_MODEL or None)
-    return (r.get("content") or "").strip() or "(Oracle gave no answer — when in doubt do NOT act)"
-
-
-def t_ha_control(spoken, action):
-    """Turn a Home Assistant device or whole room on/off by the name you HEARD —
-    the manager matches it against real entities and areas server-side (exact,
-    then area, then closest-sounding) and auto-learns a spoken alias on a fuzzy
-    hit, so the same wording is instant next time. PREFER this for voice light/
-    device control over the raw homeassistant intents: pass the spoken target
-    verbatim ('Gartenhaus denke rechts', 'Licht im Gartenhaus') and action
-    'on'/'off'. It also handles rooms ('Licht im Gartenhaus' -> all lights of
-    that area)."""
-    try:
-        return _mgrclient._mgr(_mgrclient._manager_base(), "/api/ha-control",
-                    {"spoken": spoken, "action": action}, timeout=25)
-    except urllib.error.HTTPError as e:
-        return f"⚠️ HA control failed: HTTP {e.code}"
-    except Exception as e:
-        return f"⚠️ HA control failed: {e!r}"
-
-
-def t_ha_learn_alias(spoken, entity):
-    """Teach Home Assistant that a spoken/misheard name refers to an entity, so
-    the SAME wording matches natively next time. Use this after you recovered
-    from a failed HA intent: you heard e.g. 'Gartenhaus denke rechts', found the
-    real entity 'light.gartenhaus_decke_rechts' via GetLiveContext, and switched
-    it — then call ha_learn_alias('Gartenhaus denke rechts',
-    'light.gartenhaus_decke_rechts'). The HA token stays on the host; you pass
-    only the words and the entity id."""
-    try:
-        return _mgrclient._mgr(_mgrclient._manager_base(), "/api/ha-alias",
-                    {"spoken": spoken, "entity": entity}, timeout=20)
-    except urllib.error.HTTPError as e:
-        return f"⚠️ alias not learned: HTTP {e.code}"
-    except Exception as e:
-        return f"⚠️ alias not learned: {e!r}"
-
-
-def t_notify(title, message=""):
-    """Send a push notification to the user's devices (app as an
-    Android system notification, web manager as a bell). For important
-    events/results when the user is not in the chat. Unlike
-    send_signal (which rings in Signal), this is the app/web channel. Delivery
-    goes through the manager."""
-    try:
-        body = _mgrclient._mgr(_mgrclient._manager_base(), "/api/notify",
-                    {"title": title, "message": message}, timeout=15)
-        d = json.loads(body)
-        return "Notification sent." if d.get("id") else \
-            "⚠️ not sent: " + str(d.get("note", ""))
-    except urllib.error.HTTPError as e:
-        try:
-            return "⚠️ not sent: " + str(json.loads(e.read()).get("note", e.code))
-        except Exception:
-            return f"⚠️ not sent (HTTP {e.code})"
-    except Exception as e:
-        return f"⚠️ Error: {e!r}"
-
-
-def t_send_signal(text, to=""):
-    """Write to the user via Signal. Delivery runs in the manager: the
-    bot number and the API access live there, and the recipient is checked
-    against the list of allowed numbers. So from here you cannot
-    write to arbitrary numbers — by design."""
-    try:
-        body = _mgrclient._mgr(_mgrclient._manager_base(), "/api/signal",
-                    {"text": text, "to": (to or "").strip()}, timeout=45)
-        d = json.loads(body)
-        return ("Signal sent: " if d.get("ok") else "⚠️ not sent: ") + str(d.get("note", ""))
-    except urllib.error.HTTPError as e:
-        try:
-            return "⚠️ not sent: " + str(json.loads(e.read()).get("note", e.code))
-        except Exception:
-            return f"⚠️ not sent: HTTP {e.code}"
-    except Exception as e:
-        return f"Error: {e!r}"
-
-
-def t_read_inbox(peek=False):
-    """Read new user messages (Signal/app/web) since the last run —
-    the orchestrator's inbox. By default each message is delivered only
-    ONCE (watermark). peek=True returns without 'consuming'."""
-    try:
-        body = _mgrclient._mgr_get(_mgrclient._manager_base(), "/api/inbox" + ("?peek=1" if peek else ""))
-        msgs = json.loads(body).get("messages", [])
-        if not msgs:
-            return "Inbox empty (nothing new)"
-        out = []
-        for m in msgs:
-            who = m.get("instance") or m.get("title") or "?"
-            out.append(f"[{who}] {str(m.get('text',''))[:200]}")
-        return "\n".join(out)
-    except Exception as e:
-        return f"Error: {e!r}"
-
-
-def t_list_agents():
-    """List available agent instances + capabilities (model, MCP) —
-    for routing: choose as the create_task target the agent that has the needed
-    tools/MCP (e.g. the one with the homeassistant MCP for lights/heating)."""
-    try:
-        rows = json.loads(_mgrclient._mgr_get(_mgrclient._manager_base(), "/api/agents")).get("agents", [])
-        if not rows:
-            return "no agents"
-        out = []
-        for a in rows:
-            mcp = (" mcp:" + ",".join(a["mcps"])) if a.get("mcps") else ""
-            st = "running" if a.get("running") else "off"
-            out.append(f"{a['name']} [{st}] {a.get('backend') or a.get('template','')} {a.get('model','')}{mcp}")
-        return "\n".join(out)
-    except Exception as e:
-        return f"Error: {e!r}"
-
-
-def t_recall_tasks(query="", limit=10):
-    """Query previously executed tasks (long-term memory / base knowledge).
-    Without query the most recent; with query, search by text in task/result/goal.
-    Use this BEFORE creating new tasks to avoid duplicates."""
-    try:
-        q = urllib.parse.quote(query or "")
-        body = _mgrclient._mgr_get(_mgrclient._manager_base(), f"/api/history?q={q}&limit={int(limit)}")
-        rows = json.loads(body).get("rows", [])
-        if not rows:
-            return "no matching earlier tasks"
-        out = []
-        for r in rows:
-            ts = time.strftime("%m-%d %H:%M", time.localtime(r.get("ts", 0)))
-            ok = "" if r.get("ok") else "⚠️ "
-            out.append(f"[{ts}] {ok}{r.get('target')}: {str(r.get('task',''))[:80]}"
-                       f" -> {str(r.get('result','') or '')[:140]}")
-        return "\n".join(out)
-    except Exception as e:
-        return f"Error: {e!r}"
-
-
-def t_list_tasks():
-    """List running/scheduled tasks with IDs — needed to remove a specific
-    one with delete_task. (recall_tasks, by contrast, returns the history of
-    completed runs, not the active ones with their IDs.)"""
-    try:
-        body = _mgrclient._mgr_get(_mgrclient._manager_base(), "/api/tasks-open")
-        tasks = json.loads(body).get("tasks", [])
-        if not tasks:
-            return "no running tasks"
-        out = []
-        for t in tasks:
-            sch = f" [{t['schedule']}]" if t.get("schedule") else ""
-            out.append(f"{t.get('id')} @{t.get('instance')} ({t.get('status')}){sch}: "
-                       f"{str(t.get('message',''))[:80]}")
-        return "\n".join(out)
-    except Exception as e:
-        return f"Error: {e!r}"
-
-
-def t_delete_task(id):
-    """Remove a running/scheduled task by ID. The ID comes from
-    list_tasks. Final; it does not abort a task that is currently running,
-    but prevents future runs."""
-    try:
-        body = _mgrclient._mgr(_mgrclient._manager_base(), "/api/task-delete", {"id": str(id)})
-        d = json.loads(body)
-        return (f"Task {id} deleted." if d.get("deleted")
-                else f"No task with ID {id} found.")
-    except Exception as e:
-        return f"Error: {e!r}"
-
-
-def t_edit_task(id, message="", schedule=""):
-    """Change the message and/or schedule of a task (ID from list_tasks).
-    schedule e.g. 'every 2h', 'daily 08:00', 'hourly'; an empty schedule turns
-    a recurring task into a one-off. Empty fields stay
-    unchanged. A task that is currently RUNNING cannot be changed."""
-    try:
-        payload = {"id": str(id)}
-        if message:
-            payload["message"] = message
-        if schedule is not None:
-            payload["schedule"] = schedule
-        body = _mgrclient._mgr(_mgrclient._manager_base(), "/api/task-edit", payload)
-        return str(json.loads(body).get("result", body))
-    except Exception as e:
-        return f"Error: {e!r}"
-
-
-def t_list_skills(query=""):
-    """List available expert skills. Without a query: names only (the catalog
-    has ~70 entries; the full descriptions cost ~2.5k tokens per call). With a
-    query: name + description of the matching ones."""
-    try:
-        arr = json.loads(_mgrclient._mgr_get(_mgrclient._manager_base(), "/api/skills?meta=1"))
-    except Exception as e:
-        return f"Error: {e!r}"
-    if not arr:
-        return "No skills available."
-    q = (query or "").strip().lower()
-    if q:
-        hits = [s for s in arr
-                if q in s.get("name", "").lower() or q in s.get("description", "").lower()]
-        if not hits:
-            return f"No skill matches '{query}'. list_skills() shows all names."
-        return "\n".join(f"- {s.get('name')}: {s.get('description', '')}" for s in hits)
-    names = sorted(s.get("name", "") for s in arr)
-    return ("Skills (load with load_skill(name); descriptions via "
-            "list_skills(query=…)):\n" + ", ".join(names))
-
-
-def t_propose_skill(name, description, content):
-    """Propose a skill for the catalog: a procedure that worked and will be
-    needed again. It waits for the operator's approval in the Skills tab."""
-    try:
-        return _mgrclient._mgr(_mgrclient._manager_base(), "/api/skill-proposals",
-                    {"name": name, "description": description, "content": content,
-                     "turn": _observe._turn_id[0], "note": "proposed by the agent"}, timeout=10)
-    except Exception as e:
-        return f"Error: {e!r}"
-
-
-def t_search_sessions(query, instance=""):
-    """Exact (full-text) search over earlier chats and task results — the
-    counterpart of memory_recall's semantic search."""
-    try:
-        raw = _mgrclient._mgr(_mgrclient._manager_base(), "/api/sessions-search",
-                   {"q": query, "instance": instance or "", "limit": 10}, timeout=15)
-        hits = json.loads(raw).get("hits", [])
-    except Exception as e:
-        return f"Error: {e!r}"
-    if not hits:
-        return f"No earlier session mentions '{query}'."
-    out = []
-    for h in hits:
-        when = time.strftime("%Y-%m-%d", time.localtime(h.get("ts") or 0)) if h.get("ts") else "?"
-        out.append(f"- {when} [{h.get('kind')}] {h.get('instance')} · {h.get('title', '')[:60]}: {h.get('snippet', '')}")
-    return "\n".join(out)
-
-
-def t_load_skill(name):
-    """Load a skill into the context (returns the knowledge document)."""
-    try:
-        return _mgrclient._mgr_get(_mgrclient._manager_base(), f"/api/skills/{urllib.parse.quote(str(name), safe='')}")
-    except Exception as e:
-        return f"Error: {e!r}"
-
-
-def t_memory_store(key, value):
-    """Store a value permanently (centrally in the manager, survives instance deletion)."""
-    inst = os.environ.get("FC_INSTANCE", "default")
-    try:
-        return _mgrclient._mgr(_mgrclient._manager_base(), f"/api/memory/{inst}", {"key": key, "value": value})
-    except Exception as e:
-        return f"Error: {e!r}"
-
-
-def t_memory_reflect(question):
-    """A reasoned answer from the second memory (Hindsight) over everything
-    this instance has seen — chat turns and notes. Off unless the manager has
-    HINDSIGHT_URL set; then the route says so."""
-    try:
-        d = json.loads(_mgrclient._mgr(_mgrclient._manager_base(), "/api/memory-reflect", {"query": question}, timeout=150))
-        return d.get("text") or d.get("error") or "(no answer)"
-    except Exception as e:
-        return f"Error: {e!r}"
-
-
-def t_memory_recall(key=None):
-    """Retrieve a stored value (without key: all entries for this instance)."""
-    inst = os.environ.get("FC_INSTANCE", "default")
-    try:
-        # Store takes the key via JSON body — ANY string works there. Recall
-        # puts it into the URL path, so it must be quoted, or a key with a
-        # space/umlaut can be stored but never retrieved (bit a live agent:
-        # "jobsuche Firmen" saved fine, recall exploded).
-        tail = f"/{urllib.parse.quote(str(key), safe='')}" if key else ""
-        return _mgrclient._mgr_get(_mgrclient._manager_base(), f"/api/memory/{inst}" + tail)
-    except Exception as e:
-        return f"Error: {e!r}"
-
-
-def t_playbook_add(rule):
-    """Record a permanent rule/procedure (playbook). It will ALWAYS be
-    surfaced and followed from now on."""
-    try:
-        d = json.loads(_mgrclient._mgr(_mgrclient._manager_base(), "/api/playbook-add", {"text": rule}))
-        if d.get("added"):
-            return "Rule saved."
-        return "Rule already exists." if d.get("note") == "exists" else "Not saved."
-    except Exception as e:
-        return f"Error: {e!r}"
-
-
-def t_playbooks():
-    """Show all fixed rules (playbooks) with IDs."""
-    try:
-        pbs = json.loads(_mgrclient._mgr_get(_mgrclient._manager_base(), "/api/playbooks")).get("playbooks", [])
-        if not pbs:
-            return "no playbooks"
-        return "\n".join(f"{p['id']}: {p['text']}" for p in pbs)
-    except Exception as e:
-        return f"Error: {e!r}"
-
-
-def t_playbook_forget(id):
-    """Remove a rule by ID (ID from playbooks)."""
-    try:
-        d = json.loads(_mgrclient._mgr(_mgrclient._manager_base(), "/api/playbook-remove", {"id": str(id)}))
-        return f"Rule {id} removed." if d.get("removed") else f"No rule {id}."
-    except Exception as e:
-        return f"Error: {e!r}"
-
-
-def t_list_secrets():
-    """Show which secrets this agent may fetch according to the allowlist (names only)."""
-    try:
-        d = json.loads(_mgrclient._mgr_get(_mgrclient._manager_base(), "/api/secrets"))
-        ks = d.get("allowed", [])
-        return "Allowed secrets: " + (", ".join(ks) if ks else "(none)")
-    except Exception as e:
-        return f"Error: {e!r}"
-
-
-def t_get_secret(name):
-    """Fetch an allowed secret from the manager (only when needed; do not log/share)."""
-    try:
-        d = json.loads(_mgrclient._mgr_get(_mgrclient._manager_base(), f"/api/secret/{name}"))
-        return d.get("value", "") if "value" in d else f"⚠️ {d.get('error', 'not allowed')}"
-    except urllib.error.HTTPError as e:
-        return "⚠️ not allowed" if e.code == 403 else f"Error: HTTP {e.code}"
-    except Exception as e:
-        return f"Error: {e!r}"
-
-
-def t_remote_ls(path="."):
-    """List the shared remote directory (P2P browser share)."""
-    # No longer directly to the katfs node (which is loopback-only since the
-    # isolation fix), but through the broker in the manager. It recognizes the
-    # instance by its source IP and addresses ONLY its assigned share —
-    # the agent can no longer reach someone else's.
-    try:
-        return _mgrclient._mgr_get(_mgrclient._manager_base(), f"/api/katfs/ls?path={urllib.parse.quote(path)}")
-    except Exception as e:
-        return f"Error (is the share active?): {e!r}"
-
-
-def t_remote_read(path):
-    """Read a file from the shared remote directory."""
-    try:
-        return _mgrclient._mgr_get(_mgrclient._manager_base(),
-                        f"/api/katfs/read?path={urllib.parse.quote(path)}", timeout=60)
-    except Exception as e:
-        return f"Error: {e!r}"
-
-
-def _katfs_post(url, data=b""):
-    """POST to the katfs node. On HTTP errors take the body along — that is where
-    the actual reason is ({"error": ...}); without it only a bare
-    'Internal Server Error' remains, which is useless to both model and human."""
-    try:
-        req = urllib.request.Request(url, data=data, method="POST")
-        return urllib.request.urlopen(req, timeout=60).read().decode("utf-8", "replace")
-    except urllib.error.HTTPError as e:
-        body = ""
-        try:
-            body = e.read().decode("utf-8", "replace")[:400]
-        except Exception:
-            pass
-        return f"Error HTTP {e.code}: {body or e.reason}"
-    except Exception as e:
-        return f"Error: {e!r}"
-
-
-def t_remote_write(path, content):
-    """Write a file to the shared remote directory."""
-    return _katfs_post(
-        _mgrclient._manager_base() + f"/api/katfs/write?path={urllib.parse.quote(path)}",
-        (content or "").encode())
-
-
-def t_remote_delete(path, recursive=False):
-    """Delete a file/folder from the shared remote directory."""
-    q = f"/api/katfs/delete?path={urllib.parse.quote(path)}"
-    if recursive:
-        q += "&recursive=1"
-    return _katfs_post(_mgrclient._manager_base() + q)
-
 
 BUILTIN = {
     "bash": (_tools_local.t_bash, "Run a shell command in the workspace",
@@ -584,7 +63,7 @@ BUILTIN = {
                    {"query": {"type": "string", "description": "search terms"},
                     "count": {"type": "integer", "description": "results (1-10, default 5)"}},
                    ["query"]),
-    "spawn_subagent": (t_spawn_subagent,
+    "spawn_subagent": (_tools_manager.t_spawn_subagent,
                        "Delegate a self-contained subtask to a fresh ephemeral VM and wait for its answer "
                        "(the manager creates and deletes the VM). Optionally pick the subagent's model — "
                        "e.g. a cheap/fast one for grunt work or a strong one for hard reasoning.",
@@ -594,7 +73,7 @@ BUILTIN = {
                         "egress": {"type": "string", "description": "optional: comma-separated hosts the subagent may reach, or 'none' for no network at all"},
                         "skill": {"type": "string", "description": "optional: a skill from list_skills baked into the subagent's system prompt; without `tools` it then gets only the file/web tools"},
                         "persona": {"type": "string", "description": "optional: a named agent persona (e.g. code-reviewer, security-reviewer) baked into the subagent's system prompt; its recommended tools/model apply unless you override them"}}, ["task"]),
-    "create_task": (t_create_task,
+    "create_task": (_tools_manager.t_create_task,
                     "Queue a task — IMPORTANT: choose target by capability. "
                     "If the task needs a specific MCP/token (e.g. Home Assistant), "
                     "use the matching instance as target (e.g. 'hass'). For general/"
@@ -606,15 +85,15 @@ BUILTIN = {
                      "schedule": {"type": "string", "description": "optional: every Nm|Nh|Nd, daily HH:MM, hourly"},
                      "wait": {"type": "boolean", "description": "wait for the result (default false)"},
                      "model": {"type": "string", "description": "optional OpenRouter model for an ephemeral target"}}, ["task"]),
-    "mission_start": (t_mission_start,
+    "mission_start": (_tools_manager.t_mission_start,
                       "Create a multi-stage assignment as a mission (goal + steps). For anything "
                       "that needs several tasks/days — the progress survives restarts.",
                       {"goal": {"type": "string", "description": "goal of the mission"},
                        "steps": {"type": "array", "items": {"type": "string"},
                                  "description": "planned steps in order"}},
                       ["goal", "steps"]),
-    "missions": (t_missions, "List open missions with steps/status.", {}, []),
-    "mission_update": (t_mission_update,
+    "missions": (_tools_manager.t_missions, "List open missions with steps/status.", {}, []),
+    "mission_update": (_tools_manager.t_mission_update,
                        "Advance a mission step: set status (doing/done/failed), "
                        "record result + task_id AND the target instance of the kicked-off "
                        "task, add_step appends a step.",
@@ -628,11 +107,11 @@ BUILTIN = {
                         "target": {"type": "string",
                                    "description": "instance the step was delegated to "
                                                   "(create_task target)"}}, ["id"]),
-    "mission_finish": (t_mission_finish,
+    "mission_finish": (_tools_manager.t_mission_finish,
                        "Finish a mission; failed=true on failure. Provide a short conclusion.",
                        {"id": {"type": "string"}, "summary": {"type": "string"},
                         "failed": {"type": "boolean"}}, ["id", "summary"]),
-    "oracle": (t_oracle,
+    "oracle": (_tools_manager.t_oracle,
                "Second opinion BEFORE a risky/irreversible action: challenges your "
                "assumptions, never acts itself. plan = what you intend and why; kontext = "
                "relevant facts (IDs, wordings, user assignment). On 'OBJECTION' do not "
@@ -640,7 +119,7 @@ BUILTIN = {
                {"plan": {"type": "string", "description": "planned action + reasoning"},
                 "kontext": {"type": "string", "description": "facts: IDs, wordings, assignment"}},
                ["plan"]),
-    "ha_control": (t_ha_control,
+    "ha_control": (_tools_manager.t_ha_control,
                    "Turn a Home Assistant device OR whole room on/off by the SPOKEN name "
                    "(manager matches real entities/areas server-side and auto-learns the "
                    "alias on a fuzzy hit). Prefer this over raw HA intents for voice control: "
@@ -649,7 +128,7 @@ BUILTIN = {
                    {"spoken": {"type": "string", "description": "the spoken target, e.g. 'Gartenhaus denke rechts' or 'Licht im Gartenhaus'"},
                     "action": {"type": "string", "description": "'on' or 'off'"}},
                    ["spoken", "action"]),
-    "ha_learn_alias": (t_ha_learn_alias,
+    "ha_learn_alias": (_tools_manager.t_ha_learn_alias,
                        "Teach Home Assistant a spoken-name alias for an entity so the same "
                        "misheard wording matches natively next time (STT hears 'Decke' as "
                        "'denke'). Call it after recovering from a failed HA intent, with the "
@@ -657,7 +136,7 @@ BUILTIN = {
                        {"spoken": {"type": "string", "description": "the spoken/misheard name, e.g. 'Gartenhaus denke rechts'"},
                         "entity": {"type": "string", "description": "real entity id, e.g. 'light.gartenhaus_decke_rechts'"}},
                        ["spoken", "entity"]),
-    "notify": (t_notify,
+    "notify": (_tools_manager.t_notify,
                "Push notification to the user's devices (app system notification + "
                "web-manager bell). For important events/results when they are not in the "
                "chat. Unlike send_signal this is the app/web channel, does not ring "
@@ -665,7 +144,7 @@ BUILTIN = {
                {"title": {"type": "string", "description": "short title"},
                 "message": {"type": "string", "description": "text of the notification"}},
                ["title"]),
-    "send_signal": (t_send_signal,
+    "send_signal": (_tools_manager.t_send_signal,
                     "Send the user a Signal message — for results, findings "
                     "or questions when they are not currently in the chat. Do NOT use for the "
                     "normal reply in an ongoing conversation (that arrives anyway) "
@@ -675,43 +154,43 @@ BUILTIN = {
                     {"text": {"type": "string", "description": "message text"},
                      "to": {"type": "string", "description": "optional: number in the format +49…"}},
                     ["text"]),
-    "read_inbox": (t_read_inbox,
+    "read_inbox": (_tools_manager.t_read_inbox,
                   "Read new user messages (Signal/app/web) since the last run — "
                   "the orchestrator's inbox. Each message comes only once (watermark); "
                   "peek=true to preview without consuming.",
                   {"peek": {"type": "boolean", "description": "only look, do not consume"}}, []),
-    "list_agents": (t_list_agents,
+    "list_agents": (_tools_manager.t_list_agents,
                     "List available agent instances + capabilities (model/MCP). "
                     "For routing: choose the create_task target by capability.",
                     {}, []),
-    "recall_tasks": (t_recall_tasks,
+    "recall_tasks": (_tools_manager.t_recall_tasks,
                      "Query previously executed tasks + results (long-term memory). "
                      "Without query the most recent, with query search specifically. Use BEFORE create_task "
                      "to check whether something is already done/scheduled (no duplicates).",
                      {"query": {"type": "string", "description": "search term (empty = most recent)"},
                       "limit": {"type": "integer", "description": "max hits (default 10)"}}, []),
-    "list_tasks": (t_list_tasks,
+    "list_tasks": (_tools_manager.t_list_tasks,
                    "List RUNNING/scheduled tasks with IDs — for targeted deletion. "
                    "(recall_tasks, by contrast, is the history of completed runs.)", {}, []),
-    "delete_task": (t_delete_task,
+    "delete_task": (_tools_manager.t_delete_task,
                     "Delete a running/scheduled task by ID. Get the ID first with "
                     "list_tasks. Final.",
                     {"id": {"type": "string", "description": "task ID from list_tasks"}}, ["id"]),
-    "edit_task": (t_edit_task,
+    "edit_task": (_tools_manager.t_edit_task,
                   "Change the message and/or schedule of a task (ID from list_tasks). "
                   "schedule e.g. 'every 2h', 'daily 08:00', 'hourly'; empty = one-off.",
                   {"id": {"type": "string", "description": "task ID from list_tasks"},
                    "message": {"type": "string", "description": "new text (empty = unchanged)"},
                    "schedule": {"type": "string", "description": "new schedule (empty = one-off/unchanged)"}},
                   ["id"]),
-    "search_sessions": (t_search_sessions,
+    "search_sessions": (_tools_manager.t_search_sessions,
                         "Full-text search over earlier chats and task results (exact words, "
                         "newest and best matches first). Use memory_recall for meaning, "
                         "this for names, numbers, URLs you remember seeing.",
                         {"query": {"type": "string", "description": "words to look for"},
                          "instance": {"type": "string", "description": "optional: another instance (orchestrator only)"}},
                         ["query"]),
-    "propose_skill": (t_propose_skill,
+    "propose_skill": (_tools_manager.t_propose_skill,
                       "Propose a reusable procedure as a skill for the catalog (after a "
                       "non-trivial task that worked, or after the user corrected your approach). "
                       "The operator approves it in the Skills tab.",
@@ -719,7 +198,7 @@ BUILTIN = {
                        "description": {"type": "string", "description": "one line: what it is for"},
                        "content": {"type": "string", "description": "Markdown: purpose, when to use, exact steps and tools, pitfalls; no secrets"}},
                       ["name", "description", "content"]),
-    "list_skills": (t_list_skills,
+    "list_skills": (_tools_manager.t_list_skills,
                     "List available expert skills. Without arguments: names only. "
                     "query='…' searches names AND descriptions. Before specialized "
                     "tasks, check whether a matching skill exists.",
@@ -727,33 +206,33 @@ BUILTIN = {
                                "description": "optional: filter, e.g. 'docker' or 'security'"}},
                     []),
 
-    "load_skill": (t_load_skill, "Load an expert skill (knowledge document) into the context and follow it.",
+    "load_skill": (_tools_manager.t_load_skill, "Load an expert skill (knowledge document) into the context and follow it.",
                    {"name": {"type": "string", "description": "skill name from list_skills"}}, ["name"]),
-    "memory_store": (t_memory_store, "Store a value permanently (survives restart/instance deletion).",
+    "memory_store": (_tools_manager.t_memory_store, "Store a value permanently (survives restart/instance deletion).",
                      {"key": {"type": "string"}, "value": {"type": "string"}}, ["key", "value"]),
-    "memory_recall": (t_memory_recall, "Retrieve a stored value; without key all entries.",
+    "memory_recall": (_tools_manager.t_memory_recall, "Retrieve a stored value; without key all entries.",
                       {"key": {"type": "string"}}, []),
-    "memory_reflect": (t_memory_reflect,
+    "memory_reflect": (_tools_manager.t_memory_reflect,
                        "Ask the long-term memory a question and get a reasoned answer over everything "
                        "remembered (past conversations, notes). Use for 'what do we know about…', "
                        "'what did the user say about…', preferences and history.",
                        {"question": {"type": "string"}}, ["question"]),
-    "playbook_add": (t_playbook_add,
+    "playbook_add": (_tools_manager.t_playbook_add,
                      "Record a permanent rule/procedure — applies ALWAYS from now on. "
                      "Use this when the user tells you HOW something is to be done, states a "
                      "lasting preference or corrects you.",
                      {"rule": {"type": "string", "description": "the rule as a short, concrete sentence"}}, ["rule"]),
-    "playbooks": (t_playbooks, "Show all fixed rules (playbooks) with IDs.", {}, []),
-    "playbook_forget": (t_playbook_forget, "Remove a rule by ID (ID from playbooks).",
+    "playbooks": (_tools_manager.t_playbooks, "Show all fixed rules (playbooks) with IDs.", {}, []),
+    "playbook_forget": (_tools_manager.t_playbook_forget, "Remove a rule by ID (ID from playbooks).",
                         {"id": {"type": "string", "description": "playbook ID"}}, ["id"]),
-    "remote_ls": (t_remote_ls,
+    "remote_ls": (_tools_manager.t_remote_ls,
                   "List the folder the user has shared (lives on THEIR machine, "
                   "connected via P2P). Paths are relative to the root of the share.",
                   {"path": {"type": "string", "description": "relative, default '.'"}}, []),
-    "remote_read": (t_remote_read,
+    "remote_read": (_tools_manager.t_remote_read,
                     "Read a file from the user's shared folder (path relative to the share).",
                     {"path": {"type": "string"}}, ["path"]),
-    "remote_write": (t_remote_write,
+    "remote_write": (_tools_manager.t_remote_write,
                      "Write a file to the user's shared folder — CREATES and "
                      "OVERWRITES, missing subfolders are created automatically. Write access "
                      "is explicitly allowed: when the user wants to put, save or "
@@ -762,7 +241,7 @@ BUILTIN = {
                      {"path": {"type": "string", "description": "relative to the share, e.g. 'note.txt'"},
                       "content": {"type": "string", "description": "complete new file content"}},
                      ["path", "content"]),
-    "remote_delete": (t_remote_delete,
+    "remote_delete": (_tools_manager.t_remote_delete,
                       "Delete a file or folder in the user's shared folder. "
                       "Irreversible — there is no trash. Only delete when the user "
                       "requests it, and ask first when in doubt. A non-empty folder "
@@ -771,9 +250,9 @@ BUILTIN = {
                        "recursive": {"type": "boolean",
                                      "description": "delete the folder including its contents (default false)"}},
                       ["path"]),
-    "list_secrets": (t_list_secrets, "Show the secret names released for this agent (no values).",
+    "list_secrets": (_tools_manager.t_list_secrets, "Show the secret names released for this agent (no values).",
                      {}, []),
-    "get_secret": (t_get_secret, "Fetch a released secret (e.g. API key/token) only when needed. Never output values in replies/logs.",
+    "get_secret": (_tools_manager.t_get_secret, "Fetch a released secret (e.g. API key/token) only when needed. Never output values in replies/logs.",
                    {"name": {"type": "string"}}, ["name"]),
 }
 

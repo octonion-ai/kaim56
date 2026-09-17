@@ -128,8 +128,8 @@ class AgentLogic(unittest.TestCase):
                 raise urllib.error.HTTPError("http://x", 500, "err", {},
                     io.BytesIO(b'{"error":{"message":"Failed to parse tool call arguments as JSON"}}'))
             return FakeResp()
-        saved = (a.urllib.request.urlopen, a._mgrclient._llm_headers, a._mgrclient._llm_url)
-        a.urllib.request.urlopen = fake_urlopen
+        saved = (urllib.request.urlopen, a._mgrclient._llm_headers, a._mgrclient._llm_url)
+        urllib.request.urlopen = fake_urlopen
         a._mgrclient._llm_headers = lambda: {"Content-Type": "application/json"}
         a._mgrclient._llm_url = lambda: "http://x/v1/chat/completions"
         toks = []
@@ -138,7 +138,7 @@ class AgentLogic(unittest.TestCase):
                                    [{"type": "function", "function": {"name": "t", "parameters": {}}}],
                                    toks.append)
         finally:
-            (a.urllib.request.urlopen, a._mgrclient._llm_headers, a._mgrclient._llm_url) = saved
+            (urllib.request.urlopen, a._mgrclient._llm_headers, a._mgrclient._llm_url) = saved
         self.assertEqual(calls, ["tools", "notools"])     # first with, then without tools
         self.assertIn("ok", "".join(toks))                # text reply came through
         self.assertEqual(msg["content"], "ok")
@@ -156,15 +156,15 @@ class AgentLogic(unittest.TestCase):
         class FakeResp:
             headers = {}
             def __iter__(self): return iter(lines)
-        saved = (a.urllib.request.urlopen, a._mgrclient._llm_headers, a._mgrclient._llm_url)
-        a.urllib.request.urlopen = lambda *ar, **kw: FakeResp()
+        saved = (urllib.request.urlopen, a._mgrclient._llm_headers, a._mgrclient._llm_url)
+        urllib.request.urlopen = lambda *ar, **kw: FakeResp()
         a._mgrclient._llm_headers = lambda: {"Content-Type": "application/json"}
         a._mgrclient._llm_url = lambda: "http://x/v1/chat/completions"
         toks = []
         try:
             msg = a._llm.or_chat_stream([{"role": "user", "content": "hi"}], None, toks.append)
         finally:
-            (a.urllib.request.urlopen, a._mgrclient._llm_headers, a._mgrclient._llm_url) = saved
+            (urllib.request.urlopen, a._mgrclient._llm_headers, a._mgrclient._llm_url) = saved
         out = "".join(toks)
         self.assertIn("thinking", out)            # reasoning_content not dropped
         self.assertIn("Hello", out)               # content streamed
@@ -180,14 +180,14 @@ class AgentLogic(unittest.TestCase):
         class FakeResp:
             headers = {}
             def __iter__(self): return iter(lines)
-        saved = (a.urllib.request.urlopen, a._mgrclient._llm_headers, a._mgrclient._llm_url)
-        a.urllib.request.urlopen = lambda *ar, **kw: FakeResp()
+        saved = (urllib.request.urlopen, a._mgrclient._llm_headers, a._mgrclient._llm_url)
+        urllib.request.urlopen = lambda *ar, **kw: FakeResp()
         a._mgrclient._llm_headers = lambda: {"Content-Type": "application/json"}
         a._mgrclient._llm_url = lambda: "http://x/v1/chat/completions"
         try:
             msg = a._llm.or_chat_stream([{"role": "user", "content": "hi"}], None, lambda t: None)
         finally:
-            (a.urllib.request.urlopen, a._mgrclient._llm_headers, a._mgrclient._llm_url) = saved
+            (urllib.request.urlopen, a._mgrclient._llm_headers, a._mgrclient._llm_url) = saved
         self.assertEqual(msg["content"], "only thought")  # no None -> no _(empty reply)_
 
     def test_steps_unlimited(self):
@@ -351,18 +351,18 @@ class AgentLogic(unittest.TestCase):
         try:
             a._mgrclient._mgr = lambda base, path, payload, timeout=30: (calls.append((path, payload, timeout)),
                                                               json.dumps({"ok": True, "result": "42"}))[1]
-            self.assertEqual(a.t_spawn_subagent("count things", model="google/gemini-2.5-flash"), "42")
+            self.assertEqual(a._tools_manager.t_spawn_subagent("count things", model="google/gemini-2.5-flash"), "42")
             path, payload, timeout = calls[0]
             self.assertEqual(path, "/api/task")
             self.assertEqual(payload, {"message": "count things", "target": "ephemeral",
                                        "wait": True, "model": "google/gemini-2.5-flash"})
             self.assertGreaterEqual(timeout, 600)
             a._mgrclient._mgr = lambda *x, **k: json.dumps({"error": "target 'ephemeral' not allowed"})
-            self.assertIn("not allowed", a.t_spawn_subagent("x"))
-            self.assertIn("missing", a.t_spawn_subagent("  "))
+            self.assertIn("not allowed", a._tools_manager.t_spawn_subagent("x"))
+            self.assertIn("missing", a._tools_manager.t_spawn_subagent("  "))
             # create_task forwards the model too
             calls.clear(); a._mgrclient._mgr = lambda base, path, payload, timeout=30: (calls.append(payload), json.dumps({"id": "1", "status": "pending", "target": "ephemeral"}))[1]
-            a.t_create_task("later", model="m/x")
+            a._tools_manager.t_create_task("later", model="m/x")
             self.assertEqual(calls[0]["model"], "m/x")
         finally:
             a._mgrclient._mgr = old
@@ -543,13 +543,13 @@ class AgentLogic(unittest.TestCase):
         old = a._mgrclient._mgr_get
         try:
             a._mgrclient._mgr_get = lambda base, path, **k: catalog
-            bare = a.t_list_skills()
+            bare = a._tools_manager.t_list_skills()
             self.assertIn("docker", bare)
             self.assertNotIn("containers", bare)       # no descriptions
-            hit = a.t_list_skills(query="container")
+            hit = a._tools_manager.t_list_skills(query="container")
             self.assertIn("Docker expert", hit)        # description on demand
             self.assertNotIn("git-expert", hit)
-            miss = a.t_list_skills(query="quantum")
+            miss = a._tools_manager.t_list_skills(query="quantum")
             self.assertIn("No skill matches", miss)
         finally:
             a._mgrclient._mgr_get = old
@@ -742,14 +742,14 @@ class AgentLogic(unittest.TestCase):
         nothing; short turns, failed turns and slash commands never trigger."""
         a = self.a
         posts = []
-        old = a._llm.or_chat, a._mgrclient._mgr, a._learn.SKILL_LEARN, a._learn.SKILL_LEARN_MIN_STEPS, a._observe._turn_step[0], a.threading.Thread
+        old = a._llm.or_chat, a._mgrclient._mgr, a._learn.SKILL_LEARN, a._learn.SKILL_LEARN_MIN_STEPS, a._observe._turn_step[0], threading.Thread
 
         class SyncThread:
             def __init__(self, target=None, args=(), daemon=None): self.t, self.a = target, args
             def start(self): self.t(*self.a)
         try:
             a._mgrclient._mgr = lambda base, path, payload=None, timeout=60: posts.append((path, payload)) or "ok"
-            a.threading.Thread = SyncThread
+            threading.Thread = SyncThread
             a._learn.SKILL_LEARN, a._learn.SKILL_LEARN_MIN_STEPS = True, 3
             hist = [{"role": "system", "content": "s"}, {"role": "user", "content": "old"},
                     {"role": "assistant", "content": "old answer"},
@@ -778,7 +778,7 @@ class AgentLogic(unittest.TestCase):
             a._learn.SKILL_LEARN = False
             self.assertFalse(a._learn._maybe_learn(hist, "find jobs", "ok"))
         finally:
-            a._llm.or_chat, a._mgrclient._mgr, a._learn.SKILL_LEARN, a._learn.SKILL_LEARN_MIN_STEPS, a._observe._turn_step[0], a.threading.Thread = old
+            a._llm.or_chat, a._mgrclient._mgr, a._learn.SKILL_LEARN, a._learn.SKILL_LEARN_MIN_STEPS, a._observe._turn_step[0], threading.Thread = old
 
     # --- Tree-Chat: /branch + /back -------------------------------------------
     def test_branch_and_back(self):
@@ -842,7 +842,7 @@ class AgentLogic(unittest.TestCase):
         clear line. A 503 while the model loads is answered the same way."""
         import http.client, urllib.error
         a = self.a
-        old = a._config.LLAMA_ENDPOINT, a.urllib.request.urlopen, a._llm._retry_sleep
+        old = a._config.LLAMA_ENDPOINT, urllib.request.urlopen, a._llm._retry_sleep
         slept = []
         try:
             a._config.LLAMA_ENDPOINT = "http://10.0.0.5:8080/"
@@ -852,7 +852,7 @@ class AgentLogic(unittest.TestCase):
                                                  {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}}]}]
             def drop(req, timeout=None):
                 raise http.client.RemoteDisconnected("Remote end closed connection without response")
-            a.urllib.request.urlopen = drop
+            urllib.request.urlopen = drop
             r = a._llm.or_chat(msgs, [])
             self.assertIn("image was removed", r["content"])
             self.assertEqual(slept, [])                                              # no retry
@@ -862,13 +862,13 @@ class AgentLogic(unittest.TestCase):
             self.assertIn("probably restarting", r["content"])                      # no image any more
             def loading(req, timeout=None):
                 raise urllib.error.HTTPError(req.full_url, 503, "Service Unavailable", {}, io.BytesIO(b'{"error":{"message":"Loading model"}}'))
-            a.urllib.request.urlopen = loading
+            urllib.request.urlopen = loading
             r = a._llm.or_chat(msgs, [])
             self.assertIn("loading its model", r["content"])
             self.assertEqual(r.get("role"), "assistant")   # the error reply lands in the history: it needs a role (llama.cpp 500 "Missing 'role'")
             self.assertEqual(slept, [])
         finally:
-            a._config.LLAMA_ENDPOINT, a.urllib.request.urlopen, a._llm._retry_sleep = old
+            a._config.LLAMA_ENDPOINT, urllib.request.urlopen, a._llm._retry_sleep = old
 
     def test_local_model_empty_stream_after_image_counts_as_dropped(self):
         """The streaming variant of the crash: llama.cpp sends the 200 headers,
@@ -876,12 +876,12 @@ class AgentLogic(unittest.TestCase):
         "(empty reply)" and the image stayed in the history."""
         import io
         a = self.a
-        old = a._config.LLAMA_ENDPOINT, a.urllib.request.urlopen, a._mgrclient.report_usage
+        old = a._config.LLAMA_ENDPOINT, urllib.request.urlopen, a._mgrclient.report_usage
         reported = []
         try:
             a._config.LLAMA_ENDPOINT = "http://10.0.0.5:8080/"
             a._mgrclient.report_usage = lambda u, ms=None, ok=True, err="": reported.append((ok, err))
-            a.urllib.request.urlopen = lambda req, timeout=None: io.BytesIO(b"")     # 200, then nothing
+            urllib.request.urlopen = lambda req, timeout=None: io.BytesIO(b"")     # 200, then nothing
             msgs = [{"role": "system", "content": "S"},
                     {"role": "user", "content": [{"type": "text", "text": "was siehst du?"},
                                                  {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}}]}]
@@ -892,7 +892,7 @@ class AgentLogic(unittest.TestCase):
             self.assertEqual(reported, [(False, r["content"])])
             self.assertNotIn("image_url", json.dumps(msgs))
         finally:
-            a._config.LLAMA_ENDPOINT, a.urllib.request.urlopen, a._mgrclient.report_usage = old
+            a._config.LLAMA_ENDPOINT, urllib.request.urlopen, a._mgrclient.report_usage = old
 
     def test_spawn_subagent_passes_the_sandbox(self):
         """The tool sends tools/egress/skill as one `sandbox` object, and none
@@ -902,9 +902,9 @@ class AgentLogic(unittest.TestCase):
         old = a._mgrclient._mgr
         try:
             a._mgrclient._mgr = lambda base, path, payload=None, timeout=60: seen.append((path, payload)) or '{"result": "done"}'
-            self.assertEqual(a.t_spawn_subagent("do it"), "done")
+            self.assertEqual(a._tools_manager.t_spawn_subagent("do it"), "done")
             self.assertNotIn("sandbox", seen[-1][1])
-            a.t_spawn_subagent("do it", tools="bash,read_file", egress="none", skill="pdf-digest")
+            a._tools_manager.t_spawn_subagent("do it", tools="bash,read_file", egress="none", skill="pdf-digest")
             self.assertEqual(seen[-1][1]["sandbox"], {"tools": "bash,read_file", "egress": "none", "skill": "pdf-digest"})
             self.assertEqual(seen[-1][1]["target"], "ephemeral")
         finally:
@@ -1168,9 +1168,9 @@ class AgentLogic(unittest.TestCase):
             captured["body"] = json.loads(req.data.decode())
             return FakeResp()
 
-        orig = a.urllib.request.urlopen
+        orig = urllib.request.urlopen
         try:
-            a.urllib.request.urlopen = fake_urlopen
+            urllib.request.urlopen = fake_urlopen
             a._llm.or_chat([{"role": "user", "content": "hi"}], [])       # leere Tools
             self.assertNotIn("tools", captured["body"])
             self.assertNotIn("tool_choice", captured["body"])
@@ -1179,7 +1179,7 @@ class AgentLogic(unittest.TestCase):
             self.assertIn("tools", captured["body"])
             self.assertEqual(captured["body"]["tool_choice"], "auto")
         finally:
-            a.urllib.request.urlopen = orig
+            urllib.request.urlopen = orig
 
     # --- Key-Injection-Proxy (Keys verlassen den Host nie) -------------------
     def test_key_proxy_url_and_no_bearer(self):
@@ -1199,14 +1199,14 @@ class AgentLogic(unittest.TestCase):
             captured["headers"] = {k.lower(): v for k, v in req.header_items()}
             return FakeResp()
 
-        orig_open, orig_base = a.urllib.request.urlopen, a._mgrclient._manager_base
+        orig_open, orig_base = urllib.request.urlopen, a._mgrclient._manager_base
         old = (a._config.OR_MODEL, a._config.OR_URL, a._config.LLM_NAME, a._config.LLM_KEY_SECRET,
                a._config.LLM_BACKEND, a._config.OR_KEY)
         os.environ["KEY_PROXY"] = "1"
         a._config.OR_KEY = "sk-super-geheim"          # darf NIE im Request auftauchen
         a._config.LLM_BACKEND = "openrouter"
         try:
-            a.urllib.request.urlopen = fake_urlopen
+            urllib.request.urlopen = fake_urlopen
             a._mgrclient._manager_base = lambda: "http://172.30.0.1:8700"
             self.assertEqual(
                 a._mgrclient._llm_url(),
@@ -1224,7 +1224,7 @@ class AgentLogic(unittest.TestCase):
                 "http://172.30.0.1:8700/api/llm/orcarouter/chat/completions")
         finally:
             os.environ.pop("KEY_PROXY", None)
-            a.urllib.request.urlopen, a._mgrclient._manager_base = orig_open, orig_base
+            urllib.request.urlopen, a._mgrclient._manager_base = orig_open, orig_base
             (a._config.OR_MODEL, a._config.OR_URL, a._config.LLM_NAME, a._config.LLM_KEY_SECRET,
              a._config.LLM_BACKEND, a._config.OR_KEY) = old
 
