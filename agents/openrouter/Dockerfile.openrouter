@@ -15,7 +15,7 @@ RUN npm install -g mcp-remote && npm cache clean --force
 # JSON-RPC ueber den Manager. mcp-remote bleibt als Rueckfall fuer Manager
 # ohne /api/mcp.
 
-COPY agent.py                 /app/agent.py
+COPY agent                    /app/agent
 COPY run_agent.py             /app/run_agent.py
 COPY webterm.py               /app/webterm.py
 COPY config-openrouter.env    /app/config.env

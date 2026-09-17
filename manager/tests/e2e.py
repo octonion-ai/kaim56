@@ -34,7 +34,7 @@ import socket
 
 # --- paths to the modules under test ----------------------------------------
 FC_DIR = os.environ.get("FC_DIR", "/home/ulrich/firecracker")
-AGENT_PATH = os.environ.get("AGENT_PATH", "/home/ulrich/openrouter-agent/agent.py")
+AGENT_PATH = os.environ.get("AGENT_PATH", "/home/ulrich/openrouter-agent/agent/__init__.py")   # the agent package
 MANAGER_PATH = os.path.join(FC_DIR, "manager.py")
 HTTPD_PATH = os.path.join(FC_DIR, "mgr", "httpd.py")     # the HTTP handler class H
 MANAGER_URL = os.environ.get("MANAGER_URL", "http://127.0.0.1:8700")
@@ -46,11 +46,17 @@ if FC_DIR not in sys.path:
 
 
 def _load(name, path, env=None):
-    """Load a module from a file; optionally set os.environ first."""
+    """Load a module — or a package via its __init__.py — from a file under a
+    fresh name; optionally set os.environ first. A package gets its own copy
+    of every submodule per load, so env-dependent module state stays per test."""
     if env:
         os.environ.update(env)
-    spec = importlib.util.spec_from_file_location(name, path)
+    if os.path.basename(path) == "__init__.py":
+        spec = importlib.util.spec_from_file_location(name, path, submodule_search_locations=[os.path.dirname(path)])
+    else:
+        spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod                  # relative imports inside a package need the parent registered
     spec.loader.exec_module(mod)
     return mod
 

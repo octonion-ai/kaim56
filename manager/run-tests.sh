@@ -7,9 +7,9 @@ cd "$(dirname "$0")" || exit 1
 # the layout the installer creates; only what exists is checked.
 HOME_DIR="$(cd .. && pwd)"
 AGENT_SRCS=""
-for f in "$HOME_DIR/openrouter-agent/agent.py" "$HOME_DIR/openrouter-agent/run_agent.py" \
+for f in "$HOME_DIR/openrouter-agent/agent" "$HOME_DIR/openrouter-agent/run_agent.py" \
          "$HOME_DIR/claude-signal-firecracker/web_bridge.py" "$HOME_DIR/claude-signal-firecracker/kaim56_mcp.py"; do
-    [ -f "$f" ] && AGENT_SRCS="$AGENT_SRCS $f"
+    [ -e "$f" ] && AGENT_SRCS="$AGENT_SRCS $f"
 done
 
 # Schritt 0: Undefined-Name-Gate. Ein fehlender Import faellt erst beim
