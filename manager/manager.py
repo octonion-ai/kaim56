@@ -41,6 +41,9 @@ WEB_GUEST_PORT = 8080   # port of the web bridge in the microVM
 TERM_GUEST_PORT = 7682  # port of the webterm (browser terminal) in the microVM
 
 from mgr import paths as _paths  # noqa: E402
+from mgr import ui as _ui  # noqa: E402
+from mgr import routes as _routes  # noqa: E402
+from mgr import katfs as _katfs  # noqa: E402
 from mgr import plugins as _plugins  # noqa: E402
 from mgr import voice as _voice  # noqa: E402
 from mgr import browse as _browse  # noqa: E402
@@ -208,16 +211,11 @@ def load_instances():
 
 
 # ---- Signal (send/HITL/receive): moved out to mgr/signal.py ---------------
-from mgr.signal import (signal_send, signal_recipients, hitl_create, hitl_status,  # noqa: E402,F401
-                        hitl_resolve, _signal_receiver, _signal_inbound,
-                        SIGNAL_MAX_CHARS, SIGNAL_RATE)
 
 
 # ---- Security gateway: moved out to mgr/gateway.py -------------------------
 from mgr import gateway as _gateway  # noqa: E402
 _gateway.configure(_paths.BASE)
-from mgr.gateway import (load_gateway, save_gateway, with_gateway, gateway_on, gateway_clean, gateway_count,  # noqa: E402,F401
-                         StreamGuard, strip_image_meta, _clean_unicode)
 
 
 # ---- Chat history (sync with the app) --------------------------------------
@@ -311,9 +309,7 @@ def wait_chats(since, timeout):
 # ---- Notifications: moved out to mgr/notify.py -----------------------------
 from mgr import notify as _notify  # noqa: E402
 _notify.configure(_paths.BASE)
-from mgr.notify import (load_notifications, notify_add, notif_mark_read, notif_clear,  # noqa: E402,F401
-                        wait_notifs, NOTIF_MAX, NOTIF_RATE, _notif_sent)
-_missions.notify_add = notify_add   # injection (mgr/missions)
+_missions.notify_add = _notify.notify_add   # injection (mgr/missions)
 
 
 # ---- Inbox (watermark) — coupled to chat, stays here -----------------------
@@ -507,13 +503,7 @@ def merge_chats(incoming):
 # ---- store: SQLite history/usage/semantics + memory -> mgr/store.py -------
 from mgr import store as _store  # noqa: E402
 _store.configure(_paths.BASE)
-from mgr.store import (HISTORY_DB, MEMORY_FILE, TASKS_FILE, EMBED_URL, _hist_lock, _hist_conn,  # noqa: E402,F401
-                       usage_add, usage_summary, usage_for, usage_by_model, history_add, history_search,
-                       load_tasks, save_tasks, add_task, update_task, _next_run,
-                       _embed, sem_store, sem_search, load_memory, mem_store, mem_recall, with_tasks,
-                       turn_start, turn_end, turns_read, turn_trace, turns_prune,
-                       sessions_refresh, sessions_query)
-_missions.sem_store = sem_store   # injection (mgr/missions)
+_missions.sem_store = _store.sem_store   # injection (mgr/missions)
 
 
 TASK_TIMEOUT = int(os.environ.get("TASK_TIMEOUT", "1800"))    # worker-run tasks: 30 min
@@ -709,10 +699,10 @@ def task_target_sweep():
             t["target_warned"] = int(time.time())
             hit.append((t.get("id"), t.get("instance"), str(t.get("message", ""))[:120]))
         return bool(hit), None
-    with_tasks(mut)
+    _store.with_tasks(mut)
     for tid, inst, msg in hit:
         try:
-            notify_add("task", f"Task target unknown: {tid}",
+            _notify.notify_add("task", f"Task target unknown: {tid}",
                        f"instance '{inst}' does not exist — {msg}", link="tasks")
         except Exception as e:
             _util._wlog(f"{tid}: target-sweep notify: {e!r}")
@@ -814,7 +804,7 @@ def _mission_advance_fire(task_id):
     the mission's OWNER and (re)arm that owner's collect window. The owner is
     whichever agent planned the mission — the step itself may have run on a
     completely different instance."""
-    inst, m, st = mission_for_task(task_id)
+    inst, m, st = _missions.mission_for_task(task_id)
     if not m or not inst:
         return
     line = f"task '{task_id}' (mission '{m['id']}', {m['goal'][:80]}, step {st['n']})"
@@ -890,7 +880,7 @@ def reclaim_stuck_tasks():
                 t["status"] = "scheduled" if t.get("schedule") else "pending"
                 n += 1
         return bool(n), n
-    n = with_tasks(mut)
+    n = _store.with_tasks(mut)
     if n:
         print(f"[worker] {n} orphaned 'running' task(s) reset", flush=True)
 
@@ -912,7 +902,7 @@ def worker_claim(tasks, now, hb_idle, skipped_hb, throttled):
         if not due(t):
             continue
         if hb_idle(t):
-            t["next_run"] = _next_run(t["schedule"], now)
+            t["next_run"] = _store._next_run(t["schedule"], now)
             t["result"] = "skipped: inbox empty, no active mission"
             t["updated"] = now
             skipped_hb.append(t["id"])
@@ -965,21 +955,21 @@ def _task_worker():
                     if inbox_since(peek=True):
                         return False
                     if any(m.get("status") == "active"
-                           for lst in load_missions().values() for m in lst):
+                           for lst in _missions.load_missions().values() for m in lst):
                         return False
                 except Exception:
                     return False          # in doubt: run it
                 return True
 
             skipped_hb = []
-            t = with_tasks(lambda ts: worker_claim(ts, now, heartbeat_idle,
+            t = _store.with_tasks(lambda ts: worker_claim(ts, now, heartbeat_idle,
                                                    skipped_hb, throttled))
             for tid in skipped_hb:
                 _util._wlog(f"{tid}: heartbeat skipped (idle — no inbox, no mission)")
             for tid, tmsg in throttled:
                 _util._wlog(f"{tid}: >6 runs/h — paused for 1 h (loop protection)")
                 try:
-                    notify_add("guardrail", f"Task loop throttled: {tid}",
+                    _notify.notify_add("guardrail", f"Task loop throttled: {tid}",
                                tmsg + " — ran >6x/h, paused 1 h.", link="tasks")
                 except Exception:
                     pass
@@ -1003,12 +993,12 @@ def _task_worker():
                     tt["result"] = _res
                     if _sched:
                         tt["status"] = "scheduled"
-                        tt["next_run"] = _next_run(tt["schedule"], int(time.time()))
+                        tt["next_run"] = _store._next_run(tt["schedule"], int(time.time()))
                     else:
                         tt["status"] = "done" if _ok else "error"
                     return True, None
                 try:
-                    with_tasks(done_mut)
+                    _store.with_tasks(done_mut)
                 except Exception as e:
                     _util._wlog(f"{t['id']}: status update failed: {e!r}")
                 try:
@@ -1017,7 +1007,7 @@ def _task_worker():
                 except Exception as e:
                     _util._wlog(f"{t['id']}: chat_log_append: {e!r}")
                 try:
-                    history_add(t.get("instance", ""), t.get("message", ""), res, ok,
+                    _store.history_add(t.get("instance", ""), t.get("message", ""), res, ok,
                                 t.get("schedule", ""), origin="worker")
                 except Exception as e:
                     _util._wlog(f"{t['id']}: history_add: {e!r}")
@@ -1030,7 +1020,7 @@ def _task_worker():
                 # One push per DISTINCT failure text (not one per day).
                 if sched and not ok and res != t.get("result"):
                     try:
-                        notify_add(t.get("instance") or "task",
+                        _notify.notify_add(t.get("instance") or "task",
                                    f"Scheduled task failed: {t['id']}",
                                    (str(t.get("message", ""))[:120] + " — " + str(res))[:900],
                                    link="tasks")
@@ -1053,7 +1043,7 @@ def _task_worker():
                             t2["status"] = "scheduled" if t2.get("schedule") else "pending"
                             hit.append(t2.get("id"))
                     return bool(hit), hit
-                for tid in with_tasks(orphan_mut):
+                for tid in _store.with_tasks(orphan_mut):
                     _util._wlog(f"{tid}: running orphan reset")
             except Exception as e:
                 _util._wlog(f"orphan-watch: {e!r}")
@@ -1062,7 +1052,7 @@ def _task_worker():
             if now - _mi_sweep_ts[0] > 3600:
                 _mi_sweep_ts[0] = now
                 try:
-                    mission_ttl_sweep()
+                    _missions.mission_ttl_sweep()
                 except Exception as e:
                     _util._wlog(f"mission-ttl-sweep failed: {e!r}")
                 try:
@@ -1074,7 +1064,7 @@ def _task_worker():
                 except Exception as e:
                     _util._wlog(f"memfs-sweep failed: {e!r}")
                 try:
-                    turns_prune(30)          # traces older than the weekly digest's reach
+                    _store.turns_prune(30)          # traces older than the weekly digest's reach
                 except Exception as e:
                     _util._wlog(f"turns-prune failed: {e!r}")
             try:
@@ -1467,7 +1457,7 @@ def _mcp_endpoints(inst):
     if not names:
         return []
     out = []
-    for m in load_mcps():
+    for m in _mcp.load_mcps():
         if m.get("name") not in names:
             continue
         for scheme, host, port in re.findall(
@@ -2025,7 +2015,7 @@ def image_sweep():
     old = stale_instances()
     if old:
         try:
-            notify_add("rebuild", f"Rootfs rebuilt: {len(old)} instance(s) on the old image",
+            _notify.notify_add("rebuild", f"Rootfs rebuilt: {len(old)} instance(s) on the old image",
                        ", ".join(old) + " — restart them to pick up the new agent.",
                        link="instances")
         except Exception as e:
@@ -2182,7 +2172,7 @@ def stop(inst):
         os.remove(pf)
     teardown_tap(inst)
     teardown_mounts(inst)
-    mcp_hub_kill(inst["name"])
+    _mcp.mcp_hub_kill(inst["name"])
     # The private rootfs copy is worthless after stopping (the next start pulls
     # a fresh one) — just disk space, so remove it.
     for f in (f"{inst['name']}.rootfs.ext4", f"{inst['name']}.upper.ext4"):
@@ -2370,7 +2360,7 @@ def proposal_add(instance, name, description, content, turn="", note=""):
     items = items[-PROPOSALS_MAX:]
     save_proposals(items)
     try:
-        notify_add(instance or "skills", f"Skill proposal: {name}",
+        _notify.notify_add(instance or "skills", f"Skill proposal: {name}",
                    f"{str(description).strip()[:160]} — review in the Skills tab", link="")
     except Exception:
         pass
@@ -2400,22 +2390,16 @@ def sessions_search(query, instance=None, limit=10):
         mt = os.path.getmtime(CHATS_FILE)
     except OSError:
         mt = 0
-    sessions_refresh(load_chats(), mt)
-    return sessions_query(query, instance=instance, limit=limit)
+    _store.sessions_refresh(load_chats(), mt)
+    return _store.sessions_query(query, instance=instance, limit=limit)
 
 
 # ---- Playbooks + prompt templates: moved out to mgr/rules.py ---------------
 from mgr import rules as _rules  # noqa: E402
 _rules.configure(_paths.BASE)
-from mgr.rules import (load_playbooks, pb_list, pb_add, pb_remove, PB_MAX,  # noqa: E402,F401
-                       load_prompts, prompt_upsert, prompt_delete, PROMPTS_MAX)
 
 
 # ---- Missions: moved out to mgr/missions.py (imported early, see above) ----
-from mgr.missions import (load_missions, mission_list, mission_start,  # noqa: E402,F401
-                          mission_update, mission_finish, mission_admin, mission_delete, mission_edit,
-                          mission_ttl_sweep, mission_for_task, mission_owner,
-                          MISSION_MAX_ACTIVE, MISSION_MAX_STEPS, MISSION_TTL_DAYS)
 
 
 # ---- Secrets broker (on-demand, allowlist per template/instance) -----------
@@ -2599,20 +2583,12 @@ def save_secret_policy(pol):
 
 
 # ---- MCP catalog + hub: moved out to mgr/mcp.py ----------------------------
-from mgr.mcp import (MCP_HUB, MCP_CATALOG_FILE, load_mcps, save_mcps, upsert_mcp,  # noqa: E402,F401
-                     delete_mcp, mcp_required_secrets, mcp_hub_call, mcp_hub_kill,
-                     build_mcp_config)
 
 
 # ---- katfs: moved out to mgr/katfs.py --------------------------------------
-from mgr.katfs import (KATFS_HOST, KATFS_PORT, KATFS_BASE, KATFS_MAX_WRITE,  # noqa: E402,F401
-                       katfs_share_for, katfs_proxy_fs, katfs_zip, katfs_status,
-                       KATFS_ZIP_MAX_FILES, KATFS_ZIP_MAX_BYTES)
 
 from mgr import irohgw as _irohgw  # noqa: E402
 _irohgw.configure(_paths.BASE)
-from mgr.irohgw import (status as irohgw_status,  # noqa: E402,F401
-                        allow_add as irohgw_allow_add, allow_remove as irohgw_allow_remove)
 
 def hindsight_retains(inst_name):
     """A-1: whether the second memory (Hindsight) keeps this instance's turns.
@@ -2661,7 +2637,6 @@ _mcp.configure(_paths.BASE, load_instances, allowed_secret_keys, secret_store)
 
 # ---- web -------------------------------------------------------------------
 # PAGE (HTML/JS of the manager UI) now lives in mgr/ui.py.
-from mgr.ui import PAGE  # noqa: E402
 
 # ---- Brand ------------------------------------------------------------------
 # logo.svg is kept as a file (favicon, shared elsewhere). For the header mark
@@ -2722,7 +2697,7 @@ def _fmt_cost(c):
 
 def render():
     rows = ""
-    usage = usage_summary()
+    usage = _store.usage_summary()
     for inst in load_instances():
         n = net_of(inst)
         run = is_running(inst)
@@ -2821,7 +2796,7 @@ def render():
                    for t in load_templates())
     empty = ("<tr><td colspan=5 class=text-muted style='padding:18px 8px'>"
              "no instances yet — create one below</td></tr>")
-    return (PAGE.replace("__LOGO__", LOGO_INLINE)
+    return (_ui.PAGE.replace("__LOGO__", LOGO_INLINE)
                 .replace("__ROWS__", rows or empty)
                 .replace("__TPLS__", tpls or "<option>no templates</option>")
                 .replace("__TPLJSON__", _util.js_json(load_templates()))
@@ -2960,7 +2935,7 @@ def _guard_check(inst):
         budget = GUARD_BUDGET_TOKENS
     if budget > 0:
         midnight = int(time.mktime(time.localtime()[:3] + (0, 0, 0, 0, 0, -1)))
-        u = usage_for(name, midnight)
+        u = _store.usage_for(name, midnight)
         used = (u.get("in") or 0) + (u.get("out") or 0)
         if used >= budget:
             with _guard_lock:
@@ -2970,7 +2945,7 @@ def _guard_check(inst):
                     _guard_notified[name] = now
             if fire:
                 try:
-                    notify_add("guardrail", f"Budget reached: {name}",
+                    _notify.notify_add("guardrail", f"Budget reached: {name}",
                                f"{used:,} tokens today (limit {budget:,}). LLM calls "
                                f"pause until midnight. Override: BUDGET_TOKENS in the "
                                f"instance config.", link="tasks")
@@ -2986,7 +2961,7 @@ def _guard_check(inst):
 # Kette. Eine Route liefert (body, content_type) und ueberlaesst das Senden dem
 # Verteiler — oder None, wenn sie selbst geantwortet hat.
 from mgr import saddler as _saddler_mod  # noqa: E402
-_saddler_mod.configure(_audit.AUDIT_DIR, HISTORY_DB)
+_saddler_mod.configure(_audit.AUDIT_DIR, _store.HISTORY_DB)
 
 from mgr import websearch as _websearch_mod  # noqa: E402
 _websearch_mod.configure(lambda key: (_settings.load_settings().get(key) or ""))
@@ -2996,7 +2971,7 @@ def _ha_ws_target():
     """(host, port) des Home-Assistant-WebSocket aus dem MCP-Katalog. Der
     'homeassistant'-Eintrag traegt die URL in args[0]; wir leiten daraus die
     WS-Adresse ab (kein zusaetzlicher Config-Ort)."""
-    for m in load_mcps():
+    for m in _mcp.load_mcps():
         if m.get("name") == "homeassistant":
             for a in m.get("args", []):
                 a = str(a)
@@ -3010,8 +2985,7 @@ def _ha_ws_target():
 from mgr import haalias as _haalias  # noqa: E402
 _haalias.configure(_ha_ws_target, lambda: secret_store().get("HA_TOKEN"))
 
-from mgr.routes import Router  # noqa: E402
-ROUTER = Router()
+ROUTER = _routes.Router()
 
 
 @ROUTER.get("/api/instances", admin=True)
@@ -3066,7 +3040,7 @@ def session_info(inst):
         except OSError:
             pass
     try:
-        with _hist_lock, _hist_conn() as c:
+        with _store._hist_lock, _store._hist_conn() as c:
             sem = c.execute("SELECT COUNT(*) FROM semantic_memory WHERE instance=?", (name,)).fetchone()[0]
     except Exception:
         sem = 0
@@ -3075,12 +3049,12 @@ def session_info(inst):
                             + (" · hindsight" if _hindsight.enabled() else ""), "ok": True},
         {"name": "Web search", "state": "reachable" if (_settings.load_settings().get("BRAVE_API_KEY") or "") else "DuckDuckGo fallback", "ok": True},
         {"name": "Skills", "state": f"{len(load_skills())} in catalog", "ok": True},
-        {"name": "Traces", "state": f"{len(turns_read(name, limit=50))} recent turns", "ok": True},
+        {"name": "Traces", "state": f"{len(_store.turns_read(name, limit=50))} recent turns", "ok": True},
     ]
     allowed = allowed_secret_keys(inst)
     mcps = []
     for n in [x for x in (cfg.get("MCP_SERVERS", "") or "").split(",") if x]:
-        missing = sorted(mcp_required_secrets([n]) - allowed)
+        missing = sorted(_mcp.mcp_required_secrets([n]) - allowed)
         mcps.append({"name": n, "ready": not missing, "missing": missing})
     return {"name": name, "template": tpl, "runtime": TEMPLATE_RUNTIME.get(tpl, tpl or "agent"),
             "running": running, "uptime": int(time.time() - started) if started else 0,
@@ -3139,12 +3113,12 @@ def _rt_stt_audio(h):
 
 @ROUTER.get("/api/tasks", admin=True)
 def _rt_tasks(h):
-    return json.dumps(load_tasks()).encode(), "application/json"
+    return json.dumps(_store.load_tasks()).encode(), "application/json"
 
 
 @ROUTER.get("/api/usage", admin=True)
 def _rt_usage(h):
-    return json.dumps(usage_summary()).encode(), "application/json"
+    return json.dumps(_store.usage_summary()).encode(), "application/json"
 
 
 @ROUTER.get("/api/usage-by-model", admin=True)
@@ -3153,7 +3127,7 @@ def _rt_usage_by_model(h):
         since = int(_qs(h).get("since", ["0"])[0] or 0)
     except ValueError:
         since = 0
-    return h._json({"rows": usage_by_model(since)})
+    return h._json({"rows": _store.usage_by_model(since)})
 
 
 @ROUTER.get("/api/version", admin=True)
@@ -3166,8 +3140,8 @@ def _rt_version(h):
 
 @ROUTER.get("/api/gateway", admin=True)
 def _rt_gateway(h):
-    g = load_gateway()
-    g["available"] = _clean_unicode is not None
+    g = _gateway.load_gateway()
+    g["available"] = _gateway._clean_unicode is not None
     return json.dumps(g).encode(), "application/json"
 
 
@@ -3259,7 +3233,7 @@ def _rt_extract(h):
 
 @ROUTER.get("/api/prompts")
 def _rt_prompts(h):
-    return (json.dumps({"prompts": load_prompts()}, ensure_ascii=False).encode(),
+    return (json.dumps({"prompts": _rules.load_prompts()}, ensure_ascii=False).encode(),
             "application/json")
 
 
@@ -3270,7 +3244,7 @@ def _rt_resources(h):
 
 @ROUTER.get("/api/iroh")
 def _rt_iroh_status(h):
-    return json.dumps(irohgw_status()).encode(), "application/json"
+    return json.dumps(_irohgw.status()).encode(), "application/json"
 
 
 @ROUTER.get("/api/voice-health")
@@ -3406,12 +3380,12 @@ class H(BaseHTTPRequestHandler):
 
         chat_id = body.get("chat")
         msg, img = body.get("message", ""), body.get("image")
-        if gateway_on(chat_id):
-            msg = gateway_clean(msg, chat_id, "in")
+        if _gateway.gateway_on(chat_id):
+            msg = _gateway.gateway_clean(msg, chat_id, "in")
             if img:
-                img, k = strip_image_meta(img)
-                gateway_count(chat_id, "img", k)
-            guard = StreamGuard(chat_id)
+                img, k = _gateway.strip_image_meta(img)
+                _gateway.gateway_count(chat_id, "img", k)
+            guard = _gateway.StreamGuard(chat_id)
             raw_emit, emit = emit, lambda t: raw_emit(guard.feed(t))
         else:
             guard = None
@@ -3551,7 +3525,7 @@ class H(BaseHTTPRequestHandler):
         key = re.sub(r"[^A-Za-z0-9._-]", "",
                      urllib.parse.parse_qs(qs).get("key", [""])[0])[:200]
         try:
-            with urllib.request.urlopen(KATFS_BASE + rest, timeout=10) as r:
+            with urllib.request.urlopen(_katfs.KATFS_BASE + rest, timeout=10) as r:
                 body = r.read()
                 ct = r.headers.get("Content-Type", "application/octet-stream")
             if key and ct.startswith("text/html"):
@@ -3563,7 +3537,7 @@ class H(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
             self.wfile.write(f"<h3>katfs node not reachable</h3>"
-                             f"<p>{KATFS_BASE} — {e}</p>".encode())
+                             f"<p>{_katfs.KATFS_BASE} — {e}</p>".encode())
             return
         self.send_response(200)
         self.send_header("Content-Type", ct)
@@ -3604,12 +3578,12 @@ class H(BaseHTTPRequestHandler):
                 b = None
             if isinstance(b, dict):
                 chat_id = b.pop("chat", None)      # the guest doesn't know it, stays here
-                if gateway_on(chat_id):
-                    b["message"] = gateway_clean(b.get("message", ""), chat_id, "in")
+                if _gateway.gateway_on(chat_id):
+                    b["message"] = _gateway.gateway_clean(b.get("message", ""), chat_id, "in")
                     if b.get("image"):
-                        b["image"], k = strip_image_meta(b["image"])
-                        gateway_count(chat_id, "img", k)
-                    guard = StreamGuard(chat_id)
+                        b["image"], k = _gateway.strip_image_meta(b["image"])
+                        _gateway.gateway_count(chat_id, "img", k)
+                    guard = _gateway.StreamGuard(chat_id)
                 if chat_id is not None:
                     data = json.dumps(b).encode()
 
@@ -3633,7 +3607,7 @@ class H(BaseHTTPRequestHandler):
                 except (ValueError, AttributeError):
                     reply = body.decode("utf-8", "replace")
                 if guard is not None:
-                    reply = gateway_clean(reply, guard.chat_id, "out")
+                    reply = _gateway.gateway_clean(reply, guard.chat_id, "out")
                 out = reply.encode("utf-8")
                 self.send_response(r.status)
                 self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -3775,7 +3749,7 @@ class H(BaseHTTPRequestHandler):
             # logic for 429/5xx and shows 4xx bodies as an error message.
             data = e.read()
             if ginst is not None:            # a failed LLM span, with the reason
-                usage_add(ginst["name"], backend, 0, 0, 0, ok=False,
+                _store.usage_add(ginst["name"], backend, 0, 0, 0, ok=False,
                           err=f"HTTP {e.code}: {data[:300].decode('utf-8', 'replace')}",
                           ms=int((time.monotonic() - _t0) * 1000), **span)
             self.send_response(e.code)
@@ -3915,7 +3889,7 @@ def _proxy_usage(inst, backend, raw, ms=None, turn="", step=None):
         j = json.loads(raw)
         u = j.get("usage") or {}
         if isinstance(u, dict) and (u.get("prompt_tokens") or u.get("completion_tokens")):
-            usage_add(inst["name"], j.get("model") or backend, u.get("prompt_tokens"),
+            _store.usage_add(inst["name"], j.get("model") or backend, u.get("prompt_tokens"),
                       u.get("completion_tokens"), u.get("cost"), turn=turn, ms=ms, step=step)
     except (ValueError, AttributeError, TypeError):
         pass
@@ -4044,8 +4018,8 @@ def _rt_mcp_config(h):
     if inst is None:
         return h._json({"error": "guests only"}, 403)
     names = [n for n in (inst.get("config", {}).get("MCP_SERVERS", "") or "").split(",") if n]
-    blob = build_mcp_config(names, allowed=set()) if names else ""
-    missing = sorted(mcp_required_secrets(names) - allowed_secret_keys(inst))
+    blob = _mcp.build_mcp_config(names, allowed=set()) if names else ""
+    missing = sorted(_mcp.mcp_required_secrets(names) - allowed_secret_keys(inst))
     data = json.loads(blob) if blob else {"mcpServers": {}}
     if missing:
         data["unresolved"] = missing
@@ -4062,7 +4036,7 @@ def _rt_mcp_call(h):
         inst = next((i for i in load_instances() if i["name"] == b["instance"]), None)
     if inst is None:
         return h._json({"error": "unknown caller"}, 403)
-    st, out = mcp_hub_call(inst, str(b.get("server") or ""), b.get("payload") or {})
+    st, out = _mcp.mcp_hub_call(inst, str(b.get("server") or ""), b.get("payload") or {})
     if (b.get("payload") or {}).get("method", "") == "tools/call":
         try:
             _audit.audit_append(inst["name"], "mcp:" + str(b.get("server")),
@@ -4119,16 +4093,16 @@ def _rt_missions(h):
     # Guest: only its OWN missions. Admin: ?instance= or all.
     g = h._guest()
     if g is not None:
-        return h._json({"missions": mission_list(g["name"])})
+        return h._json({"missions": _missions.mission_list(g["name"])})
     inst = _qs(h).get("instance", [""])[0]
-    return h._json({"missions": mission_list(inst)} if inst else {"by_instance": load_missions()})
+    return h._json({"missions": _missions.mission_list(inst)} if inst else {"by_instance": _missions.load_missions()})
 
 
 @ROUTER.get("/api/playbooks")
 def _rt_playbooks(h):
     g = h._guest()
     inst = g["name"] if g else _qs(h).get("instance", [""])[0]
-    return h._json({"playbooks": pb_list(inst)})
+    return h._json({"playbooks": _rules.pb_list(inst)})
 
 
 @ROUTER.get("/api/tasks-open")
@@ -4139,7 +4113,7 @@ def _rt_tasks_open(h):
     rows = [{"id": t.get("id"), "instance": t.get("instance"),
              "schedule": t.get("schedule", ""), "status": t.get("status", ""),
              "next_run": t.get("next_run", 0), "message": str(t.get("message", ""))[:200]}
-            for t in load_tasks()]
+            for t in _store.load_tasks()]
     return h._json({"tasks": rows})
 
 
@@ -4149,7 +4123,7 @@ def _rt_history(h):
     q = _qs(h)
     guest = h._guest()
     scope = guest["name"] if guest is not None and guest["name"] != ORCH_INSTANCE else None
-    return h._json({"rows": history_search(q.get("q", [""])[0], q.get("limit", ["20"])[0],
+    return h._json({"rows": _store.history_search(q.get("q", [""])[0], q.get("limit", ["20"])[0],
                                            instance=scope)})
 
 
@@ -4157,7 +4131,7 @@ def _rt_history(h):
 def _rt_hitl_status(h):
     hid = _tail(h, "/api/hitl/")[0].strip()
     guest = h._guest()
-    return h._json({"status": hitl_status(hid, guest["name"] if guest else None)})
+    return h._json({"status": _signal_mod.hitl_status(hid, guest["name"] if guest else None)})
 
 
 @ROUTER.get("/api/memory/", prefix=True)
@@ -4170,8 +4144,8 @@ def _rt_memory_get(h):
     guest = h._guest()
     inst = guest["name"] if guest else seg[0]
     if len(seg) >= 2 and seg[1]:
-        return h._json({"value": mem_recall(inst, seg[1])})
-    return h._json(mem_recall(inst))
+        return h._json({"value": _store.mem_recall(inst, seg[1])})
+    return h._json(_store.mem_recall(inst))
 
 
 @ROUTER.post("/api/memory/", prefix=True)
@@ -4180,7 +4154,7 @@ def _rt_memory_post(h):
     guest = h._guest()
     target = guest["name"] if guest else _tail(h, "/api/memory/")[0]
     key, value = b.get("key", ""), b.get("value")   # null = delete
-    msg = mem_store(target, key, value)
+    msg = _store.mem_store(target, key, value)
     if guest or any(i.get("name") == target for i in load_instances()):
         try:                                            # the readable mirror in /memory —
             _memfs.note_write(target, key, value)       # for real instances only, no folder per typo
@@ -4188,7 +4162,7 @@ def _rt_memory_post(h):
         except Exception as e:
             print(f"[quiet] memfs note failed: {e!r}", flush=True)
     # Also store semantically; if the embedder fails the flat memory stays.
-    sem = sem_store(target, value, key) if value is not None else False
+    sem = _store.sem_store(target, value, key) if value is not None else False
     if value is not None:
         if hindsight_retains(target):
             _hindsight.retain_async(target, f"{key}: {value}", ("note",))  # explicit note -> second memory
@@ -4201,7 +4175,7 @@ def _rt_memory_search(h):
     b = h._body()
     guest = h._guest()
     target = guest["name"] if guest else (b.get("instance") or "")
-    hits = sem_search(target, b.get("query", ""), b.get("k", 5)) if target else []
+    hits = _store.sem_search(target, b.get("query", ""), b.get("k", 5)) if target else []
     if target and _hindsight.enabled():
         seen = {x["text"] for x in hits}
         hits += [x for x in _hindsight.recall(target, b.get("query", ""), b.get("k", 5)) if x["text"] not in seen]
@@ -4251,9 +4225,9 @@ def _rt_task_create_guest(h):
         sandbox = {"cfg": scfg, "internet": sinternet}
     if body.get("wait") and not schedule:
         ok, res = _run_task_now(target, message, model, sandbox=sandbox)
-        history_add(target, message, res, ok, origin=inst["name"])
+        _store.history_add(target, message, res, ok, origin=inst["name"])
         return h._json({"ok": ok, "result": res})
-    t = add_task(target, message, schedule, model=model, sandbox=sandbox)
+    t = _store.add_task(target, message, schedule, model=model, sandbox=sandbox)
     return h._json({"id": t["id"], "status": t["status"], "target": target})
 
 
@@ -4267,7 +4241,7 @@ def _rt_task_edit(h):
     if not _orchestrator_or_admin(h):
         return h._json({"error": "orchestrator only"}, 403)
     b = h._body()
-    return h._json({"result": update_task(str(b.get("id") or ""), b.get("message"), b.get("schedule"))})
+    return h._json({"result": _store.update_task(str(b.get("id") or ""), b.get("message"), b.get("schedule"))})
 
 
 @ROUTER.post("/api/task-delete")
@@ -4281,7 +4255,7 @@ def _rt_task_delete(h):
         gone = len(tasks) - len(keep)
         tasks[:] = keep
         return bool(gone), gone
-    return h._json({"deleted": with_tasks(del_mut), "id": tid})
+    return h._json({"deleted": _store.with_tasks(del_mut), "id": tid})
 
 
 @ROUTER.post("/api/playbook-add")
@@ -4291,9 +4265,9 @@ def _rt_playbook_edit(h):
     g = h._guest()
     inst = g["name"] if g else (b.get("instance") or "")
     if h.path.split("?", 1)[0].endswith("add"):
-        r = pb_add(inst, b.get("text") or b.get("rule") or "")
+        r = _rules.pb_add(inst, b.get("text") or b.get("rule") or "")
         return h._json({"id": r, "added": bool(r and r != "exists"), "note": r})
-    return h._json({"removed": pb_remove(inst, b.get("id") or "")})
+    return h._json({"removed": _rules.pb_remove(inst, b.get("id") or "")})
 
 
 @ROUTER.post("/api/mission-start")
@@ -4309,14 +4283,14 @@ def _rt_mission_write(h):
     b = h._body()
     p = h.path.split("?", 1)[0]
     if p.endswith("start"):
-        mid, note = mission_start(inst, b.get("goal", ""), b.get("steps") or [])
+        mid, note = _missions.mission_start(inst, b.get("goal", ""), b.get("steps") or [])
         return h._json({"id": mid, "note": note})
     if p.endswith("update"):
-        return h._json({"msg": mission_update(inst, b.get("id", ""), step=b.get("step"),
+        return h._json({"msg": _missions.mission_update(inst, b.get("id", ""), step=b.get("step"),
                                               status=b.get("status"), result=b.get("result", ""),
                                               task_id=b.get("task_id", ""), add_step=b.get("add_step", ""),
                                               note=b.get("note", ""), target=b.get("target", ""))})
-    return h._json({"msg": mission_finish(inst, b.get("id", ""), summary=b.get("summary", ""),
+    return h._json({"msg": _missions.mission_finish(inst, b.get("id", ""), summary=b.get("summary", ""),
                                           failed=bool(b.get("failed")))})
 
 
@@ -4327,12 +4301,12 @@ def _rt_mission_admin(h):
     b = h._body()
     action = b.get("action", "")
     if action == "delete":
-        msg = mission_delete(b.get("instance", ""), b.get("id", ""))
+        msg = _missions.mission_delete(b.get("instance", ""), b.get("id", ""))
     elif action == "edit":
-        msg = mission_edit(b.get("instance", ""), b.get("id", ""), goal=b.get("goal"),
+        msg = _missions.mission_edit(b.get("instance", ""), b.get("id", ""), goal=b.get("goal"),
                            steps=b.get("steps"), status=b.get("status"))
     else:
-        msg = mission_admin(b.get("instance", ""), b.get("id", ""), action)
+        msg = _missions.mission_admin(b.get("instance", ""), b.get("id", ""), action)
     return h._json({"msg": msg})
 
 
@@ -4357,7 +4331,7 @@ def _rt_usage_report(h):
     inst = h._guest()
     body = h._body()
     if inst is not None and usage_report_accepted(inst, body):
-        usage_add(inst["name"], body.get("model", ""), body.get("prompt_tokens"),
+        _store.usage_add(inst["name"], body.get("model", ""), body.get("prompt_tokens"),
                   body.get("completion_tokens"), body.get("cost"),
                   turn=body.get("turn", ""), ms=body.get("ms"), step=body.get("step"),
                   ok=body.get("ok", True), err=body.get("err", ""))
@@ -4377,9 +4351,9 @@ def _rt_trace(h):
     turn = str(body.get("turn") or "")[:16]
     if turn:
         if body.get("event") == "start":
-            turn_start(inst["name"], turn, body.get("kind") or "chat")
+            _store.turn_start(inst["name"], turn, body.get("kind") or "chat")
         elif body.get("event") == "end":
-            turn_end(inst["name"], turn, ms=body.get("ms"), steps=body.get("steps"),
+            _store.turn_end(inst["name"], turn, ms=body.get("ms"), steps=body.get("steps"),
                      outcome=body.get("outcome") or "ok", kind=body.get("kind") or "chat")
     h.send_response(204); h.end_headers()
 
@@ -4397,8 +4371,8 @@ def _rt_trace_read(h):
             limit = max(1, min(int(q.get("limit", ["50"])[0]), 500))
         except ValueError:
             limit = 50
-        return h._json({"instance": nm, "turns": turns_read(nm, limit=limit)})
-    t = turn_trace(nm, turn)
+        return h._json({"instance": nm, "turns": _store.turns_read(nm, limit=limit)})
+    t = _store.turn_trace(nm, turn)
     # audit_read is newest-first; the file order is the call order (ts has
     # only seconds, so a stable sort on ts alone would swap calls of one second)
     tools = [e for e in reversed(_audit.audit_read(nm, limit=_audit.AUDIT_MAX_LINES)) if e.get("turn") == turn]
@@ -4428,7 +4402,7 @@ def _rt_notify(h):
         return h._json({"error": "notify not allowed for this instance"}, 403)
     nm = inst["name"] if inst else "admin"
     text = body.get("body") or body.get("message", "")
-    nid, note = notify_add(nm, body.get("title", ""), text, link=("chat:" + nm) if inst else "")
+    nid, note = _notify.notify_add(nm, body.get("title", ""), text, link=("chat:" + nm) if inst else "")
     if nid and inst:
         # The click on a notification lands in the instance's task chat — so
         # the notification's own text goes there too. Until now a report an
@@ -4451,7 +4425,7 @@ def _rt_notify(h):
 @ROUTER.post("/api/notifications/read", admin=True)
 def _rt_notifications_read(h):
     body = h._body()
-    n = notif_clear() if body.get("clear") else notif_mark_read(body.get("id"), bool(body.get("all")))
+    n = _notify.notif_clear() if body.get("clear") else _notify.notif_mark_read(body.get("id"), bool(body.get("all")))
     return h._json({"marked": n})
 
 
@@ -4459,7 +4433,7 @@ def _rt_notifications_read(h):
 def _rt_hitl_create(h):
     body = h._body()
     inst = h._guest()
-    hid = hitl_create(inst["name"] if inst else "admin", str(body.get("tool", ""))[:40],
+    hid = _signal_mod.hitl_create(inst["name"] if inst else "admin", str(body.get("tool", ""))[:40],
                       str(body.get("target", ""))[:200])
     return h._json({"id": hid})
 
@@ -4472,7 +4446,7 @@ def _rt_signal_send(h):
     inst = h._guest()
     if inst is not None and not tool_allowed(inst, "send_signal"):
         return h._json({"ok": False, "note": "send_signal not allowed for this instance"}, 403)
-    ok, note = signal_send(body.get("text") or body.get("message"), body.get("to"))
+    ok, note = _signal_mod.signal_send(body.get("text") or body.get("message"), body.get("to"))
     try:
         _audit.audit_append(inst["name"] if inst else "admin", "send_signal", (body.get("to") or "default"), ok)
     except Exception:
@@ -4556,7 +4530,7 @@ def _rt_voice(h):
 # ---- katfs (guest: own share only; admin: browser) -------------------------
 def _katfs_answer(h, op, share, path, *extra):
     try:
-        st, ct, data = katfs_proxy_fs(op, share, path, *extra)
+        st, ct, data = _katfs.katfs_proxy_fs(op, share, path, *extra)
     except urllib.error.HTTPError as e:
         st, ct, data = e.code, "application/json", e.read()
     except Exception as e:
@@ -4571,7 +4545,7 @@ def _rt_katfs_guest_fs(h):
     if inst is None:
         return h._json({"error": "guests only"}, 403)
     op = "ls" if h.path.split("?", 1)[0].endswith("/ls") else "read"
-    st, ct, data = _katfs_answer(h, op, katfs_share_for(inst), _qs(h).get("path", ["."])[0])
+    st, ct, data = _katfs_answer(h, op, _katfs.katfs_share_for(inst), _qs(h).get("path", ["."])[0])
     h._send(data, ct, st)
 
 
@@ -4582,10 +4556,10 @@ def _rt_katfs_guest_write(h):
     if inst is None:
         return h._json({"error": "guests only"}, 403)
     q = _qs(h)
-    path, share = q.get("path", [""])[0], katfs_share_for(inst)
+    path, share = q.get("path", [""])[0], _katfs.katfs_share_for(inst)
     ln = int(h.headers.get("Content-Length", 0) or 0)
     if h.path.split("?", 1)[0].endswith("/write"):
-        if ln > KATFS_MAX_WRITE:
+        if ln > _katfs.KATFS_MAX_WRITE:
             return h._json({"error": "too large"}, 413)
         st, ct, data = _katfs_answer(h, "write", share, path, False, h.rfile.read(ln) if ln else b"")
     else:
@@ -4600,7 +4574,7 @@ def _rt_katfs_zip(h):
     q = _qs(h)
     root, share = q.get("path", ["."])[0], q.get("share", [""])[0]
     try:
-        data, stats = katfs_zip(share, root)
+        data, stats = _katfs.katfs_zip(share, root)
     except Exception as e:
         return h._json({"error": str(e)}, 502)
     leaf = os.path.basename(root.rstrip("/")) if root not in (".", "") else "katfs"
@@ -4634,7 +4608,7 @@ def _rt_katfs_browse(h):
 
 @ROUTER.get("/api/katfs/status", admin=True)
 def _rt_katfs_status(h):
-    return h._json(katfs_status())
+    return h._json(_katfs.katfs_status())
 
 
 @ROUTER.get("/api/browse", admin=True)
@@ -4651,7 +4625,7 @@ def _rt_usage_for(h):
         since = int(_qs(h).get("since", ["0"])[0] or 0)
     except ValueError:
         since = 0
-    return h._json(usage_for(nm, since))
+    return h._json(_store.usage_for(nm, since))
 
 
 @ROUTER.get("/api/policy", admin=True)
@@ -4720,7 +4694,7 @@ def _rt_secret_policy(h):
 
 @ROUTER.get("/api/mcps", admin=True)
 def _rt_mcps(h):
-    return h._json(load_mcps())
+    return h._json(_mcp.load_mcps())
 
 
 @ROUTER.get("/api/openrouter-models", admin=True)
@@ -4750,10 +4724,10 @@ def _rt_chats(h):
 def _rt_notifications(h):
     q = _qs(h)
     if "since" in q or "wait" in q:
-        rev, notifs = wait_notifs(*_since_wait(q))
-        unread = sum(1 for n in load_notifications() if not n.get("read"))
+        rev, notifs = _notify.wait_notifs(*_since_wait(q))
+        unread = sum(1 for n in _notify.load_notifications() if not n.get("read"))
         return h._json({"rev": rev, "notifications": notifs, "unread": unread})
-    lst = load_notifications()
+    lst = _notify.load_notifications()
     return h._json({"notifications": lst, "unread": sum(1 for n in lst if not n.get("read"))})
 
 
@@ -4763,18 +4737,18 @@ def _rt_iroh(h):
     b = h._body()
     act = b.get("action")
     if act == "add":
-        ok, msg = irohgw_allow_add(b.get("id", ""), b.get("label", ""))
+        ok, msg = _irohgw.allow_add(b.get("id", ""), b.get("label", ""))
     elif act == "remove":
-        ok, msg = irohgw_allow_remove(b.get("id", ""))
+        ok, msg = _irohgw.allow_remove(b.get("id", ""))
     else:
         ok, msg = False, "unknown action"
-    return h._json({"ok": ok, "msg": msg, **irohgw_status()}, 200 if ok else 400)
+    return h._json({"ok": ok, "msg": msg, **_irohgw.status()}, 200 if ok else 400)
 
 
 @ROUTER.post("/api/prompts", admin=True)
 def _rt_prompts(h):
     b = h._body()
-    msg = prompt_delete(b.get("name", "")) if b.get("delete") else prompt_upsert(b.get("name", ""), b.get("text", ""))
+    msg = _rules.prompt_delete(b.get("name", "")) if b.get("delete") else _rules.prompt_upsert(b.get("name", ""), b.get("text", ""))
     return h._json({"msg": msg})
 
 
@@ -4837,7 +4811,7 @@ def _rt_gateway_toggle(h):
             d["chats"][_cid] = True
         else:
             d["chats"].pop(_cid, None)
-    with_gateway(gw_mut)
+    _gateway.with_gateway(gw_mut)
     return f"gateway {'on' if b.get('on') else 'off'} for {cid}"
 
 
@@ -4864,7 +4838,7 @@ def _rt_tasks_create(h):
         return "instance/message missing"
     if terr:
         return terr
-    t = add_task(target, b.get("message", ""), b.get("schedule", ""))
+    t = _store.add_task(target, b.get("message", ""), b.get("schedule", ""))
     return f"task {t['id']} created ({t['status']})"
 
 
@@ -4875,12 +4849,12 @@ def _rt_tasks_admin(h):
         return "unknown"
     tid, action = parts[2], parts[3]
     if action == "delete":
-        with_tasks(lambda ts, _tid=tid: (True, ts.__setitem__(slice(None), [x for x in ts if x["id"] != _tid])))
+        _store.with_tasks(lambda ts, _tid=tid: (True, ts.__setitem__(slice(None), [x for x in ts if x["id"] != _tid])))
         return f"task {tid} deleted"
     if action == "update":
         b = h._body()
         inst_new, terr = (resolve_task_target(b.get("instance")) if b.get("instance") else (None, ""))
-        return terr or update_task(tid, b.get("message"), b.get("schedule"), instance=inst_new)
+        return terr or _store.update_task(tid, b.get("message"), b.get("schedule"), instance=inst_new)
     if action == "run":
         return run_task_now(tid)
     return "unknown"
@@ -4906,7 +4880,7 @@ def run_task_now(tid):
         t.pop("target_warned", None)
         out["msg"] = f"task {tid} queued — runs within a minute"
         return True, None
-    with_tasks(mut)
+    _store.with_tasks(mut)
     return out["msg"]
 
 
@@ -4918,14 +4892,14 @@ def _rt_secret_policy_save(h):
 @_msg_route("POST", "/api/mcps")
 def _rt_mcps_upsert(h):
     b = h._body()
-    return upsert_mcp(b.get("name", ""), b.get("description", ""), b.get("command", ""), b.get("args", []), b.get("env"))
+    return _mcp.upsert_mcp(b.get("name", ""), b.get("description", ""), b.get("command", ""), b.get("args", []), b.get("env"))
 
 
 @_msg_route("POST", "/api/mcps/", prefix=True)
 def _rt_mcps_delete(h):
     parts = h.path.split("?", 1)[0].strip("/").split("/")
     if len(parts) == 4 and parts[3] == "delete":
-        return delete_mcp(re.sub(r"[^a-z0-9_-]", "", parts[2].lower()))
+        return _mcp.delete_mcp(re.sub(r"[^a-z0-9_-]", "", parts[2].lower()))
     return "unknown"
 
 
@@ -5120,7 +5094,7 @@ def mcp_servers_error(value):
     complaint. Assigning a server that does not exist would only surface as
     'MCP start failed' in the guest log at the next start."""
     names = [x.strip() for x in str(value or "").split(",") if x.strip()]
-    known = {m.get("name") for m in load_mcps()}
+    known = {m.get("name") for m in _mcp.load_mcps()}
     bad = [n for n in names if n not in known]
     return f"unknown MCP server(s): {', '.join(bad)}" if bad else ""
 
@@ -5147,7 +5121,7 @@ def migrate_mcp_config_out_of_instances():
             names = []          # empty remnant from old setups — just clean up
         if names:
             cfg["MCP_SERVERS"] = ",".join(names)
-            need = mcp_required_secrets(names)
+            need = _mcp.mcp_required_secrets(names)
             if need:
                 cur = set(by_inst.get(inst["name"], []))
                 if need - cur:
@@ -5157,7 +5131,7 @@ def migrate_mcp_config_out_of_instances():
         try:
             save_instance(inst)
             print(f"[migrate] {inst['name']}: MCP_CONFIG -> MCP_SERVERS={','.join(names) or '-'}"
-                  f"{' + Policy ' + ','.join(sorted(mcp_required_secrets(names))) if names else ''}",
+                  f"{' + Policy ' + ','.join(sorted(_mcp.mcp_required_secrets(names))) if names else ''}",
                   flush=True)
         except OSError as e:
             print(f"[migrate] {inst['name']}: {e}", flush=True)
@@ -5225,5 +5199,5 @@ if __name__ == "__main__":
     migrate_secrets_out_of_instances()
     migrate_mcp_config_out_of_instances()
     threading.Thread(target=_task_worker, daemon=True).start()
-    threading.Thread(target=_signal_receiver, daemon=True).start()
+    threading.Thread(target=_signal_mod._signal_receiver, daemon=True).start()
     ThreadingHTTPServer(_host.LISTEN, H).serve_forever()

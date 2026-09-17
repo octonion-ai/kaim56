@@ -1472,13 +1472,13 @@ class ManagerFunctions(unittest.TestCase):
         old_send = sigmod.signal_send
         try:
             sigmod.signal_send = lambda text, to=None: (True, "sent")
-            hid = m.hitl_create("orchestrator", "bash", "rm foo")
+            hid = m._signal_mod.hitl_create("orchestrator", "bash", "rm foo")
             self.assertIsNotNone(hid)
-            self.assertEqual(m.hitl_status(hid), "pending")
-            self.assertTrue(m.hitl_resolve(hid, True))
-            self.assertEqual(m.hitl_status(hid), "approved")
-            self.assertFalse(m.hitl_resolve(hid, True))     # not resolvable twice
-            self.assertEqual(m.hitl_status("nonexistent"), "unknown")
+            self.assertEqual(m._signal_mod.hitl_status(hid), "pending")
+            self.assertTrue(m._signal_mod.hitl_resolve(hid, True))
+            self.assertEqual(m._signal_mod.hitl_status(hid), "approved")
+            self.assertFalse(m._signal_mod.hitl_resolve(hid, True))     # not resolvable twice
+            self.assertEqual(m._signal_mod.hitl_status("nonexistent"), "unknown")
         finally:
             sigmod.signal_send = old_send
 
@@ -1490,7 +1490,7 @@ class ManagerFunctions(unittest.TestCase):
         old_send = sigmod.signal_send
         try:
             sigmod.signal_send = lambda text, to=None: (False, "no recipient")
-            self.assertIsNone(m.hitl_create("x", "bash", "y"))
+            self.assertIsNone(m._signal_mod.hitl_create("x", "bash", "y"))
         finally:
             sigmod.signal_send = old_send
 
@@ -1511,7 +1511,7 @@ class ManagerFunctions(unittest.TestCase):
         old = kmod.katfs_proxy_fs
         try:
             kmod.katfs_proxy_fs = fake_proxy
-            data, stats = m.katfs_zip("share1", ".")
+            data, stats = m._katfs.katfs_zip("share1", ".")
             zf = zipfile.ZipFile(io.BytesIO(data))
             names = sorted(zf.namelist())
             self.assertEqual(names, ["a.txt", "sub/b.txt"])
@@ -2056,22 +2056,22 @@ class ManagerFunctions(unittest.TestCase):
         try:
             mmod.MISSIONS_FILE = os.path.join(tmp, "missions.json")
             mmod.notify_add = lambda *a, **k: ("x", "ok")   # no real push in the test
-            mid, note = m.mission_start("orchestrator", "Testziel", ["s1", "s2"])
+            mid, note = m._missions.mission_start("orchestrator", "Testziel", ["s1", "s2"])
             self.assertTrue(mid)
-            self.assertEqual(m.mission_start("orchestrator", "", [])[0], None)
-            self.assertEqual(m.mission_update("orchestrator", mid, step=1,
+            self.assertEqual(m._missions.mission_start("orchestrator", "", [])[0], None)
+            self.assertEqual(m._missions.mission_update("orchestrator", mid, step=1,
                                               status="doing", task_id="t-1"), "ok")
-            inst, mi, st = m.mission_for_task("t-1")
+            inst, mi, st = m._missions.mission_for_task("t-1")
             self.assertEqual((inst, mi["id"], st["n"]), ("orchestrator", mid, 1))
-            self.assertEqual(m.mission_update("orchestrator", mid, step=1,
+            self.assertEqual(m._missions.mission_update("orchestrator", mid, step=1,
                                               status="done", result="ok"), "ok")
-            self.assertIsNone(m.mission_for_task("t-1")[1])   # done -> no more trigger
-            self.assertEqual(m.mission_admin("orchestrator", mid, "pause"), "ok")
-            self.assertEqual(m.mission_admin("orchestrator", mid, "resume"), "ok")
-            self.assertEqual(m.mission_finish("orchestrator", mid, "fertig"), "ok")
-            done = m.mission_list("orchestrator")[0]
+            self.assertIsNone(m._missions.mission_for_task("t-1")[1])   # done -> no more trigger
+            self.assertEqual(m._missions.mission_admin("orchestrator", mid, "pause"), "ok")
+            self.assertEqual(m._missions.mission_admin("orchestrator", mid, "resume"), "ok")
+            self.assertEqual(m._missions.mission_finish("orchestrator", mid, "fertig"), "ok")
+            done = m._missions.mission_list("orchestrator")[0]
             self.assertEqual(done["status"], "done")
-            self.assertIn("cannot", m.mission_admin("orchestrator", mid, "abort"))
+            self.assertIn("cannot", m._missions.mission_admin("orchestrator", mid, "abort"))
         finally:
             mmod.MISSIONS_FILE = old_file
             mmod.notify_add = old_notify
@@ -2159,14 +2159,14 @@ class ManagerFunctions(unittest.TestCase):
         """The Policy tab assigns MCPs through the config route: names must
         exist in the catalog, spaces are tolerated, empty means none."""
         m = self.m
-        old = m.load_mcps
+        old = m._mcp.load_mcps
         try:
-            m.load_mcps = lambda: [{"name": "homeassistant"}, {"name": "caldav"}]
+            m._mcp.load_mcps = lambda: [{"name": "homeassistant"}, {"name": "caldav"}]
             self.assertEqual(m.mcp_servers_error("homeassistant, caldav"), "")
             self.assertEqual(m.mcp_servers_error(""), "")
             self.assertIn("calendar", m.mcp_servers_error("caldav,calendar"))
         finally:
-            m.load_mcps = old
+            m._mcp.load_mcps = old
 
     def test_terminal_ws_requires_our_origin_and_page_is_served_by_manager(self):
         """H-2: the terminal WebSocket handshake needs a present, allowed Origin
@@ -2427,7 +2427,7 @@ class ManagerFunctions(unittest.TestCase):
         tmp = tempfile.mkdtemp(prefix="e2e-stale-")
         os.makedirs(os.path.join(tmp, "instances")); os.makedirs(os.path.join(tmp, "run"))
         img = os.path.join(tmp, "instances", "openrouter-rootfs.ext4")
-        old = m._paths.BASE, m._paths.RUN_DIR, m.is_running, m.load_instances, m.notify_add, dict(m._img_seen), m.HARNESS_IMG
+        old = m._paths.BASE, m._paths.RUN_DIR, m.is_running, m.load_instances, m._notify.notify_add, dict(m._img_seen), m.HARNESS_IMG
         pushes = []
         try:
             m._paths.BASE, m._paths.RUN_DIR = tmp, os.path.join(tmp, "run")
@@ -2438,7 +2438,7 @@ class ManagerFunctions(unittest.TestCase):
                      {"name": "off", "rootfs": "instances/openrouter-rootfs.ext4"},
                      {"name": "priv", "rootfs": "instances/priv.ext4"}]
             m.load_instances = lambda: insts
-            m.notify_add = lambda *a, **k: pushes.append(a)
+            m._notify.notify_add = lambda *a, **k: pushes.append(a)
             for n, ts in (("old", 1000), ("fresh", 3000), ("off", 1000), ("priv", 1000)):
                 pf = os.path.join(tmp, "run", n + ".pid"); open(pf, "w").write("1"); os.utime(pf, (ts, ts))
             open(img, "w").write("x"); os.utime(img, (2000, 2000))
@@ -2453,7 +2453,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertIn("old, fresh", pushes[0][2])
             self.assertEqual(m.image_sweep(), [])           # once per rebuild
         finally:
-            m._paths.BASE, m._paths.RUN_DIR, m.is_running, m.load_instances, m.notify_add = old[:5]
+            m._paths.BASE, m._paths.RUN_DIR, m.is_running, m.load_instances, m._notify.notify_add = old[:5]
             m._img_seen.clear(); m._img_seen.update(old[5]); m.HARNESS_IMG = old[6]
 
     def test_guest_config_carries_host_timezone(self):
@@ -2513,8 +2513,8 @@ class ManagerFunctions(unittest.TestCase):
             # hourly sweep: a task whose target died is pushed ONCE, edit clears the mark
             st.add_task("@orchestrator", "typo target", "daily 08:00")
             pushes = []
-            old_notify = m.notify_add
-            m.notify_add = lambda *a, **k: pushes.append(a)
+            old_notify = m._notify.notify_add
+            m._notify.notify_add = lambda *a, **k: pushes.append(a)
             try:
                 hit = m.task_target_sweep()
                 self.assertEqual([h[1] for h in hit], ["@orchestrator"])
@@ -2525,7 +2525,7 @@ class ManagerFunctions(unittest.TestCase):
                 st.update_task(bad["id"], instance="orchestrator")   # fixed -> mark gone
                 self.assertNotIn("target_warned", next(t for t in st.load_tasks() if t["id"] == bad["id"]))
             finally:
-                m.notify_add = old_notify
+                m._notify.notify_add = old_notify
         finally:
             m.load_instances, st.TASKS_FILE = old_load, old_file
 
@@ -2541,13 +2541,13 @@ class ManagerFunctions(unittest.TestCase):
         try:
             mmod.MISSIONS_FILE = os.path.join(tmp, "missions.json")
             mmod.notify_add = lambda *a, **k: ("x", "ok")
-            mid, _ = m.mission_start("hass", "Goal A", ["s1", "s2", "s3"])
-            m.mission_update("hass", mid, step=1, status="done", result="r1")
-            m.mission_finish("hass", mid, "all good")            # -> done
+            mid, _ = m._missions.mission_start("hass", "Goal A", ["s1", "s2", "s3"])
+            m._missions.mission_update("hass", mid, step=1, status="done", result="r1")
+            m._missions.mission_finish("hass", mid, "all good")            # -> done
             # edit a DONE mission (no instance given -> owner lookup)
-            self.assertEqual(m.mission_edit("", mid, goal="Goal B",
+            self.assertEqual(m._missions.mission_edit("", mid, goal="Goal B",
                                             steps=["s1", "s2x", "s3", "s4"]), "ok")
-            mi = m.mission_list("hass")[0]
+            mi = m._missions.mission_list("hass")[0]
             self.assertEqual(mi["goal"], "Goal B")
             self.assertEqual([s["text"] for s in mi["steps"]], ["s1", "s2x", "s3", "s4"])
             self.assertEqual(mi["steps"][0]["status"], "done")   # progress kept by position
@@ -2555,27 +2555,27 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual(mi["steps"][3]["status"], "open")   # new step
             self.assertEqual(mi["status"], "done")
             # reopen -> active; the agent's mission_update works again
-            self.assertEqual(m.mission_edit("hass", mid, status="active"), "ok")
-            self.assertEqual(m.mission_update("hass", mid, step=4, status="doing"), "ok")
-            self.assertEqual(m.mission_edit("hass", mid, status="active"), "unchanged")
-            self.assertIn("unknown status", m.mission_edit("hass", mid, status="weird"))
-            self.assertEqual(m.mission_edit("hass", mid, goal="  "), "goal missing")
-            self.assertEqual(m.mission_edit("hass", mid, steps=[]), "steps missing")
-            self.assertEqual(m.mission_edit("hass", "m-nope"), "unknown mission")
+            self.assertEqual(m._missions.mission_edit("hass", mid, status="active"), "ok")
+            self.assertEqual(m._missions.mission_update("hass", mid, step=4, status="doing"), "ok")
+            self.assertEqual(m._missions.mission_edit("hass", mid, status="active"), "unchanged")
+            self.assertIn("unknown status", m._missions.mission_edit("hass", mid, status="weird"))
+            self.assertEqual(m._missions.mission_edit("hass", mid, goal="  "), "goal missing")
+            self.assertEqual(m._missions.mission_edit("hass", mid, steps=[]), "steps missing")
+            self.assertEqual(m._missions.mission_edit("hass", "m-nope"), "unknown mission")
             # cap: 5 active others -> reopening a failed one is refused
-            for i in range(m.MISSION_MAX_ACTIVE):
-                m.mission_start("cap", f"g{i}", ["x"])
-            fid, _ = m.mission_start("cap", "late", ["x"])     # None: cap reached
+            for i in range(m._missions.MISSION_MAX_ACTIVE):
+                m._missions.mission_start("cap", f"g{i}", ["x"])
+            fid, _ = m._missions.mission_start("cap", "late", ["x"])     # None: cap reached
             self.assertIsNone(fid)
-            m.mission_finish("cap", m.mission_list("cap")[0]["id"], "bad", failed=True)
-            m.mission_start("cap", "fill", ["x"])                 # back at the cap
-            failed_id = m.mission_list("cap")[0]["id"]
-            self.assertIn("max", m.mission_edit("cap", failed_id, status="active"))
+            m._missions.mission_finish("cap", m._missions.mission_list("cap")[0]["id"], "bad", failed=True)
+            m._missions.mission_start("cap", "fill", ["x"])                 # back at the cap
+            failed_id = m._missions.mission_list("cap")[0]["id"]
+            self.assertIn("max", m._missions.mission_edit("cap", failed_id, status="active"))
             # delete: failed, then active, then unknown
-            self.assertEqual(m.mission_delete("", failed_id), "ok")
-            self.assertEqual(m.mission_delete("hass", mid), "ok")
-            self.assertEqual(m.mission_list("hass"), [])
-            self.assertEqual(m.mission_delete("hass", mid), "unknown mission")
+            self.assertEqual(m._missions.mission_delete("", failed_id), "ok")
+            self.assertEqual(m._missions.mission_delete("hass", mid), "ok")
+            self.assertEqual(m._missions.mission_list("hass"), [])
+            self.assertEqual(m._missions.mission_delete("hass", mid), "unknown mission")
         finally:
             mmod.MISSIONS_FILE, mmod.notify_add = old_file, old_notify
 
@@ -2590,24 +2590,24 @@ class ManagerFunctions(unittest.TestCase):
         try:
             mmod.MISSIONS_FILE = os.path.join(tmp, "missions.json")
             mmod.notify_add = lambda *a, **k: ("x", "ok")
-            mid, _ = m.mission_start("jobresearcher", "cross-instance goal", ["s1", "s2"])
+            mid, _ = m._missions.mission_start("jobresearcher", "cross-instance goal", ["s1", "s2"])
             self.assertTrue(mid)
             # Step 1 is executed by a DIFFERENT agent than the owner.
-            self.assertEqual(m.mission_update("jobresearcher", mid, step=1, status="doing",
+            self.assertEqual(m._missions.mission_update("jobresearcher", mid, step=1, status="doing",
                                               task_id="t-x1", target="hass"), "ok")
-            st1 = m.mission_list("jobresearcher")[0]["steps"][0]
+            st1 = m._missions.mission_list("jobresearcher")[0]["steps"][0]
             self.assertEqual(st1["target"], "hass")
-            self.assertIn("@hass", m.mission_list("jobresearcher")[0]["log"][-1])
+            self.assertIn("@hass", m._missions.mission_list("jobresearcher")[0]["log"][-1])
             # The advance trigger has to find the OWNER, not the executor.
-            inst, mi, st = m.mission_for_task("t-x1")
+            inst, mi, st = m._missions.mission_for_task("t-x1")
             self.assertEqual((inst, mi["id"], st["n"]), ("jobresearcher", mid, 1))
-            self.assertEqual(m.mission_owner(mid), "jobresearcher")
-            self.assertIsNone(m.mission_owner("m-nope"))
+            self.assertEqual(m._missions.mission_owner(mid), "jobresearcher")
+            self.assertIsNone(m._missions.mission_owner("m-nope"))
             # Admin action without an instance resolves the owner itself.
-            self.assertEqual(m.mission_admin("", mid, "pause"), "ok")
-            self.assertEqual(m.mission_list("jobresearcher")[0]["status"], "paused")
-            self.assertEqual(m.mission_admin("", mid, "resume"), "ok")
-            self.assertEqual(m.mission_admin("", "m-nope", "pause"), "unknown mission")
+            self.assertEqual(m._missions.mission_admin("", mid, "pause"), "ok")
+            self.assertEqual(m._missions.mission_list("jobresearcher")[0]["status"], "paused")
+            self.assertEqual(m._missions.mission_admin("", mid, "resume"), "ok")
+            self.assertEqual(m._missions.mission_admin("", "m-nope", "pause"), "unknown mission")
         finally:
             mmod.MISSIONS_FILE, mmod.notify_add = old_file, old_notify
 
@@ -2658,9 +2658,9 @@ class ManagerFunctions(unittest.TestCase):
             m.load_instances = lambda: [{"name": "owner-a"}]
             m._run_named = lambda inst, msg: (pushes.append((inst, msg)), done.set(), (True, "ok"))[-1]
             m.MISSION_COLLECT_SECS = 0.3
-            mid, _ = m.mission_start("owner-a", "burst goal", ["s1", "s2", "s3"])
+            mid, _ = m._missions.mission_start("owner-a", "burst goal", ["s1", "s2", "s3"])
             for n, tid in ((1, "t-b1"), (2, "t-b2"), (3, "t-b3")):
-                m.mission_update("owner-a", mid, step=n, status="doing", task_id=tid)
+                m._missions.mission_update("owner-a", mid, step=n, status="doing", task_id=tid)
                 m._mission_advance_fire(tid)
             self.assertTrue(done.wait(5), "no push fired")
             time.sleep(0.4)                            # window fully drained
@@ -2692,8 +2692,8 @@ class ManagerFunctions(unittest.TestCase):
             m.MISSION_COLLECT_SECS = 0.2
             m.load_instances = lambda: [{"name": "jobresearcher"}, {"name": "orchestrator"}]
             m._run_named = lambda inst, msg: (fired.append(inst), done.set(), (True, "ok"))[-1]
-            mid, _ = m.mission_start("jobresearcher", "owned elsewhere", ["s1"])
-            m.mission_update("jobresearcher", mid, step=1, status="doing",
+            mid, _ = m._missions.mission_start("jobresearcher", "owned elsewhere", ["s1"])
+            m._missions.mission_update("jobresearcher", mid, step=1, status="doing",
                              task_id="t-y1", target="hass")
             m._mission_advance_fire("t-y1")
             self.assertTrue(done.wait(5), "no advance push fired")
@@ -2716,9 +2716,9 @@ class ManagerFunctions(unittest.TestCase):
         old_file = mmod.MISSIONS_FILE
         try:
             mmod.MISSIONS_FILE = os.path.join(tmp, "missions.json")
-            for i in range(m.MISSION_MAX_ACTIVE):
-                self.assertTrue(m.mission_start("o", f"g{i}", ["s"])[0])
-            self.assertIsNone(m.mission_start("o", "zuviel", ["s"])[0])
+            for i in range(m._missions.MISSION_MAX_ACTIVE):
+                self.assertTrue(m._missions.mission_start("o", f"g{i}", ["s"])[0])
+            self.assertIsNone(m._missions.mission_start("o", "zuviel", ["s"])[0])
         finally:
             mmod.MISSIONS_FILE = old_file
 
@@ -2863,10 +2863,10 @@ class ManagerFunctions(unittest.TestCase):
 
     def test_usage_for_shape(self):
         m = self.m
-        d = m.usage_for("orchestrator", 0)
+        d = m._store.usage_for("orchestrator", 0)
         self.assertEqual(set(d.keys()), {"calls", "in", "out", "cost"})
         self.assertIsInstance(d["calls"], int)
-        z = m.usage_for("gibtsnichtxyz", 0)     # unknown instance -> zeros
+        z = m._store.usage_for("gibtsnichtxyz", 0)     # unknown instance -> zeros
         self.assertEqual(z["calls"], 0)
 
     def test_prompt_store(self):
@@ -2876,13 +2876,13 @@ class ManagerFunctions(unittest.TestCase):
         old = rmod.PROMPTS_FILE
         try:
             rmod.PROMPTS_FILE = os.path.join(tmp, "prompts.json")
-            self.assertEqual(m.prompt_upsert("Daily!", "Text"), "saved")   # Name normalisiert
-            self.assertEqual(m.load_prompts()[0]["name"], "daily")
-            self.assertEqual(m.prompt_upsert("daily", "New"), "saved")     # update
-            self.assertEqual(m.load_prompts()[0]["text"], "New")
-            self.assertIn("built-in", m.prompt_upsert("reset", "x"))       # reserved
-            self.assertEqual(m.prompt_delete("daily"), "deleted")
-            self.assertEqual(m.prompt_delete("daily"), "unknown")
+            self.assertEqual(m._rules.prompt_upsert("Daily!", "Text"), "saved")   # Name normalisiert
+            self.assertEqual(m._rules.load_prompts()[0]["name"], "daily")
+            self.assertEqual(m._rules.prompt_upsert("daily", "New"), "saved")     # update
+            self.assertEqual(m._rules.load_prompts()[0]["text"], "New")
+            self.assertIn("built-in", m._rules.prompt_upsert("reset", "x"))       # reserved
+            self.assertEqual(m._rules.prompt_delete("daily"), "deleted")
+            self.assertEqual(m._rules.prompt_delete("daily"), "unknown")
         finally:
             rmod.PROMPTS_FILE = old
 
@@ -2894,15 +2894,15 @@ class ManagerFunctions(unittest.TestCase):
         try:
             nmod.NOTIF_FILE = os.path.join(tmp, "notifications.json")
             nmod._notif_sent.clear()
-            nid, note = m.notify_add("orchestrator", "Title", "Text")
+            nid, note = m._notify.notify_add("orchestrator", "Title", "Text")
             self.assertTrue(nid)
-            lst = m.load_notifications()
+            lst = m._notify.load_notifications()
             self.assertEqual(len(lst), 1)
             self.assertEqual(lst[0]["title"], "Title")
             self.assertFalse(lst[0]["read"])
-            self.assertEqual(m.notif_mark_read(mark_all=True), 1)
-            self.assertTrue(m.load_notifications()[0]["read"])
-            self.assertIsNone(m.notify_add("x", "", "")[0])   # leer -> nichts
+            self.assertEqual(m._notify.notif_mark_read(mark_all=True), 1)
+            self.assertTrue(m._notify.load_notifications()[0]["read"])
+            self.assertIsNone(m._notify.notify_add("x", "", "")[0])   # leer -> nichts
         finally:
             nmod.NOTIF_FILE = old_file
             nmod._notif_sent[:] = old_sent
@@ -2919,26 +2919,26 @@ class ManagerFunctions(unittest.TestCase):
         entry = {"name": "caldav", "command": "caldav-mcp", "args": [],
                  "env": {"CALDAV_BASE_URL": "https://cal.example.com/dav", "CALDAV_USERNAME": "me",
                          "CALDAV_PASSWORD": "${CALDAV_PASSWORD}"}}
-        old = mcpmod.secret_store, mcpmod.load_mcps, m.load_mcps, m.load_secret_policy
-        mcpmod.load_mcps = m.load_mcps = lambda: [entry]
+        old = mcpmod.secret_store, mcpmod.load_mcps, m._mcp.load_mcps, m.load_secret_policy
+        mcpmod.load_mcps = m._mcp.load_mcps = lambda: [entry]
         m.load_secret_policy = lambda: {"by_template": {}, "guest_readable": [],
                                         "by_instance": {"myassistant": ["CALDAV_PASSWORD"], "voicecommand": ["CALDAV_PASSWORD"]}}
-        self.assertIn("caldav", [x["name"] for x in m.load_mcps()])
-        self.assertEqual(m.mcp_required_secrets(["caldav"]), {"CALDAV_PASSWORD"})
+        self.assertIn("caldav", [x["name"] for x in m._mcp.load_mcps()])
+        self.assertEqual(m._mcp.mcp_required_secrets(["caldav"]), {"CALDAV_PASSWORD"})
         for name in ("myassistant", "voicecommand"):
             self.assertIn("CALDAV_PASSWORD",
                           m.allowed_secret_keys({"name": name, "template": "openrouter"}),
                           f"{name} has no CALDAV_PASSWORD release")
         mcpmod.secret_store = lambda: {"CALDAV_PASSWORD": "s3cret"}
         try:
-            env = json.loads(m.build_mcp_config(
+            env = json.loads(m._mcp.build_mcp_config(
                 ["caldav"], allowed={"CALDAV_PASSWORD"}))["mcpServers"]["caldav"]["env"]
             self.assertEqual(env["CALDAV_PASSWORD"], "s3cret")
-            env = json.loads(m.build_mcp_config(
+            env = json.loads(m._mcp.build_mcp_config(
                 ["caldav"], allowed=set()))["mcpServers"]["caldav"]["env"]
             self.assertEqual(env["CALDAV_PASSWORD"], "${CALDAV_PASSWORD}")
         finally:
-            mcpmod.secret_store, mcpmod.load_mcps, m.load_mcps, m.load_secret_policy = old
+            mcpmod.secret_store, mcpmod.load_mcps, m._mcp.load_mcps, m.load_secret_policy = old
 
     # ---- guest boundary (multi-tenancy S-fixes, 2026-09-06) ------------------
     def _handler(self, path, ip, method="GET", auth=None):
@@ -3177,7 +3177,7 @@ class ManagerFunctions(unittest.TestCase):
         import mgr.hindsight as hs
         m = self.m
         calls = []
-        old = hs._settings, hs._call, m.sem_search, m._settings.load_settings
+        old = hs._settings, hs._call, m._store.sem_search, m._settings.load_settings
         try:
             hs.configure(lambda: {}, log=lambda *a, **k: None)
             self.assertFalse(hs.enabled()); self.assertFalse(hs.retain("vm1", "x")); self.assertEqual(hs.recall("vm1", "q"), [])
@@ -3202,7 +3202,7 @@ class ManagerFunctions(unittest.TestCase):
             # merged into the manager's memory search, semantic first, no duplicates
             m._settings.load_settings = lambda: {"HINDSIGHT_URL": "http://127.0.0.1:1/"}
             m._hindsight.configure(m._settings.load_settings, log=lambda *a, **k: None); m._hindsight._call = fake
-            m.sem_search = lambda inst, q, k=5: [{"score": 0.5, "text": "likes radio"}]
+            m._store.sem_search = lambda inst, q, k=5: [{"score": 0.5, "text": "likes radio"}]
             h = self._post_handler("/api/memory-search", "10.0.0.9", json.dumps({"instance": "vm1", "query": "commute"}).encode())
             m.instance_by_ip = lambda ip: None
             h._do_POST()
@@ -3214,7 +3214,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertFalse(hs.retain("vm1", "x", wait=True)); self.assertEqual(hs.recall("vm1", "q"), [])
             self.assertIn("error", hs.reflect("vm1", "q")); self.assertFalse(hs.health()[0])
         finally:
-            hs._settings, hs._call, m.sem_search, m._settings.load_settings = old
+            hs._settings, hs._call, m._store.sem_search, m._settings.load_settings = old
 
     def test_internet_off_is_an_explicit_reject(self):
         """internet=False must not depend on the FORWARD policy: the tap gets
@@ -3251,14 +3251,14 @@ class ManagerFunctions(unittest.TestCase):
         m = self.m
         import mgr.store as st
         seen = []
-        old = (m.instance_by_ip, m.load_instances, m._run_task_now, m.history_add, m.guest_may_target,
+        old = (m.instance_by_ip, m.load_instances, m._run_task_now, m._store.history_add, m.guest_may_target,
                m._run_ephemeral, st.TASKS_FILE)
         try:
             caller = {"name": "orch", "config": {}}
             m.instance_by_ip = lambda ip: caller if ip == "172.30.1.2" else None
             m.load_instances = lambda: [caller, {"name": "hass"}]
             m.guest_may_target = lambda inst, target: True
-            m.history_add = lambda *a, **k: None
+            m._store.history_add = lambda *a, **k: None
             m._run_task_now = lambda target, msg, model=None, timeout=600, sandbox=None: (seen.append((target, msg, sandbox)), (True, "ok"))[1]
             def post(body):
                 h = self._post_handler("/api/task", "172.30.1.2", json.dumps(body).encode()); h._do_POST()
@@ -3286,7 +3286,7 @@ class ManagerFunctions(unittest.TestCase):
             m._run_task_now("ephemeral", "do")
             self.assertEqual(len(calls[0][0]), 4); self.assertEqual(len(calls[1][0]), 3)
         finally:
-            (m.instance_by_ip, m.load_instances, m._run_task_now, m.history_add, m.guest_may_target,
+            (m.instance_by_ip, m.load_instances, m._run_task_now, m._store.history_add, m.guest_may_target,
              m._run_ephemeral, st.TASKS_FILE) = old
 
     def test_egress_allowlist_rules(self):
@@ -3324,17 +3324,17 @@ class ManagerFunctions(unittest.TestCase):
         touches no chat."""
         m = self.m
         seen = []
-        old = m.instance_by_ip, m.notify_add, m.chat_log_append, m._audit.audit_append
+        old = m.instance_by_ip, m._notify.notify_add, m.chat_log_append, m._audit.audit_append
         try:
             m.instance_by_ip = lambda ip: {"name": "orch"} if ip == "172.30.1.2" else None
-            m.notify_add = lambda inst, title, body, link="": ("id1", "")
+            m._notify.notify_add = lambda inst, title, body, link="": ("id1", "")
             m.chat_log_append = lambda inst, sender, u, r, kind="signal": seen.append((inst, u, r, kind)) or 1
             m._audit.audit_append = lambda *a, **k: None
             h = self._post_handler("/api/notify", "172.30.1.2", json.dumps({"title": "Saddler weekly", "message": "Failures 67 (was 20)"}).encode())
             h._do_POST()
             self.assertEqual(seen, [("orch", "", "🔔 Saddler weekly\n\nFailures 67 (was 20)", "task")])
             seen.clear()
-            m.notify_add = lambda inst, title, body, link="": ("id2", "")
+            m._notify.notify_add = lambda inst, title, body, link="": ("id2", "")
             fake_key = "sk-" + "or-" + "v1-" + "de" * 32       # assembled at runtime so no literal key sits in the repo (GitHub push protection)
             h = self._post_handler("/api/notify", "172.30.1.2", json.dumps({"title": "t", "message": "key " + fake_key}).encode())
             h._do_POST()
@@ -3344,7 +3344,7 @@ class ManagerFunctions(unittest.TestCase):
             h._do_POST()
             self.assertEqual(len(seen), 1)
         finally:
-            m.instance_by_ip, m.notify_add, m.chat_log_append, m._audit.audit_append = old
+            m.instance_by_ip, m._notify.notify_add, m.chat_log_append, m._audit.audit_append = old
 
     def test_tool_allowlist_enforced_at_the_host(self):
         """A-2: a restricted instance is refused a capability it did not list;
@@ -3355,9 +3355,9 @@ class ManagerFunctions(unittest.TestCase):
         self.assertFalse(m.tool_allowed({"config": {"AGENT_TOOLS": "bash,read_file"}}, "send_signal"))
         self.assertFalse(m.tool_allowed({"config": {"AGENT_TOOLS": "bash"}}, "ha_control"))
         seen = []
-        old = m.instance_by_ip, m.notify_add, m._audit.audit_append, m.chat_log_append
+        old = m.instance_by_ip, m._notify.notify_add, m._audit.audit_append, m.chat_log_append
         try:
-            m.notify_add = lambda *a, **k: seen.append(a) or ("id", "")
+            m._notify.notify_add = lambda *a, **k: seen.append(a) or ("id", "")
             m._audit.audit_append = lambda *a, **k: None; m.chat_log_append = lambda *a, **k: 1
             m.instance_by_ip = lambda ip: {"name": "r", "config": {"AGENT_TOOLS": "bash"}} if ip == "172.30.1.2" else None
             h = self._post_handler("/api/notify", "172.30.1.2", json.dumps({"title": "t", "message": "m"}).encode())
@@ -3368,7 +3368,7 @@ class ManagerFunctions(unittest.TestCase):
             h._do_POST()
             self.assertEqual(self._status(h), 200); self.assertEqual(len(seen), 1)
         finally:
-            m.instance_by_ip, m.notify_add, m._audit.audit_append, m.chat_log_append = old
+            m.instance_by_ip, m._notify.notify_add, m._audit.audit_append, m.chat_log_append = old
 
     def test_persona_carries_tools_and_model(self):
         """Feature 3: a persona keeps an optional recommended tool subset and
@@ -3511,9 +3511,9 @@ class ManagerFunctions(unittest.TestCase):
     def test_proxy_books_upstream_usage(self):
         m = self.m
         seen = []
-        old = m.usage_add
+        old = m._store.usage_add
         try:
-            m.usage_add = lambda *a, **kw: seen.append(a)
+            m._store.usage_add = lambda *a, **kw: seen.append(a)
             inst = {"name": "vm1"}
             m._proxy_usage(inst, "openrouter", b'{"model":"x/y","usage":{"prompt_tokens":10,"completion_tokens":5,"cost":0.001}}')
             m._proxy_usage(inst, "openrouter", b'data: {"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":2}}\n')
@@ -3521,7 +3521,7 @@ class ManagerFunctions(unittest.TestCase):
             m._proxy_usage(None, "openrouter", b'{"usage":{"prompt_tokens":10}}')
             self.assertEqual(seen, [("vm1", "x/y", 10, 5, 0.001), ("vm1", "openrouter", 1, 2, None)])
         finally:
-            m.usage_add = old
+            m._store.usage_add = old
 
     def test_nfs_exports_are_per_instance_and_squashed_to_the_guest_user(self):
         """No pool-wide root export: the workspace agent/<name> and each host
@@ -3887,11 +3887,11 @@ class ManagerFunctions(unittest.TestCase):
         with the same name replaces the pending one; admins cannot file."""
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-skprop-")
-        old = m.SKILL_PROPOSALS_FILE, m.SKILLS_FILE, m.notify_add, m.instance_by_ip, m._auth.PW
+        old = m.SKILL_PROPOSALS_FILE, m.SKILLS_FILE, m._notify.notify_add, m.instance_by_ip, m._auth.PW
         notes = []
         try:
             m.SKILL_PROPOSALS_FILE = os.path.join(tmp, "p.json"); m.SKILLS_FILE = os.path.join(tmp, "s.json")
-            m.notify_add = lambda *a, **k: notes.append(a)
+            m._notify.notify_add = lambda *a, **k: notes.append(a)
             vm = {"name": "vm1", "index": 3, "template": "openrouter", "config": {}}
             m.instance_by_ip = lambda ip: vm if ip == "172.30.3.2" else None
             good = {"name": "Job-Search-NRW", "description": "Daily job search for a region",
@@ -3923,7 +3923,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertTrue(pid); self.assertTrue(next(p for p in m.load_proposals() if p["id"] == pid)["update"])
             self.assertIn("discarded", m.proposal_decide(pid, False))
         finally:
-            m.SKILL_PROPOSALS_FILE, m.SKILLS_FILE, m.notify_add, m.instance_by_ip, m._auth.PW = old
+            m.SKILL_PROPOSALS_FILE, m.SKILLS_FILE, m._notify.notify_add, m.instance_by_ip, m._auth.PW = old
 
     def test_sessions_fulltext_search_scoped_per_guest(self):
         """FTS5 over chats and task runs: exact words find the session, guests
@@ -3973,7 +3973,7 @@ class ManagerFunctions(unittest.TestCase):
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-session-")
         old = (m.load_instances, m.is_running, m.pidfile, m._settings.load_settings, m.secret_store, m.load_secret_policy,
-               m.load_mcps, m.load_skills, m._paths.RUN_DIR, m.instance_by_ip, m._auth.PW, st.HISTORY_DB, m.image_state)
+               m._mcp.load_mcps, m.load_skills, m._paths.RUN_DIR, m.instance_by_ip, m._auth.PW, st.HISTORY_DB, m.image_state)
         try:
             inst = {"name": "vm1", "index": 3, "template": "openrouter", "rootfs": "instances/openrouter-rootfs.ext4",
                     "config": {"OPENROUTER_MODEL": "x/y", "MCP_SERVERS": "caldav,homeassistant"}}
@@ -3988,7 +3988,7 @@ class ManagerFunctions(unittest.TestCase):
             m._settings.load_settings = lambda: {"LLM_KEY_PROXY": "1", "BRAVE_API_KEY": "b"}
             m.secret_store = lambda: {"CALDAV_PASSWORD": "s3cret", "HA_TOKEN": "t"}
             m.load_secret_policy = lambda: {"by_template": {}, "by_instance": {"vm1": ["HA_TOKEN"]}, "guest_readable": []}
-            m.load_mcps = lambda: [{"name": "caldav", "command": "c", "env": {"CALDAV_PASSWORD": "${CALDAV_PASSWORD}"}},
+            m._mcp.load_mcps = lambda: [{"name": "caldav", "command": "c", "env": {"CALDAV_PASSWORD": "${CALDAV_PASSWORD}"}},
                                    {"name": "homeassistant", "command": "h", "args": ["Bearer ${HA_TOKEN}"]}]
             m.load_skills = lambda: [{"name": "a"}, {"name": "b"}]
             m.instance_by_ip = lambda ip: None; m._auth.PW = ""
@@ -4016,7 +4016,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertNotIn("commands", m.session_info(cl))                       # the / picker lists them
         finally:
             (m.load_instances, m.is_running, m.pidfile, m._settings.load_settings, m.secret_store, m.load_secret_policy,
-             m.load_mcps, m.load_skills, m._paths.RUN_DIR, m.instance_by_ip, m._auth.PW, st.HISTORY_DB, m.image_state) = old
+             m._mcp.load_mcps, m.load_skills, m._paths.RUN_DIR, m.instance_by_ip, m._auth.PW, st.HISTORY_DB, m.image_state) = old
 
     def test_chat_page_carries_panel_and_search(self):
         """The rendered chat page has the session panel, the search bar and
@@ -4167,10 +4167,10 @@ class ManagerFunctions(unittest.TestCase):
         old_send = sigmod.signal_send
         try:
             sigmod.signal_send = lambda text, to=None: (True, "sent")
-            hid = m.hitl_create("hass", "bash", "rm x")
-            self.assertEqual(m.hitl_status(hid), "pending")            # admin
-            self.assertEqual(m.hitl_status(hid, "hass"), "pending")    # owner
-            self.assertEqual(m.hitl_status(hid, "uncensored"), "unknown")
+            hid = m._signal_mod.hitl_create("hass", "bash", "rm x")
+            self.assertEqual(m._signal_mod.hitl_status(hid), "pending")            # admin
+            self.assertEqual(m._signal_mod.hitl_status(hid, "hass"), "pending")    # owner
+            self.assertEqual(m._signal_mod.hitl_status(hid, "uncensored"), "unknown")
         finally:
             sigmod.signal_send = old_send
 
