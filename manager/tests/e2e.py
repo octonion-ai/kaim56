@@ -1340,17 +1340,17 @@ class ManagerFunctions(unittest.TestCase):
         m._instances.is_running = lambda inst: False
         try:
             picks = sorted(m._policy.AGENT_TOOL_NAMES)[:3]
-            m.set_instance_tools("toolinst", picks)
+            m._instances.set_instance_tools("toolinst", picks)
             cfg = _readj(os.path.join(tmp, "toolinst.json"))["config"]
             self.assertEqual(set(cfg["AGENT_TOOLS"].split(",")), set(picks))   # Subset bleibt
             self.assertFalse(m._policy.effective_policy(_readj(os.path.join(tmp, "toolinst.json")))["tools_all"])
 
-            m.set_instance_tools("toolinst", list(m._policy.AGENT_TOOL_NAMES))
+            m._instances.set_instance_tools("toolinst", list(m._policy.AGENT_TOOL_NAMES))
             cfg2 = _readj(os.path.join(tmp, "toolinst.json"))["config"]
             self.assertNotIn("AGENT_TOOLS", cfg2)                              # alle -> Feld raus
             self.assertTrue(m._policy.effective_policy(_readj(os.path.join(tmp, "toolinst.json")))["tools_all"])
 
-            m.set_instance_tools("toolinst", ["kein_tool", picks[0]])
+            m._instances.set_instance_tools("toolinst", ["kein_tool", picks[0]])
             cfg3 = _readj(os.path.join(tmp, "toolinst.json"))["config"]
             self.assertEqual(cfg3["AGENT_TOOLS"], picks[0])                    # unbekannte gefiltert
         finally:
@@ -1442,7 +1442,7 @@ class ManagerFunctions(unittest.TestCase):
         try:
             m._paths.INST_DIR = tmp
             m._instances.load_instances = lambda: [_readj(os.path.join(tmp, "e2e-switch.json"))]
-            msg = m.set_model("e2e-switch", "orcarouter:tencent/hy3")
+            msg = m._instances.set_model("e2e-switch", "orcarouter:tencent/hy3")
             cfg = _readj(os.path.join(tmp, "e2e-switch.json"))["config"]
             self.assertEqual(cfg.get("ORCAROUTER_MODEL"), "tencent/hy3")
             self.assertNotIn("OPENROUTER_MODEL", cfg)               # anderer Provider entfernt
@@ -1459,7 +1459,7 @@ class ManagerFunctions(unittest.TestCase):
         try:
             m._paths.INST_DIR = tmp
             m._instances.load_instances = lambda: [_readj(os.path.join(tmp, "e2e-free.json"))]
-            m.set_model("e2e-free", "mistralai/mistral-7b-instruct:free")
+            m._instances.set_model("e2e-free", "mistralai/mistral-7b-instruct:free")
             cfg = _readj(os.path.join(tmp, "e2e-free.json"))["config"]
             self.assertEqual(cfg.get("OPENROUTER_MODEL"), "mistralai/mistral-7b-instruct:free")
             self.assertNotIn("ORCAROUTER_MODEL", cfg)
@@ -1991,8 +1991,8 @@ class ManagerFunctions(unittest.TestCase):
 
     def test_provider_model_key_covers_all(self):
         m = self.m
-        for k in m.PROVIDER_MODEL_KEY.values():
-            self.assertIn(k, m.MODEL_KEYS)
+        for k in m._instances.PROVIDER_MODEL_KEY.values():
+            self.assertIn(k, m._instances.MODEL_KEYS)
 
     def test_llm_proxy_route_registered(self):
         """Injection gateway: the path must be in the guest allowlist (otherwise
@@ -3432,19 +3432,19 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual((cfg2["AGENT_TOOLS"], err2), ("read_file", ""))
             # an explicit model must win over the persona's model in the VM config
             seen = []
-            old2 = m.create_instance, m._instances.load_instances, m.wait_web, m._chat_post, m._vm.stop, m.delete_instance
+            old2 = m._instances.create_instance, m._instances.load_instances, m.wait_web, m._chat_post, m._vm.stop, m._instances.delete_instance
             try:
                 def create(name, tpl, cfg=None, mounts=None, internet=True):
                     seen.append(dict(cfg or {}))
                     m._instances.load_instances = lambda: [{"name": name, "template": "openrouter"}]
                     return "ok"
-                m.create_instance = create; m.wait_web = lambda i, timeout=120: True
-                m._chat_post = lambda i, msg, timeout=600: "r"; m._vm.stop = lambda i: None; m.delete_instance = lambda n: None
+                m._instances.create_instance = create; m.wait_web = lambda i, timeout=120: True
+                m._chat_post = lambda i, msg, timeout=600: "r"; m._vm.stop = lambda i: None; m._instances.delete_instance = lambda n: None
                 sb = {"cfg": {"OPENROUTER_MODEL": "persona/model", "AGENT_SYSTEM": "You review."}, "internet": True}
                 m._run_ephemeral_vm("do", "explicit/model", 60, sb)
                 self.assertEqual(seen[-1]["OPENROUTER_MODEL"], "explicit/model")
             finally:
-                m.create_instance, m._instances.load_instances, m.wait_web, m._chat_post, m._vm.stop, m.delete_instance = old2
+                m._instances.create_instance, m._instances.load_instances, m.wait_web, m._chat_post, m._vm.stop, m._instances.delete_instance = old2
         finally:
             m._personas.load_personas, m._skills.load_skills = old
 
@@ -3485,28 +3485,28 @@ class ManagerFunctions(unittest.TestCase):
         without internet; without a sandbox nothing changes."""
         m = self.m
         seen = []
-        old = m.create_instance, m._instances.load_instances, m.wait_web, m._chat_post, m._vm.stop, m.delete_instance
+        old = m._instances.create_instance, m._instances.load_instances, m.wait_web, m._chat_post, m._vm.stop, m._instances.delete_instance
         try:
-            m.create_instance = lambda name, tpl, cfg=None, mounts=None, internet=True: seen.append((tpl, dict(cfg or {}), internet)) or "ok"
+            m._instances.create_instance = lambda name, tpl, cfg=None, mounts=None, internet=True: seen.append((tpl, dict(cfg or {}), internet)) or "ok"
             m._instances.load_instances = lambda: [{"name": n, "template": "openrouter"} for n in ["x"]] if False else [{"name": seen[-1] and "task-x", "template": "openrouter"}]
             m._instances.load_instances = lambda: [{"name": next((k for k in ["any"]), ""), "template": "openrouter"}]
             m.wait_web = lambda inst, timeout=120: True
             m._chat_post = lambda inst, message, timeout=600: "child says hi"
-            m._vm.stop = lambda inst: None; m.delete_instance = lambda name: None
+            m._vm.stop = lambda inst: None; m._instances.delete_instance = lambda name: None
             # load_instances must return the instance the run just created: match on prefix
             m._instances.load_instances = lambda: [{"name": "task-" + "".join(c for c in "0" * 6), "template": "openrouter"}]
-            real_create = m.create_instance
+            real_create = m._instances.create_instance
             def create(name, tpl, cfg=None, mounts=None, internet=True):
                 m._instances.load_instances = lambda: [{"name": name, "template": "openrouter", "config": dict(cfg or {}), "internet": internet}]
                 return real_create(name, tpl, cfg, mounts, internet)
-            m.create_instance = create
+            m._instances.create_instance = create
             ok, res = m._run_ephemeral_vm("do", None, 60, {"cfg": {"AGENT_TOOLS": "bash", "EGRESS_ALLOW": ""}, "internet": False})
             self.assertEqual((ok, res), (True, "child says hi"))
             self.assertEqual(seen[-1][1]["AGENT_TOOLS"], "bash"); self.assertFalse(seen[-1][2]); self.assertEqual(seen[-1][1]["NO_SPAWN"], "1")
             ok, res = m._run_ephemeral_vm("do", "google/gemini-2.5-flash", 60)
             self.assertNotIn("AGENT_TOOLS", seen[-1][1]); self.assertTrue(seen[-1][2]); self.assertEqual(seen[-1][1]["OPENROUTER_MODEL"], "google/gemini-2.5-flash")
         finally:
-            m.create_instance, m._instances.load_instances, m.wait_web, m._chat_post, m._vm.stop, m.delete_instance = old
+            m._instances.create_instance, m._instances.load_instances, m.wait_web, m._chat_post, m._vm.stop, m._instances.delete_instance = old
 
     def test_proxy_books_upstream_usage(self):
         m = self.m
@@ -3992,7 +3992,7 @@ class ManagerFunctions(unittest.TestCase):
                                    {"name": "homeassistant", "command": "h", "args": ["Bearer ${HA_TOKEN}"]}]
             m._skills.load_skills = lambda: [{"name": "a"}, {"name": "b"}]
             m._guests.instance_by_ip = lambda ip: None; m._auth.PW = ""
-            d = m.session_info(inst)
+            d = m._instances.session_info(inst)
             self.assertEqual((d["runtime"], d["login"], d["model"]), ("openrouter-agent", "key proxy", "x/y"))
             self.assertTrue(7400 < d["uptime"] < 7700)
             self.assertEqual({x["name"]: x["ready"] for x in d["mcps"]}, {"caldav": False, "homeassistant": True})
@@ -4012,8 +4012,8 @@ class ManagerFunctions(unittest.TestCase):
             # a claude instance reports its host credential, not a key
             m._guests.instance_by_ip = lambda ip: None
             cl = {**inst, "template": "claude", "config": {}}
-            self.assertRegex(m.session_info(cl)["login"], r"^(ok · valid \d+h \d+m|expired on the host.*|missing \(log in on the host\))$")
-            self.assertNotIn("commands", m.session_info(cl))                       # the / picker lists them
+            self.assertRegex(m._instances.session_info(cl)["login"], r"^(ok · valid \d+h \d+m|expired on the host.*|missing \(log in on the host\))$")
+            self.assertNotIn("commands", m._instances.session_info(cl))                       # the / picker lists them
         finally:
             (m._instances.load_instances, m._instances.is_running, m._instances.pidfile, m._settings.load_settings, m._secrets.secret_store, m._secrets.load_secret_policy,
              m._mcp.load_mcps, m._skills.load_skills, m._paths.RUN_DIR, m._guests.instance_by_ip, m._auth.PW, st.HISTORY_DB, m._vm.image_state) = old
