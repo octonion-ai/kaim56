@@ -1238,8 +1238,8 @@ class ManagerFunctions(unittest.TestCase):
         """resource_stats returns per instance size + live fields; an instance
         without a PID counts as not running (live values None)."""
         m = self.m
-        old_load = m.load_instances
-        m.load_instances = lambda: [{"name": "e2e-res-xyz", "vcpus": 4, "mem_mib": 2048, "config": {}}]
+        old_load = m._instances.load_instances
+        m._instances.load_instances = lambda: [{"name": "e2e-res-xyz", "vcpus": 4, "mem_mib": 2048, "config": {}}]
         try:
             r = next(x for x in m.resource_stats() if x["name"] == "e2e-res-xyz")
             self.assertEqual(r["vcpus"], 4)
@@ -1249,7 +1249,7 @@ class ManagerFunctions(unittest.TestCase):
             for k in ("cpu_pct", "upper_used_mb", "persist", "name"):
                 self.assertIn(k, r)
         finally:
-            m.load_instances = old_load
+            m._instances.load_instances = old_load
 
     def test_gateway_strips_noncharacters(self):
         """Layer-A extension (watermarks-remover): Unicode noncharacters and
@@ -1334,10 +1334,10 @@ class ManagerFunctions(unittest.TestCase):
         tmp = tempfile.mkdtemp(prefix="e2e-tools-")
         with open(os.path.join(tmp, "toolinst.json"), "w") as fh:
             json.dump({"name": "toolinst", "template": "openrouter", "config": {}}, fh)
-        old_dir, old_load, old_run = m._paths.INST_DIR, m.load_instances, m.is_running
+        old_dir, old_load, old_run = m._paths.INST_DIR, m._instances.load_instances, m._instances.is_running
         m._paths.INST_DIR = tmp
-        m.load_instances = lambda: [_readj(os.path.join(tmp, "toolinst.json"))]
-        m.is_running = lambda inst: False
+        m._instances.load_instances = lambda: [_readj(os.path.join(tmp, "toolinst.json"))]
+        m._instances.is_running = lambda inst: False
         try:
             picks = sorted(m.AGENT_TOOL_NAMES)[:3]
             m.set_instance_tools("toolinst", picks)
@@ -1354,7 +1354,7 @@ class ManagerFunctions(unittest.TestCase):
             cfg3 = _readj(os.path.join(tmp, "toolinst.json"))["config"]
             self.assertEqual(cfg3["AGENT_TOOLS"], picks[0])                    # unbekannte gefiltert
         finally:
-            m._paths.INST_DIR, m.load_instances, m.is_running = old_dir, old_load, old_run
+            m._paths.INST_DIR, m._instances.load_instances, m._instances.is_running = old_dir, old_load, old_run
 
     def test_plugin_zip_and_slip_guard(self):
         """A multi-file zip lands in the tool folder; a ../ path (zip-slip) must NOT
@@ -1438,16 +1438,16 @@ class ManagerFunctions(unittest.TestCase):
         inst = {"name": "e2e-switch", "config": {"OPENROUTER_MODEL": "google/gemini-2.5-flash"}}
         with open(os.path.join(tmp, "e2e-switch.json"), "w") as fh:
             json.dump(inst, fh)
-        old_dir, old_load = m._paths.INST_DIR, m.load_instances
+        old_dir, old_load = m._paths.INST_DIR, m._instances.load_instances
         try:
             m._paths.INST_DIR = tmp
-            m.load_instances = lambda: [_readj(os.path.join(tmp, "e2e-switch.json"))]
+            m._instances.load_instances = lambda: [_readj(os.path.join(tmp, "e2e-switch.json"))]
             msg = m.set_model("e2e-switch", "orcarouter:tencent/hy3")
             cfg = _readj(os.path.join(tmp, "e2e-switch.json"))["config"]
             self.assertEqual(cfg.get("ORCAROUTER_MODEL"), "tencent/hy3")
             self.assertNotIn("OPENROUTER_MODEL", cfg)               # anderer Provider entfernt
         finally:
-            m._paths.INST_DIR, m.load_instances = old_dir, old_load
+            m._paths.INST_DIR, m._instances.load_instances = old_dir, old_load
 
     def test_provider_switch_ignores_free_suffix(self):
         """':free' model variants must NOT be read as a provider."""
@@ -1455,16 +1455,16 @@ class ManagerFunctions(unittest.TestCase):
         tmp = tempfile.mkdtemp(prefix="e2e-inst2-")
         with open(os.path.join(tmp, "e2e-free.json"), "w") as fh:
             json.dump({"name": "e2e-free", "config": {"OPENROUTER_MODEL": "x"}}, fh)
-        old_dir, old_load = m._paths.INST_DIR, m.load_instances
+        old_dir, old_load = m._paths.INST_DIR, m._instances.load_instances
         try:
             m._paths.INST_DIR = tmp
-            m.load_instances = lambda: [_readj(os.path.join(tmp, "e2e-free.json"))]
+            m._instances.load_instances = lambda: [_readj(os.path.join(tmp, "e2e-free.json"))]
             m.set_model("e2e-free", "mistralai/mistral-7b-instruct:free")
             cfg = _readj(os.path.join(tmp, "e2e-free.json"))["config"]
             self.assertEqual(cfg.get("OPENROUTER_MODEL"), "mistralai/mistral-7b-instruct:free")
             self.assertNotIn("ORCAROUTER_MODEL", cfg)
         finally:
-            m._paths.INST_DIR, m.load_instances = old_dir, old_load
+            m._paths.INST_DIR, m._instances.load_instances = old_dir, old_load
 
     def test_hitl_lifecycle(self):
         m = self.m
@@ -2032,7 +2032,7 @@ class ManagerFunctions(unittest.TestCase):
 
     def test_overlay_bootarg_in_config(self):
         m = self.m
-        inst = next((i for i in m.load_instances()
+        inst = next((i for i in m._instances.load_instances()
                      if i.get("rootfs") in m.OVERLAY_ROOTFS), None)
         if not inst:
             self.skipTest("no overlay instance available")
@@ -2162,9 +2162,9 @@ class ManagerFunctions(unittest.TestCase):
         old = m._mcp.load_mcps
         try:
             m._mcp.load_mcps = lambda: [{"name": "homeassistant"}, {"name": "caldav"}]
-            self.assertEqual(m.mcp_servers_error("homeassistant, caldav"), "")
-            self.assertEqual(m.mcp_servers_error(""), "")
-            self.assertIn("calendar", m.mcp_servers_error("caldav,calendar"))
+            self.assertEqual(m._instances.mcp_servers_error("homeassistant, caldav"), "")
+            self.assertEqual(m._instances.mcp_servers_error(""), "")
+            self.assertIn("calendar", m._instances.mcp_servers_error("caldav,calendar"))
         finally:
             m._mcp.load_mcps = old
 
@@ -2174,11 +2174,11 @@ class ManagerFunctions(unittest.TestCase):
         webterm.py, never proxied from the guest."""
         m = self.m
         tunneled = []
-        old = m.load_instances, m.is_running, m.net_of
+        old = m._instances.load_instances, m._instances.is_running, m._instances.net_of
         try:
             inst = {"name": "vm1", "index": 3, "template": "openrouter"}
-            m.load_instances = lambda: [inst]; m.is_running = lambda i: True
-            m.net_of = lambda i: {"guest": "172.30.3.2", "tap": "fc3"}
+            m._instances.load_instances = lambda: [inst]; m._instances.is_running = lambda i: True
+            m._instances.net_of = lambda i: {"guest": "172.30.3.2", "tap": "fc3"}
             def ws(path, origin=None):
                 h = self._handler(path, "10.0.0.9")
                 h.headers["Connection"] = "Upgrade"; h.headers["Upgrade"] = "websocket"
@@ -2191,7 +2191,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual(self._status(ws("/i/vm1/term/ws", "http://evil.example")), 403)        # foreign
             self.assertEqual(tunneled, [])
             h = ws("/i/vm1/term/ws", "http://localhost:8700")                                        # ours
-            self.assertEqual(tunneled, [("172.30.3.2", m.TERM_GUEST_PORT, "/ws")])
+            self.assertEqual(tunneled, [("172.30.3.2", m._instances.TERM_GUEST_PORT, "/ws")])
             # the page: manager-served, the guest proxy must NOT be consulted
             h = self._handler("/i/vm1/term/", "10.0.0.9")
             h._proxy = lambda *a, **k: (_ for _ in ()).throw(AssertionError("terminal page was proxied from the guest"))
@@ -2199,18 +2199,18 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual(self._status(h), 200)
             self.assertIn(b"<!doctype html>", h.wfile.getvalue().lower())
         finally:
-            m.load_instances, m.is_running, m.net_of = old
+            m._instances.load_instances, m._instances.is_running, m._instances.net_of = old
 
     def test_proxied_guest_html_is_sandboxed(self):
         """H-3: HTML relayed from a guest carries Content-Security-Policy: sandbox;
         JSON/plain answers (the chat API) do not."""
         m = self.m
         import types
-        old = m.load_instances, m.is_running, m.net_of, m.urllib.request.urlopen, m.instance_by_ip
+        old = m._instances.load_instances, m._instances.is_running, m._instances.net_of, m.urllib.request.urlopen, m.instance_by_ip
         try:
             inst = {"name": "vm1", "index": 3, "template": "openrouter"}
-            m.load_instances = lambda: [inst]; m.is_running = lambda i: True
-            m.net_of = lambda i: {"guest": "172.30.3.2", "tap": "fc3"}; m.instance_by_ip = lambda ip: None
+            m._instances.load_instances = lambda: [inst]; m._instances.is_running = lambda i: True
+            m._instances.net_of = lambda i: {"guest": "172.30.3.2", "tap": "fc3"}; m.instance_by_ip = lambda ip: None
             class Resp:
                 def __init__(self, ct, body): self.status, self.headers, self._b = 200, {"Content-Type": ct}, body
                 def read(self, n=-1):
@@ -2225,7 +2225,7 @@ class ManagerFunctions(unittest.TestCase):
                 self.assertEqual(self._status(h), 200)
                 self.assertEqual(b"content-security-policy: sandbox" in raw.lower(), want, (ct, raw[:200]))
         finally:
-            m.load_instances, m.is_running, m.net_of, m.urllib.request.urlopen, m.instance_by_ip = old
+            m._instances.load_instances, m._instances.is_running, m._instances.net_of, m.urllib.request.urlopen, m.instance_by_ip = old
 
     def test_memfs_git_never_runs_as_root_with_hooks(self):
         """C-1: git in the guest-writable memory folder must run as the guest
@@ -2427,17 +2427,17 @@ class ManagerFunctions(unittest.TestCase):
         tmp = tempfile.mkdtemp(prefix="e2e-stale-")
         os.makedirs(os.path.join(tmp, "instances")); os.makedirs(os.path.join(tmp, "run"))
         img = os.path.join(tmp, "instances", "openrouter-rootfs.ext4")
-        old = m._paths.BASE, m._paths.RUN_DIR, m.is_running, m.load_instances, m._notify.notify_add, dict(m._img_seen), m.HARNESS_IMG
+        old = m._paths.BASE, m._paths.RUN_DIR, m._instances.is_running, m._instances.load_instances, m._notify.notify_add, dict(m._img_seen), m.HARNESS_IMG
         pushes = []
         try:
             m._paths.BASE, m._paths.RUN_DIR = tmp, os.path.join(tmp, "run")
             m.HARNESS_IMG = os.path.join(tmp, "run", "harness.ext4")    # none built here: rootfs only
-            m.is_running = lambda i: i["name"] != "off"
+            m._instances.is_running = lambda i: i["name"] != "off"
             insts = [{"name": "old", "rootfs": "instances/openrouter-rootfs.ext4"},
                      {"name": "fresh", "rootfs": "instances/openrouter-rootfs.ext4"},
                      {"name": "off", "rootfs": "instances/openrouter-rootfs.ext4"},
                      {"name": "priv", "rootfs": "instances/priv.ext4"}]
-            m.load_instances = lambda: insts
+            m._instances.load_instances = lambda: insts
             m._notify.notify_add = lambda *a, **k: pushes.append(a)
             for n, ts in (("old", 1000), ("fresh", 3000), ("off", 1000), ("priv", 1000)):
                 pf = os.path.join(tmp, "run", n + ".pid"); open(pf, "w").write("1"); os.utime(pf, (ts, ts))
@@ -2453,7 +2453,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertIn("old, fresh", pushes[0][2])
             self.assertEqual(m.image_sweep(), [])           # once per rebuild
         finally:
-            m._paths.BASE, m._paths.RUN_DIR, m.is_running, m.load_instances, m._notify.notify_add = old[:5]
+            m._paths.BASE, m._paths.RUN_DIR, m._instances.is_running, m._instances.load_instances, m._notify.notify_add = old[:5]
             m._img_seen.clear(); m._img_seen.update(old[5]); m.HARNESS_IMG = old[6]
 
     def test_guest_config_carries_host_timezone(self):
@@ -2492,9 +2492,9 @@ class ManagerFunctions(unittest.TestCase):
         refused at creation, and an edit may move a task to another instance."""
         m = self.m
         import mgr.store as st
-        old_load, old_file = m.load_instances, st.TASKS_FILE
+        old_load, old_file = m._instances.load_instances, st.TASKS_FILE
         try:
-            m.load_instances = lambda: [{"name": "orchestrator"}, {"name": "hass"}]
+            m._instances.load_instances = lambda: [{"name": "orchestrator"}, {"name": "hass"}]
             self.assertEqual(m.resolve_task_target("@orchestrator"), ("orchestrator", ""))
             self.assertEqual(m.resolve_task_target(" hass "), ("hass", ""))
             self.assertEqual(m.resolve_task_target(""), ("ephemeral", ""))
@@ -2527,7 +2527,7 @@ class ManagerFunctions(unittest.TestCase):
             finally:
                 m._notify.notify_add = old_notify
         finally:
-            m.load_instances, st.TASKS_FILE = old_load, old_file
+            m._instances.load_instances, st.TASKS_FILE = old_load, old_file
 
     def test_mission_edit_and_delete_any_status(self):
         """The UI may correct or remove a mission in ANY state: goal/steps/
@@ -2649,13 +2649,13 @@ class ManagerFunctions(unittest.TestCase):
         tmp = tempfile.mkdtemp(prefix="e2e-mi5-")
         import mgr.missions as mmod
         old_file, old_notify = mmod.MISSIONS_FILE, mmod.notify_add
-        old_run, old_load, old_win = m._run_named, m.load_instances, m.MISSION_COLLECT_SECS
+        old_run, old_load, old_win = m._run_named, m._instances.load_instances, m.MISSION_COLLECT_SECS
         pushes = []
         done = threading.Event()
         try:
             mmod.MISSIONS_FILE = os.path.join(tmp, "missions.json")
             mmod.notify_add = lambda *a, **k: ("x", "ok")
-            m.load_instances = lambda: [{"name": "owner-a"}]
+            m._instances.load_instances = lambda: [{"name": "owner-a"}]
             m._run_named = lambda inst, msg: (pushes.append((inst, msg)), done.set(), (True, "ok"))[-1]
             m.MISSION_COLLECT_SECS = 0.3
             mid, _ = m._missions.mission_start("owner-a", "burst goal", ["s1", "s2", "s3"])
@@ -2671,7 +2671,7 @@ class ManagerFunctions(unittest.TestCase):
                 self.assertIn(tid, msg)
         finally:
             mmod.MISSIONS_FILE, mmod.notify_add = old_file, old_notify
-            m._run_named, m.load_instances = old_run, old_load
+            m._run_named, m._instances.load_instances = old_run, old_load
             m.MISSION_COLLECT_SECS = old_win
 
     def test_mission_advance_fires_at_owner(self):
@@ -2683,14 +2683,14 @@ class ManagerFunctions(unittest.TestCase):
         tmp = tempfile.mkdtemp(prefix="e2e-mi4-")
         import mgr.missions as mmod
         old_file, old_notify = mmod.MISSIONS_FILE, mmod.notify_add
-        old_run, old_load, old_win = m._run_named, m.load_instances, m.MISSION_COLLECT_SECS
+        old_run, old_load, old_win = m._run_named, m._instances.load_instances, m.MISSION_COLLECT_SECS
         fired = []
         done = threading.Event()
         try:
             mmod.MISSIONS_FILE = os.path.join(tmp, "missions.json")
             mmod.notify_add = lambda *a, **k: ("x", "ok")
             m.MISSION_COLLECT_SECS = 0.2
-            m.load_instances = lambda: [{"name": "jobresearcher"}, {"name": "orchestrator"}]
+            m._instances.load_instances = lambda: [{"name": "jobresearcher"}, {"name": "orchestrator"}]
             m._run_named = lambda inst, msg: (fired.append(inst), done.set(), (True, "ok"))[-1]
             mid, _ = m._missions.mission_start("jobresearcher", "owned elsewhere", ["s1"])
             m._missions.mission_update("jobresearcher", mid, step=1, status="doing",
@@ -2700,13 +2700,13 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual(fired, ["jobresearcher"])
             # Owner gone -> no push (the TTL sweep pauses the mission instead).
             fired.clear(); done.clear()
-            m.load_instances = lambda: [{"name": "orchestrator"}]
+            m._instances.load_instances = lambda: [{"name": "orchestrator"}]
             m._mission_advance_fire("t-y1")
             self.assertFalse(done.wait(0.6))
             self.assertEqual(fired, [])
         finally:
             mmod.MISSIONS_FILE, mmod.notify_add = old_file, old_notify
-            m._run_named, m.load_instances = old_run, old_load
+            m._run_named, m._instances.load_instances = old_run, old_load
             m.MISSION_COLLECT_SECS = old_win
 
     def test_mission_caps(self):
@@ -3074,7 +3074,7 @@ class ManagerFunctions(unittest.TestCase):
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-mounts-")
         share = os.path.join(tmp, "share"); os.makedirs(share)
-        old = m._browse.BROWSE_ROOTS, m.instance_by_ip, m.mount_specs, m.load_instances
+        old = m._browse.BROWSE_ROOTS, m.instance_by_ip, m.mount_specs, m._instances.load_instances
         try:
             m._browse.BROWSE_ROOTS = (tmp,)
             self.assertEqual(m.mount_error(share, "/home/node/data"), "")
@@ -3088,7 +3088,7 @@ class ManagerFunctions(unittest.TestCase):
             m._browse.BROWSE_ROOTS = (tmp,)
             self.assertIn("error:", m.set_mounts.__doc__ or "error:")     # documented below via the route
             inst = {"name": "vm1", "index": 4, "template": "openrouter", "rootfs": "instances/openrouter-rootfs.ext4", "mounts": []}
-            m.load_instances = lambda: [inst]
+            m._instances.load_instances = lambda: [inst]
             m.mount_specs = lambda i: [{"sub": m.FCMNT_ROOT + "/vm1/0", "guest": "/home/node/data", "ro": True}]
             m.instance_by_ip = lambda ip: inst if ip == "172.30.4.2" else None
             h = self._handler("/api/mounts", "172.30.4.2"); h._do_GET()
@@ -3096,23 +3096,23 @@ class ManagerFunctions(unittest.TestCase):
             h = self._handler("/api/mounts?instance=nope", "10.0.0.5"); h._do_GET()
             self.assertEqual(self._status(h), 404)
         finally:
-            m._browse.BROWSE_ROOTS, m.instance_by_ip, m.mount_specs, m.load_instances = old
+            m._browse.BROWSE_ROOTS, m.instance_by_ip, m.mount_specs, m._instances.load_instances = old
 
     def test_set_mounts_refuses_bad_folders(self):
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-setm-")
-        old = m.load_instances, m._browse.BROWSE_ROOTS, m._paths.INST_DIR
+        old = m._instances.load_instances, m._browse.BROWSE_ROOTS, m._paths.INST_DIR
         try:
             m._paths.INST_DIR = tmp
             m._browse.BROWSE_ROOTS = (tmp,)
             inst = {"name": "vm1", "index": 4, "template": "openrouter", "rootfs": "instances/openrouter-rootfs.ext4", "mounts": []}
-            m.load_instances = lambda: [inst]
+            m._instances.load_instances = lambda: [inst]
             m.mount_specs = m.mount_specs
             r = m.set_mounts("vm1", [{"host": tmp, "guest": "/bin"}])
             self.assertTrue(r.startswith("error:"), r)
             self.assertFalse(os.path.exists(os.path.join(tmp, "vm1.json")))     # nothing saved
         finally:
-            m.load_instances, m._browse.BROWSE_ROOTS, m._paths.INST_DIR = old
+            m._instances.load_instances, m._browse.BROWSE_ROOTS, m._paths.INST_DIR = old
 
     def test_js_json_and_download_name_and_rate(self):
         m = self.m
@@ -3148,14 +3148,14 @@ class ManagerFunctions(unittest.TestCase):
         off for that instance; explicit notes obey the same switch."""
         m = self.m
         seen = []
-        old = (m.load_instances, m.instance_by_ip, m.save_chats, m.load_chats, m._memfs.timeline_add,
+        old = (m._instances.load_instances, m.instance_by_ip, m.save_chats, m.load_chats, m._memfs.timeline_add,
                m._hindsight.retain_async)
         try:
             m._hindsight.retain_async = lambda inst, text, tags=(): seen.append((inst, text, tuple(tags)))
             m._memfs.timeline_add = lambda *a, **k: None
             m.load_chats = lambda: []; m.save_chats = lambda c: 1
-            m.load_instances = lambda: [{"name": "a", "config": {}}, {"name": "voice", "config": {"HINDSIGHT_RETAIN": "0"}}]
-            self.assertTrue(m.hindsight_retains("a")); self.assertFalse(m.hindsight_retains("voice"))
+            m._instances.load_instances = lambda: [{"name": "a", "config": {}}, {"name": "voice", "config": {"HINDSIGHT_RETAIN": "0"}}]
+            self.assertTrue(m._instances.hindsight_retains("a")); self.assertFalse(m._instances.hindsight_retains("voice"))
             m.chat_log_append("a", "", "mach das Radio an", "Das Radio ist an.", kind="voice")
             self.assertEqual(len(seen), 1)
             inst, text, tags = seen[0]
@@ -3166,7 +3166,7 @@ class ManagerFunctions(unittest.TestCase):
             m.chat_log_append("voice", "", "hallo", "hi", kind="voice")                 # retention off
             self.assertEqual(seen, [])
         finally:
-            (m.load_instances, m.instance_by_ip, m.save_chats, m.load_chats, m._memfs.timeline_add,
+            (m._instances.load_instances, m.instance_by_ip, m.save_chats, m.load_chats, m._memfs.timeline_add,
              m._hindsight.retain_async) = old
 
     def test_hindsight_second_memory(self):
@@ -3234,7 +3234,7 @@ class ManagerFunctions(unittest.TestCase):
             m.apply_internet(inst, False)
             chain = m._fc_chain(inst)
             self.assertIn(("iptables", "-A", chain, "!", "-d", m.POOL, "-j", "REJECT"), calls)
-            self.assertIn(("iptables", "-I", "FORWARD", "1", "-i", m.net_of(inst)["tap"], "-j", chain), calls)
+            self.assertIn(("iptables", "-I", "FORWARD", "1", "-i", m._instances.net_of(inst)["tap"], "-j", chain), calls)
             self.assertFalse(any("ACCEPT" in a and chain in a for a in calls))
             calls.clear()
             m.apply_internet(inst, True)
@@ -3251,12 +3251,12 @@ class ManagerFunctions(unittest.TestCase):
         m = self.m
         import mgr.store as st
         seen = []
-        old = (m.instance_by_ip, m.load_instances, m._run_task_now, m._store.history_add, m.guest_may_target,
+        old = (m.instance_by_ip, m._instances.load_instances, m._run_task_now, m._store.history_add, m.guest_may_target,
                m._run_ephemeral, st.TASKS_FILE)
         try:
             caller = {"name": "orch", "config": {}}
             m.instance_by_ip = lambda ip: caller if ip == "172.30.1.2" else None
-            m.load_instances = lambda: [caller, {"name": "hass"}]
+            m._instances.load_instances = lambda: [caller, {"name": "hass"}]
             m.guest_may_target = lambda inst, target: True
             m._store.history_add = lambda *a, **k: None
             m._run_task_now = lambda target, msg, model=None, timeout=600, sandbox=None: (seen.append((target, msg, sandbox)), (True, "ok"))[1]
@@ -3286,7 +3286,7 @@ class ManagerFunctions(unittest.TestCase):
             m._run_task_now("ephemeral", "do")
             self.assertEqual(len(calls[0][0]), 4); self.assertEqual(len(calls[1][0]), 3)
         finally:
-            (m.instance_by_ip, m.load_instances, m._run_task_now, m._store.history_add, m.guest_may_target,
+            (m.instance_by_ip, m._instances.load_instances, m._run_task_now, m._store.history_add, m.guest_may_target,
              m._run_ephemeral, st.TASKS_FILE) = old
 
     def test_egress_allowlist_rules(self):
@@ -3432,11 +3432,11 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual((cfg2["AGENT_TOOLS"], err2), ("read_file", ""))
             # an explicit model must win over the persona's model in the VM config
             seen = []
-            old2 = m.create_instance, m.load_instances, m.wait_web, m._chat_post, m.stop, m.delete_instance
+            old2 = m.create_instance, m._instances.load_instances, m.wait_web, m._chat_post, m.stop, m.delete_instance
             try:
                 def create(name, tpl, cfg=None, mounts=None, internet=True):
                     seen.append(dict(cfg or {}))
-                    m.load_instances = lambda: [{"name": name, "template": "openrouter"}]
+                    m._instances.load_instances = lambda: [{"name": name, "template": "openrouter"}]
                     return "ok"
                 m.create_instance = create; m.wait_web = lambda i, timeout=120: True
                 m._chat_post = lambda i, msg, timeout=600: "r"; m.stop = lambda i: None; m.delete_instance = lambda n: None
@@ -3444,7 +3444,7 @@ class ManagerFunctions(unittest.TestCase):
                 m._run_ephemeral_vm("do", "explicit/model", 60, sb)
                 self.assertEqual(seen[-1]["OPENROUTER_MODEL"], "explicit/model")
             finally:
-                m.create_instance, m.load_instances, m.wait_web, m._chat_post, m.stop, m.delete_instance = old2
+                m.create_instance, m._instances.load_instances, m.wait_web, m._chat_post, m.stop, m.delete_instance = old2
         finally:
             m.load_personas, m.load_skills = old
 
@@ -3485,19 +3485,19 @@ class ManagerFunctions(unittest.TestCase):
         without internet; without a sandbox nothing changes."""
         m = self.m
         seen = []
-        old = m.create_instance, m.load_instances, m.wait_web, m._chat_post, m.stop, m.delete_instance
+        old = m.create_instance, m._instances.load_instances, m.wait_web, m._chat_post, m.stop, m.delete_instance
         try:
             m.create_instance = lambda name, tpl, cfg=None, mounts=None, internet=True: seen.append((tpl, dict(cfg or {}), internet)) or "ok"
-            m.load_instances = lambda: [{"name": n, "template": "openrouter"} for n in ["x"]] if False else [{"name": seen[-1] and "task-x", "template": "openrouter"}]
-            m.load_instances = lambda: [{"name": next((k for k in ["any"]), ""), "template": "openrouter"}]
+            m._instances.load_instances = lambda: [{"name": n, "template": "openrouter"} for n in ["x"]] if False else [{"name": seen[-1] and "task-x", "template": "openrouter"}]
+            m._instances.load_instances = lambda: [{"name": next((k for k in ["any"]), ""), "template": "openrouter"}]
             m.wait_web = lambda inst, timeout=120: True
             m._chat_post = lambda inst, message, timeout=600: "child says hi"
             m.stop = lambda inst: None; m.delete_instance = lambda name: None
             # load_instances must return the instance the run just created: match on prefix
-            m.load_instances = lambda: [{"name": "task-" + "".join(c for c in "0" * 6), "template": "openrouter"}]
+            m._instances.load_instances = lambda: [{"name": "task-" + "".join(c for c in "0" * 6), "template": "openrouter"}]
             real_create = m.create_instance
             def create(name, tpl, cfg=None, mounts=None, internet=True):
-                m.load_instances = lambda: [{"name": name, "template": "openrouter", "config": dict(cfg or {}), "internet": internet}]
+                m._instances.load_instances = lambda: [{"name": name, "template": "openrouter", "config": dict(cfg or {}), "internet": internet}]
                 return real_create(name, tpl, cfg, mounts, internet)
             m.create_instance = create
             ok, res = m._run_ephemeral_vm("do", None, 60, {"cfg": {"AGENT_TOOLS": "bash", "EGRESS_ALLOW": ""}, "internet": False})
@@ -3506,7 +3506,7 @@ class ManagerFunctions(unittest.TestCase):
             ok, res = m._run_ephemeral_vm("do", "google/gemini-2.5-flash", 60)
             self.assertNotIn("AGENT_TOOLS", seen[-1][1]); self.assertTrue(seen[-1][2]); self.assertEqual(seen[-1][1]["OPENROUTER_MODEL"], "google/gemini-2.5-flash")
         finally:
-            m.create_instance, m.load_instances, m.wait_web, m._chat_post, m.stop, m.delete_instance = old
+            m.create_instance, m._instances.load_instances, m.wait_web, m._chat_post, m.stop, m.delete_instance = old
 
     def test_proxy_books_upstream_usage(self):
         m = self.m
@@ -3630,9 +3630,9 @@ class ManagerFunctions(unittest.TestCase):
         old = m._paths.INST_DIR, os.umask(0o077)
         try:
             m._paths.INST_DIR = tmp
-            m.save_instance({"name": "x", "template": "openrouter"})
+            m._instances.save_instance({"name": "x", "template": "openrouter"})
             self.assertEqual(os.stat(os.path.join(tmp, "x.json")).st_mode & 0o777, 0o640)
-            self.assertEqual(m.load_instances()[0]["name"], "x")
+            self.assertEqual(m._instances.load_instances()[0]["name"], "x")
             os.chmod(os.path.join(tmp, "x.json"), 0o600)
             os.makedirs(os.path.join(tmp, "instances")); os.rename(os.path.join(tmp, "x.json"), os.path.join(tmp, "instances", "x.json"))
             m.harden_files(tmp)
@@ -3703,13 +3703,13 @@ class ManagerFunctions(unittest.TestCase):
         as a timeout, not as a stack trace."""
         m = self.m
         sent = []
-        old = m.urllib.request.urlopen, m.net_of, m.load_instances, m.is_running, m._run_named
+        old = m.urllib.request.urlopen, m._instances.net_of, m._instances.load_instances, m._instances.is_running, m._run_named
 
         class _R:
             def __init__(self, body): self.body = body
             def read(self): return self.body
         try:
-            m.net_of = lambda inst: {"guest": "172.30.9.2"}
+            m._instances.net_of = lambda inst: {"guest": "172.30.9.2"}
             def fake_open(req, timeout=None):
                 sent.append((json.loads(req.data.decode()), timeout))
                 if timeout == 5:
@@ -3721,8 +3721,8 @@ class ManagerFunctions(unittest.TestCase):
             body, to = sent[-1]
             self.assertEqual(to, 1800)
             self.assertAlmostEqual(body["deadline"], time.time() + 1770, delta=5)
-            m.load_instances = lambda: [inst]
-            m.is_running = lambda i: True
+            m._instances.load_instances = lambda: [inst]
+            m._instances.is_running = lambda i: True
             ok, res = m._run_named("vm1", "hi", timeout=5)
             self.assertFalse(ok); self.assertIn("no answer within 5 s", res)
             got = []
@@ -3732,7 +3732,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual(got, [m.TASK_TIMEOUT, 600])
             self.assertGreaterEqual(m.TASK_TIMEOUT, 1800)
         finally:
-            m.urllib.request.urlopen, m.net_of, m.load_instances, m.is_running, m._run_named = old
+            m.urllib.request.urlopen, m._instances.net_of, m._instances.load_instances, m._instances.is_running, m._run_named = old
 
     def test_trace_stitches_turn_llm_and_tool_spans(self):
         """One turn = one span tree. The agent sends a start marker, its LLM
@@ -3820,12 +3820,12 @@ class ManagerFunctions(unittest.TestCase):
                 if n is None:
                     out, self.pos = self.body[self.pos:], len(self.body); return out
                 out = self.body[self.pos:self.pos + n]; self.pos += len(out); return out
-        old = m.urllib.request.urlopen, m.load_instances, m.is_running, m.net_of, m.instance_by_ip, m._auth.PW
+        old = m.urllib.request.urlopen, m._instances.load_instances, m._instances.is_running, m._instances.net_of, m.instance_by_ip, m._auth.PW
         try:
             inst = {"name": "vm1", "index": 4, "config": {"TRANSPORT": "web"}}
-            m.load_instances = lambda: [inst]
-            m.is_running = lambda i: True
-            m.net_of = lambda i: {"guest": "172.30.4.2"}
+            m._instances.load_instances = lambda: [inst]
+            m._instances.is_running = lambda i: True
+            m._instances.net_of = lambda i: {"guest": "172.30.4.2"}
             m.instance_by_ip = lambda ip: None
             m._auth.PW = ""
             m.urllib.request.urlopen = lambda req, timeout=None: _R(b"Hallo", "text/plain; charset=utf-8", "t0ken001")
@@ -3844,7 +3844,7 @@ class ManagerFunctions(unittest.TestCase):
             h = self._handler("/i/vm1/", "10.0.0.5"); h._proxy("GET")
             self.assertNotIn(b"X-Kaim-Turn", h.wfile.getvalue())                # nothing to forward
         finally:
-            m.urllib.request.urlopen, m.load_instances, m.is_running, m.net_of, m.instance_by_ip, m._auth.PW = old
+            m.urllib.request.urlopen, m._instances.load_instances, m._instances.is_running, m._instances.net_of, m.instance_by_ip, m._auth.PW = old
 
     def test_task_run_now(self):
         """The Tasks tab's play button: a scheduled task runs at the next tick
@@ -3972,17 +3972,17 @@ class ManagerFunctions(unittest.TestCase):
         import mgr.store as st
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-session-")
-        old = (m.load_instances, m.is_running, m.pidfile, m._settings.load_settings, m._secrets.secret_store, m._secrets.load_secret_policy,
+        old = (m._instances.load_instances, m._instances.is_running, m._instances.pidfile, m._settings.load_settings, m._secrets.secret_store, m._secrets.load_secret_policy,
                m._mcp.load_mcps, m.load_skills, m._paths.RUN_DIR, m.instance_by_ip, m._auth.PW, st.HISTORY_DB, m.image_state)
         try:
             inst = {"name": "vm1", "index": 3, "template": "openrouter", "rootfs": "instances/openrouter-rootfs.ext4",
                     "config": {"OPENROUTER_MODEL": "x/y", "MCP_SERVERS": "caldav,homeassistant"}}
-            m.load_instances = lambda: [inst]
-            m.is_running = lambda i: True
+            m._instances.load_instances = lambda: [inst]
+            m._instances.is_running = lambda i: True
             m.image_state = lambda i: (False, 0, 0)
             m._paths.RUN_DIR = tmp; st.HISTORY_DB = os.path.join(tmp, "history.db")
             pf = os.path.join(tmp, "vm1.pid"); open(pf, "w").write("1"); os.utime(pf, (time.time() - 7500,) * 2)
-            m.pidfile = lambda i: pf
+            m._instances.pidfile = lambda i: pf
             with open(os.path.join(tmp, "vm1.log"), "w") as fh:
                 fh.write("[init] harness from /dev/vdc\nagent ready\n")
             m._settings.load_settings = lambda: {"LLM_KEY_PROXY": "1", "BRAVE_API_KEY": "b"}
@@ -4015,7 +4015,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertRegex(m.session_info(cl)["login"], r"^(ok · valid \d+h \d+m|expired on the host.*|missing \(log in on the host\))$")
             self.assertNotIn("commands", m.session_info(cl))                       # the / picker lists them
         finally:
-            (m.load_instances, m.is_running, m.pidfile, m._settings.load_settings, m._secrets.secret_store, m._secrets.load_secret_policy,
+            (m._instances.load_instances, m._instances.is_running, m._instances.pidfile, m._settings.load_settings, m._secrets.secret_store, m._secrets.load_secret_policy,
              m._mcp.load_mcps, m.load_skills, m._paths.RUN_DIR, m.instance_by_ip, m._auth.PW, st.HISTORY_DB, m.image_state) = old
 
     def test_chat_page_carries_panel_and_search(self):

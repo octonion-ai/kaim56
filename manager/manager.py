@@ -37,10 +37,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import chatui   # chat interface (/chat), lives next to this file
 
-WEB_GUEST_PORT = 8080   # port of the web bridge in the microVM
-TERM_GUEST_PORT = 7682  # port of the webterm (browser terminal) in the microVM
-
 from mgr import paths as _paths  # noqa: E402
+from mgr import instances as _instances  # noqa: E402
 from mgr import secrets as _secrets  # noqa: E402
 from mgr import llmproxy as _llmproxy  # noqa: E402
 from mgr import ui as _ui  # noqa: E402
@@ -163,33 +161,6 @@ def export_opts(ro, fsid):
             f"anonuid={GUEST_UID},anongid={GUEST_GID},fsid={fsid}")
 
 os.makedirs(_paths.RUN_DIR, exist_ok=True)
-
-
-# ---- instances -------------------------------------------------------------
-def save_instance(inst):
-    """Instance JSON: written by root, readable by the operator's group — it
-    carries no secrets by design (NEVER_PERSIST), and the tests, the build
-    script's --smoke and the operator read it. Under umask 077 a plain
-    open() would leave it root-only (load_instances then fails for anyone
-    but root, seen on the deployment test VM)."""
-    p = os.path.join(_paths.INST_DIR, f"{inst['name']}.json")
-    with open(p, "w") as fh:
-        json.dump(inst, fh, indent=2)
-    try:
-        os.chmod(p, 0o640)
-        if os.geteuid() == 0:
-            os.chown(p, 0, _host.ADMIN_GID)
-    except OSError:
-        pass
-
-
-def load_instances():
-    out = []
-    for f in sorted(os.listdir(_paths.INST_DIR)) if os.path.isdir(_paths.INST_DIR) else []:
-        if f.endswith(".json"):
-            with open(os.path.join(_paths.INST_DIR, f)) as fh:
-                out.append(json.load(fh))
-    return out
 
 
 # ---- Signal (send/HITL/receive): moved out to mgr/signal.py ---------------
@@ -380,7 +351,7 @@ def chat_log_append(inst_name, sender, user_text, reply_text, kind="signal"):
         # remembered "fact" — a wrong answer would otherwise feed back into
         # recall as truth (memory poisoning). Explicit memory_store notes still
         # go in (below); this is the passive chat capture.
-        if user_text and hindsight_retains(inst_name):
+        if user_text and _instances.hindsight_retains(inst_name):
             _hindsight.retain_async(inst_name, str(user_text), (kind or "chat", "user"))
     except Exception as e:
         print(f"[quiet] memfs timeline failed: {e!r}", flush=True)
@@ -495,7 +466,7 @@ def _chat_post(inst, message, timeout=600):
     """Non-streaming chat call to an instance's bridge. The agent gets the
     deadline along and stops its tool loop in time — a run that outlives the
     caller answers into the void (a 12-step job search once did)."""
-    url = f"http://{net_of(inst)['guest']}:{WEB_GUEST_PORT}/api/chat"
+    url = f"http://{_instances.net_of(inst)['guest']}:{_instances.WEB_GUEST_PORT}/api/chat"
     data = json.dumps({"message": message, "deadline": time.time() + timeout - 30,
                        "kind": "task"}).encode()
     req = urllib.request.Request(url, data=data, method="POST",
@@ -510,13 +481,13 @@ def _chat_post(inst, message, timeout=600):
 def _run_named(instance, message, timeout=600):
     """Run a task on an EXISTING instance (its tools/MCP/secrets live there).
     Starts it if needed and waits until the bridge is up."""
-    inst = next((i for i in load_instances() if i["name"] == instance), None)
+    inst = next((i for i in _instances.load_instances() if i["name"] == instance), None)
     if not inst:
         return (False, f"instance '{instance}' unknown")
-    if not is_running(inst):
+    if not _instances.is_running(inst):
         if not wait_web(inst, timeout=120):
             return (False, f"instance '{instance}' not ready")
-        inst = next((i for i in load_instances() if i["name"] == instance), None)
+        inst = next((i for i in _instances.load_instances() if i["name"] == instance), None)
     try:
         return (True, _chat_post(inst, message, timeout=timeout))
     except (TimeoutError, socket.timeout):
@@ -628,7 +599,7 @@ def _run_ephemeral_vm(message, model=None, timeout=600, sandbox=None):
               f"egress={cfg.get('EGRESS_ALLOW') or ('none' if not internet else 'any')}"
               f"{' skill' if 'AGENT_SYSTEM' in cfg else ''}", flush=True)
     msg = create_instance(name, "openrouter", cfg, internet=internet)
-    inst = next((i for i in load_instances() if i["name"] == name), None)
+    inst = next((i for i in _instances.load_instances() if i["name"] == name), None)
     if not inst:
         return (False, f"ephemeral VM failed: {msg}")
     try:
@@ -652,7 +623,7 @@ def resolve_task_target(target):
     'instance unknown' while nobody was told — and refuses unknown names at
     creation time instead of at 08:00 the next day."""
     t = (target or "").strip().lstrip("@").strip() or "ephemeral"
-    if t == "ephemeral" or any(i.get("name") == t for i in load_instances()):
+    if t == "ephemeral" or any(i.get("name") == t for i in _instances.load_instances()):
         return t, ""
     return "", f"instance '{t}' unknown (targets: ephemeral or an existing instance name)"
 
@@ -673,7 +644,7 @@ def unknown_target_tasks(tasks, names):
 def task_target_sweep():
     """Hourly (idle worker): push once per task with a dead target, then mark
     it so the push does not repeat. Editing the task clears the mark."""
-    names = {i.get("name") for i in load_instances()}
+    names = {i.get("name") for i in _instances.load_instances()}
     hit = []
 
     def mut(tasks):
@@ -772,7 +743,7 @@ def _mission_advance_flush(inst):
         lines = _madv_pending.pop(inst, [])
     if not lines:
         return
-    if not any(i.get("name") == inst for i in load_instances()):
+    if not any(i.get("name") == inst for i in _instances.load_instances()):
         return          # owner deleted -> nothing to push to (TTL sweep pauses it)
     msg = MISSION_ADVANCE_MSG.format(done="\n".join("- " + x for x in lines))
     try:
@@ -808,7 +779,7 @@ _orch_dirty = [False]
 
 
 def orchestrator_ping():
-    if not any(i.get("name") == ORCH_INSTANCE for i in load_instances()):
+    if not any(i.get("name") == ORCH_INSTANCE for i in _instances.load_instances()):
         return
     try:
         if not inbox_since(peek=True):   # only fire if there is really something new
@@ -1042,7 +1013,7 @@ def _task_worker():
                 except Exception as e:
                     _util._wlog(f"task-target-sweep failed: {e!r}")
                 try:
-                    _memfs.sweep([i["name"] for i in load_instances() if uses_harness(i)])
+                    _memfs.sweep([i["name"] for i in _instances.load_instances() if uses_harness(i)])
                 except Exception as e:
                     _util._wlog(f"memfs-sweep failed: {e!r}")
                 try:
@@ -1055,25 +1026,6 @@ def _task_worker():
                 _util._wlog(f"image-sweep failed: {e!r}")
 
 
-def load_templates():
-    out = []
-    for f in sorted(os.listdir(_paths.TEMPLATE_DIR)) if os.path.isdir(_paths.TEMPLATE_DIR) else []:
-        if f.endswith(".json"):
-            with open(os.path.join(_paths.TEMPLATE_DIR, f)) as fh:
-                out.append(json.load(fh))
-    return out
-
-
-def next_index():
-    used = {i.get("index", 0) for i in load_instances()}
-    n = 1
-    while n in used:
-        n += 1
-    return n
-
-
-# Tool catalog for the UI (mirrors BUILTIN in the openrouter agent). Display/
-# allowlist only — the agent filters execution again itself.
 AGENT_TOOLS_CATALOG = [
     {"name": "bash", "desc": "Run shell commands in the workspace"},
     {"name": "read_file", "desc": "Read a file"},
@@ -1126,9 +1078,9 @@ def create_instance(name, template, config=None, mounts=None, internet=True):
     name = "".join(c for c in name if c.isalnum() or c in "-_").lower()
     if not name:
         return "invalid name"
-    if any(i["name"] == name for i in load_instances()):
+    if any(i["name"] == name for i in _instances.load_instances()):
         return f"'{name}' already exists"
-    tpl = next((t for t in load_templates() if t.get("template") == template), None)
+    tpl = next((t for t in _instances.load_templates() if t.get("template") == template), None)
     if not tpl:
         return f"unknown template '{template}'"
     # defaults from template.params, overridden by the passed config,
@@ -1141,7 +1093,7 @@ def create_instance(name, template, config=None, mounts=None, internet=True):
             cfg[k] = settings[k]
     for k in _settings.NEVER_PERSIST:
         cfg.pop(k, None)
-    inst = {"name": name, "index": next_index(), "vcpus": tpl.get("vcpus", 2),
+    inst = {"name": name, "index": _instances.next_index(), "vcpus": tpl.get("vcpus", 2),
             "mem_mib": tpl.get("mem_mib", 1024), "rootfs": tpl["rootfs"],
             "internet": bool(internet),
             "description": f"{tpl.get('description','')} ({cfg.get('TRANSPORT','signal')}"
@@ -1153,14 +1105,14 @@ def create_instance(name, template, config=None, mounts=None, internet=True):
              for m in (mounts or []) if isinstance(m, dict) and m.get("host") and m.get("guest")]
     if clean:
         inst["mounts"] = clean
-    save_instance(inst)
+    _instances.save_instance(inst)
     return f"instance '{name}' created from template '{template}'"
 
 
 def set_instance_tools(name, tools):
     """Set an instance's tool allowlist. Empty/all list -> drop the field
     (= all tools). Takes effect at the next start (env-based)."""
-    inst = next((i for i in load_instances() if i["name"] == name), None)
+    inst = next((i for i in _instances.load_instances() if i["name"] == name), None)
     if not inst:
         return "unknown"
     sel = [t for t in (tools or []) if t in AGENT_TOOL_NAMES]
@@ -1169,8 +1121,8 @@ def set_instance_tools(name, tools):
         cfg["AGENT_TOOLS"] = ",".join(sorted(sel))
     else:
         cfg.pop("AGENT_TOOLS", None)
-    save_instance(inst)
-    running = " (applies after stop/start)" if is_running(inst) else ""
+    _instances.save_instance(inst)
+    running = " (applies after stop/start)" if _instances.is_running(inst) else ""
     return f"tools for '{name}' saved{running}"
 
 
@@ -1188,7 +1140,7 @@ def set_model(name, model):
     already uses (no new one is invented — otherwise nobody would know which
     provider is meant). Takes effect at the next start (env-based), like the
     tool allowlist."""
-    inst = next((i for i in load_instances() if i["name"] == name), None)
+    inst = next((i for i in _instances.load_instances() if i["name"] == name), None)
     if not inst:
         return "unknown"
     model = str(model or "").strip()
@@ -1213,27 +1165,27 @@ def set_model(name, model):
             return (f"error: instance '{name}' has no model setting "
                     f"({'/'.join(MODEL_KEYS)})")
         cfg[key] = model
-    save_instance(inst)
-    running = " (applies after stop/start)" if is_running(inst) else ""
+    _instances.save_instance(inst)
+    running = " (applies after stop/start)" if _instances.is_running(inst) else ""
     return f"model for '{name}' set to {model}{running}"
 
 
 def set_internet(name, on):
-    inst = next((i for i in load_instances() if i["name"] == name), None)
+    inst = next((i for i in _instances.load_instances() if i["name"] == name), None)
     if not inst:
         return "unknown"
     inst["internet"] = bool(on)
-    save_instance(inst)
-    if is_running(inst):
+    _instances.save_instance(inst)
+    if _instances.is_running(inst):
         apply_internet(inst, on)   # takes effect immediately, no restart needed
     return f"internet for '{name}': {'on' if on else 'off'}"
 
 
 def delete_instance(name):
-    inst = next((i for i in load_instances() if i["name"] == name), None)
+    inst = next((i for i in _instances.load_instances() if i["name"] == name), None)
     if not inst:
         return "unknown"
-    if is_running(inst):
+    if _instances.is_running(inst):
         stop(inst)
     teardown_mounts(inst)   # safely remove any leftovers (binds/export)
     p = os.path.join(_paths.INST_DIR, f"{name}.json")
@@ -1242,32 +1194,10 @@ def delete_instance(name):
     return f"instance '{name}' deleted"
 
 
-def net_of(inst):
-    i = inst["index"]
-    return dict(host=f"172.30.{i}.1", guest=f"172.30.{i}.2", tap=f"fc{i}",
-                mac=f"AA:FC:00:00:{i:02x}:01", mask="255.255.255.252")
-
-
-def pidfile(inst):
-    return os.path.join(_paths.RUN_DIR, f"{inst['name']}.pid")
-
-
-def is_running(inst):
-    pf = pidfile(inst)
-    if not os.path.exists(pf):
-        return False
-    try:
-        pid = int(open(pf).read().strip())
-        os.kill(pid, 0)
-        return True
-    except (ValueError, ProcessLookupError, PermissionError):
-        return False
-
-
 # ---- Resource overview per instance (Resources tab) ------------------------
 def _read_pid(inst):
     try:
-        return int(open(pidfile(inst)).read().strip())
+        return int(open(_instances.pidfile(inst)).read().strip())
     except (OSError, ValueError):
         return None
 
@@ -1297,7 +1227,7 @@ def resource_stats():
     """Per instance: configured size (vCPU/RAM) + live usage (RSS, CPU%,
     overlay disk). CPU% via a short sample; percentages relative to ONE core
     (a 2-vCPU guest can reach up to ~200%)."""
-    insts = load_instances()
+    insts = _instances.load_instances()
     clk = os.sysconf("SC_CLK_TCK") or 100
     pids = {i["name"]: _read_pid(i) for i in insts}
     pids = {n: p for n, p in pids.items() if p is not None and os.path.exists("/proc/%d" % p)}
@@ -1386,20 +1316,20 @@ def ensure_antispoof(inst):
     """A VM's packets must carry its own /30 address: the source IP is the
     guest's identity for the manager (instance_by_ip), so a forged source would
     be a forged identity. Always on top — above the instance's FORWARD chain."""
-    for chain, spec in _antispoof_rules(net_of(inst)):
+    for chain, spec in _antispoof_rules(_instances.net_of(inst)):
         while _util.sh("iptables", "-C", chain, *spec, check=False).returncode == 0:
             _util.sh("iptables", "-D", chain, *spec, check=False)
         _util.sh("iptables", "-I", chain, "1", *spec, check=False)
 
 
 def clear_antispoof(inst):
-    for chain, spec in _antispoof_rules(net_of(inst)):
+    for chain, spec in _antispoof_rules(_instances.net_of(inst)):
         while _util.sh("iptables", "-C", chain, *spec, check=False).returncode == 0:
             _util.sh("iptables", "-D", chain, *spec, check=False)
 
 
 def setup_tap(inst):
-    n = net_of(inst)
+    n = _instances.net_of(inst)
     _util.sh("ip", "link", "del", n["tap"], check=False)
     _util.sh("ip", "tuntap", "add", n["tap"], "mode", "tap")
     _util.sh("ip", "addr", "add", f"{n['host']}/30", "dev", n["tap"])
@@ -1492,7 +1422,7 @@ def apply_internet(inst, allow):
       4. everything outside the pool (internet) -> ACCEPT
     The return path stays the generic rule: through NAT, replies are only
     possible for connections the guest opened itself."""
-    n = net_of(inst)
+    n = _instances.net_of(inst)
     chain = _fc_chain(inst)
 
     # Clear out leftovers, idempotent: jump rule, chain, old direct rule.
@@ -1564,7 +1494,7 @@ def apply_internet(inst, allow):
 def teardown_tap(inst):
     # Rules point at the tap NAME and survive deletion of the device — without
     # cleanup, dead chains pile up.
-    n = net_of(inst)
+    n = _instances.net_of(inst)
     chain = _fc_chain(inst)
     _util.sh("iptables", "-D", "FORWARD", "-i", n["tap"], "-j", chain, check=False)
     _util.sh("iptables", "-F", chain, check=False)
@@ -1647,7 +1577,7 @@ def setup_mounts(inst):
     """Export this instance's workspace and host folders to ITS address only."""
     ensure_guest_user()
     retire_root_export()
-    n = net_of(inst)
+    n = _instances.net_of(inst)
     ws = workspace_dir(inst)
     own_guest_dir(ws)
     lines = [f"{ws} {n['guest']}({export_opts(False, workspace_fsid(inst))})\n"]
@@ -1750,7 +1680,7 @@ def mount_error(host, guest):
 
 
 def set_mounts(name, mounts):
-    inst = next((i for i in load_instances() if i["name"] == name), None)
+    inst = next((i for i in _instances.load_instances() if i["name"] == name), None)
     if not inst:
         return "unknown"
     old_specs = mount_specs(inst)
@@ -1766,9 +1696,9 @@ def set_mounts(name, mounts):
     inst["mounts"] = wanted
     ensure_guest_user()
     warn = [m["host"] for m in wanted if not m["readonly"] and not guest_can_write(m["host"])]
-    save_instance(inst)
+    _instances.save_instance(inst)
     note = ""
-    if is_running(inst):
+    if _instances.is_running(inst):
         # apply LIVE: tear down removed folders, export the current (new) ones.
         new_subs = {s["sub"] for s in mount_specs(inst)}
         for s in old_specs:
@@ -1957,20 +1887,20 @@ def image_state(inst):
     was started before that image was last rebuilt — it still runs the old
     agent and will until stop/start. spawn_subagent was dead for three weeks
     and a tool fix missed the voice instance this way; nobody could see it."""
-    if inst.get("rootfs") not in OVERLAY_ROOTFS or not is_running(inst):
+    if inst.get("rootfs") not in OVERLAY_ROOTFS or not _instances.is_running(inst):
         return False, 0, 0
     try:
         built = os.path.getmtime(os.path.join(_paths.BASE, inst["rootfs"]))
         if uses_harness(inst) and os.path.exists(HARNESS_IMG):
             built = max(built, os.path.getmtime(HARNESS_IMG))   # agent code counts too
-        started = os.path.getmtime(pidfile(inst))
+        started = os.path.getmtime(_instances.pidfile(inst))
     except OSError:
         return False, 0, 0
     return started < built, built, started
 
 
 def stale_instances():
-    return [i["name"] for i in load_instances() if image_state(i)[0]]
+    return [i["name"] for i in _instances.load_instances() if image_state(i)[0]]
 
 
 _img_seen = {}      # rootfs path -> mtime last seen (filled at startup: no push for old news)
@@ -2026,10 +1956,10 @@ def make_upper(inst):
 
 def reset_upper(name):
     """Delete the persistent write layer (factory reset). Only while stopped."""
-    inst = next((i for i in load_instances() if i["name"] == name), None)
+    inst = next((i for i in _instances.load_instances() if i["name"] == name), None)
     if not inst:
         return "unknown"
-    if is_running(inst):
+    if _instances.is_running(inst):
         return "error: instance is running — stop it first"
     n = 0
     for p in (os.path.join(_paths.INST_DIR, f"{name}-upper.ext4"),
@@ -2042,14 +1972,14 @@ def reset_upper(name):
 
 
 def set_persist_disk(name, on):
-    inst = next((i for i in load_instances() if i["name"] == name), None)
+    inst = next((i for i in _instances.load_instances() if i["name"] == name), None)
     if not inst:
         return "unknown"
     if inst.get("rootfs") not in OVERLAY_ROOTFS:
         return "error: this template's rootfs has no overlay support (yet)"
     inst["persist_disk"] = bool(on)
-    save_instance(inst)
-    running = " (applies after stop/start)" if is_running(inst) else ""
+    _instances.save_instance(inst)
+    running = " (applies after stop/start)" if _instances.is_running(inst) else ""
     return f"persistent disk for '{name}' {'ON' if on else 'off'}{running}"
 
 
@@ -2081,7 +2011,7 @@ def _vdev(drives):
 
 
 def gen_config(inst):
-    n = net_of(inst)
+    n = _instances.net_of(inst)
     boot = (f"console=ttyS0 reboot=k panic=1 pci=off "
             f"ip={n['guest']}::{n['host']}:{n['mask']}::eth0:off init=/init")
     overlay = inst.get("rootfs") in OVERLAY_ROOTFS
@@ -2121,7 +2051,7 @@ def gen_config(inst):
 
 
 def start(inst):
-    if is_running(inst):
+    if _instances.is_running(inst):
         return "already running"
     ensure_net_base()
     setup_tap(inst)
@@ -2139,12 +2069,12 @@ def start(inst):
         os.remove(sock)
     p = subprocess.Popen([_paths.BIN, "--api-sock", sock, "--config-file", cfg],
                          stdout=log, stderr=log, start_new_session=True)
-    open(pidfile(inst), "w").write(str(p.pid))
+    open(_instances.pidfile(inst), "w").write(str(p.pid))
     return f"started (pid {p.pid})"
 
 
 def stop(inst):
-    pf = pidfile(inst)
+    pf = _instances.pidfile(inst)
     if os.path.exists(pf):
         try:
             os.kill(int(open(pf).read().strip()), signal.SIGTERM)
@@ -2385,9 +2315,9 @@ _rules.configure(_paths.BASE)
 
 
 def instance_by_ip(ip):
-    for i in load_instances():
+    for i in _instances.load_instances():
         try:
-            if net_of(i).get("guest") == ip:
+            if _instances.net_of(i).get("guest") == ip:
                 return i
         except Exception:
             continue
@@ -2401,14 +2331,6 @@ def instance_by_ip(ip):
 
 from mgr import irohgw as _irohgw  # noqa: E402
 _irohgw.configure(_paths.BASE)
-
-def hindsight_retains(inst_name):
-    """A-1: whether the second memory (Hindsight) keeps this instance's turns.
-    Default on; HINDSIGHT_RETAIN=0 in the instance config turns it off entirely
-    (a chatty voice agent should not fill its bank)."""
-    inst = next((i for i in load_instances() if i.get("name") == inst_name), None)
-    return ((inst or {}).get("config") or {}).get("HINDSIGHT_RETAIN", "1") != "0"
-
 
 def tool_allowed(inst, name):
     """A-2: enforce the per-instance AGENT_TOOLS allowlist at the HOST, not only
@@ -2432,7 +2354,7 @@ def effective_policy(inst):
     return {
         "name": inst["name"],
         "template": inst.get("template", ""),
-        "running": is_running(inst),
+        "running": _instances.is_running(inst),
         "internet": inst.get("internet", True),
         "model": model,
         "tools_all": tools_allowed is None,
@@ -2445,7 +2367,7 @@ def effective_policy(inst):
 
 
 # mgr/mcp needs the secret functions; they are defined above by now.
-_mcp.configure(_paths.BASE, load_instances, _secrets.allowed_secret_keys, _secrets.secret_store)
+_mcp.configure(_paths.BASE, _instances.load_instances, _secrets.allowed_secret_keys, _secrets.secret_store)
 
 # ---- web -------------------------------------------------------------------
 # PAGE (HTML/JS of the manager UI) now lives in mgr/ui.py.
@@ -2510,9 +2432,9 @@ def _fmt_cost(c):
 def render():
     rows = ""
     usage = _store.usage_summary()
-    for inst in load_instances():
-        n = net_of(inst)
-        run = is_running(inst)
+    for inst in _instances.load_instances():
+        n = _instances.net_of(inst)
+        run = _instances.is_running(inst)
         name = inst["name"]
         transport = (inst.get("config") or {}).get("TRANSPORT", "signal")
         cfgm = inst.get("config") or {}
@@ -2605,13 +2527,13 @@ def render():
                  f"<td data-label='Guest IP' class=mono>{n['guest']}</td>"
                  f"<td data-label=Actions><div class=acts>{btn}</div></td></tr>")
     tpls = "".join(f"<option value='{h(t['template'])}'>{h(t['template'])} — {h(t.get('description',''))}</option>"
-                   for t in load_templates())
+                   for t in _instances.load_templates())
     empty = ("<tr><td colspan=5 class=text-muted style='padding:18px 8px'>"
              "no instances yet — create one below</td></tr>")
     return (_ui.PAGE.replace("__LOGO__", LOGO_INLINE)
                 .replace("__ROWS__", rows or empty)
                 .replace("__TPLS__", tpls or "<option>no templates</option>")
-                .replace("__TPLJSON__", _util.js_json(load_templates()))
+                .replace("__TPLJSON__", _util.js_json(_instances.load_templates()))
                 .replace("__SETTINGS__", _util.js_json(_settings.settings_for_ui()))
                 .replace("__SETTINGS_SCHEMA__", _util.js_json(_settings.settings_schema()))
                 .replace("__PERSONAS__", _util.js_json(load_personas(), ensure_ascii=False))
@@ -2638,21 +2560,21 @@ def render():
 
 def web_instances():
     """Instances you can chat with (+ running state for the UI)."""
-    return [{"name": i["name"], "running": is_running(i),
+    return [{"name": i["name"], "running": _instances.is_running(i),
              "description": i.get("description", "")}
-            for i in load_instances()
+            for i in _instances.load_instances()
             if (i.get("config") or {}).get("TRANSPORT") == "web"]
 
 
 def wait_web(inst, timeout=120):
     """Starts the instance if needed and waits until the bridge accepts."""
-    if not is_running(inst):
+    if not _instances.is_running(inst):
         start(inst)
-    ip = net_of(inst)["guest"]
+    ip = _instances.net_of(inst)["guest"]
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            socket.create_connection((ip, WEB_GUEST_PORT), 2).close()
+            socket.create_connection((ip, _instances.WEB_GUEST_PORT), 2).close()
             return True
         except OSError:
             time.sleep(1)
@@ -2665,7 +2587,7 @@ def guest_chat(inst, message, image=None, timeout=620):
     if image:
         payload["image"] = image
     req = urllib.request.Request(
-        f"http://{net_of(inst)['guest']}:{WEB_GUEST_PORT}/api/chat",
+        f"http://{_instances.net_of(inst)['guest']}:{_instances.WEB_GUEST_PORT}/api/chat",
         data=json.dumps(payload).encode(), method="POST",
         headers={"Content-Type": "application/json"})
     body = urllib.request.urlopen(req, timeout=timeout).read().decode("utf-8", "replace")
@@ -2682,7 +2604,7 @@ def guest_stream(inst, message, image, on_token, timeout=620):
     if image:
         payload["image"] = image
     req = urllib.request.Request(
-        f"http://{net_of(inst)['guest']}:{WEB_GUEST_PORT}/api/chat/stream",
+        f"http://{_instances.net_of(inst)['guest']}:{_instances.WEB_GUEST_PORT}/api/chat/stream",
         data=json.dumps(payload).encode(), method="POST",
         headers={"Content-Type": "application/json"})
     try:
@@ -2745,8 +2667,8 @@ ROUTER = _routes.Router()
 
 @ROUTER.get("/api/instances", admin=True)
 def _rt_instances(h):
-    return (json.dumps([{**i, "running": is_running(i), "stale": image_state(i)[0]}
-                        for i in load_instances()]).encode(),
+    return (json.dumps([{**i, "running": _instances.is_running(i), "stale": image_state(i)[0]}
+                        for i in _instances.load_instances()]).encode(),
             "application/json")
 
 
@@ -2775,9 +2697,9 @@ def session_info(inst):
     servers with whether their secrets are released. Nothing secret in it."""
     name, tpl = inst["name"], inst.get("template", "")
     cfg = inst.get("config") or {}
-    running = is_running(inst)
+    running = _instances.is_running(inst)
     try:
-        started = os.path.getmtime(pidfile(inst)) if running else 0
+        started = os.path.getmtime(_instances.pidfile(inst)) if running else 0
     except OSError:
         started = 0
     if tpl == "claude":
@@ -2825,7 +2747,7 @@ def _rt_session(h):
     # /api/session/<instance>/log    -> the VM's console log tail (text)
     parts = _tail(h, "/api/session/")
     nm = re.sub(r"[^a-zA-Z0-9_-]", "", parts[0] if parts else "")
-    inst = next((i for i in load_instances() if i["name"] == nm), None)
+    inst = next((i for i in _instances.load_instances() if i["name"] == nm), None)
     if inst is None:
         return h._json({"error": "unknown instance"}, 404)
     if len(parts) > 1 and parts[1] == "log":
@@ -3111,7 +3033,7 @@ class H(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(ln) or b"{}")
         except (ValueError, json.JSONDecodeError):
             body = {}
-        inst = next((i for i in load_instances() if i["name"] == name
+        inst = next((i for i in _instances.load_instances() if i["name"] == name
                      and (i.get("config") or {}).get("TRANSPORT") == "web"), None)
         self.send_response(200 if inst else 404)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
@@ -3131,7 +3053,7 @@ class H(BaseHTTPRequestHandler):
         if not inst:
             return emit(f"⚠️ No web instance '{name}'.")
         if not wait_web(inst):
-            return emit(f"⚠️ Instance '{name}' does not start (port {WEB_GUEST_PORT}).")
+            return emit(f"⚠️ Instance '{name}' does not start (port {_instances.WEB_GUEST_PORT}).")
 
         chat_id = body.get("chat")
         msg, img = body.get("message", ""), body.get("image")
@@ -3166,8 +3088,8 @@ class H(BaseHTTPRequestHandler):
 
     def _term_route(self, name, tail):
         """Route /i/<name>/term[/...] to the guest webterm (:7682). WS-aware."""
-        inst = next((i for i in load_instances() if i["name"] == name), None)
-        if not inst or not is_running(inst):
+        inst = next((i for i in _instances.load_instances() if i["name"] == name), None)
+        if not inst or not _instances.is_running(inst):
             self.send_response(503)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
@@ -3189,7 +3111,7 @@ class H(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(b"terminal websocket: origin not allowed")
                 return
-            return self._ws_tunnel(net_of(inst)["guest"], TERM_GUEST_PORT, "/" + sub)
+            return self._ws_tunnel(_instances.net_of(inst)["guest"], _instances.TERM_GUEST_PORT, "/" + sub)
         if sub == "":
             # H-3 (security review): the terminal PAGE is served by the manager
             # from its own copy of webterm.py, never fetched from the guest —
@@ -3208,7 +3130,7 @@ class H(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(body)
                 return
-        return self._proxy("GET", port=TERM_GUEST_PORT, tail_override=sub)
+        return self._proxy("GET", port=_instances.TERM_GUEST_PORT, tail_override=sub)
 
     def _ws_tunnel(self, guest, port, path):
         """Raw bidirectional splice of a WebSocket between browser and guest."""
@@ -3300,13 +3222,13 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _proxy(self, method, port=WEB_GUEST_PORT, tail_override=None):
+    def _proxy(self, method, port=_instances.WEB_GUEST_PORT, tail_override=None):
         rest = self.path[3:]  # strip "/i/"
         name, _, tail = rest.partition("/")
         if tail_override is not None:
             tail = tail_override
-        inst = next((i for i in load_instances() if i["name"] == name), None)
-        if not inst or not is_running(inst):
+        inst = next((i for i in _instances.load_instances() if i["name"] == name), None)
+        if not inst or not _instances.is_running(inst):
             # The app puts the body of an API answer straight into the chat bubble —
             # HTML would show up there as raw <p>…</p>. So: markup only for the
             # browser paths, plain text for /api/….
@@ -3318,7 +3240,7 @@ class H(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write((msg if api else f"<p>{msg}</p>").encode())
             return
-        url = f"http://{net_of(inst)['guest']}:{port}/{tail}"
+        url = f"http://{_instances.net_of(inst)['guest']}:{port}/{tail}"
         data = None
         if method == "POST":
             data = self.rfile.read(int(self.headers.get("Content-Length", 0)))
@@ -3769,7 +3691,7 @@ def _rt_mcp_call(h):
     b = h._body()
     inst = h._guest()
     if inst is None and b.get("instance"):
-        inst = next((i for i in load_instances() if i["name"] == b["instance"]), None)
+        inst = next((i for i in _instances.load_instances() if i["name"] == b["instance"]), None)
     if inst is None:
         return h._json({"error": "unknown caller"}, 403)
     st, out = _mcp.mcp_hub_call(inst, str(b.get("server") or ""), b.get("payload") or {})
@@ -3795,7 +3717,7 @@ def _rt_agents(h):
     # guest lists only what it may delegate to; ephemeral children hidden.
     guest = h._guest()
     roster = []
-    for i in load_instances():
+    for i in _instances.load_instances():
         if i["name"].startswith(("task-", "sub-")):
             continue
         if guest is not None and not guest_may_target(guest, i["name"]):
@@ -3808,7 +3730,7 @@ def _rt_agents(h):
         if cfg.get("LLAMA_ENDPOINT"):
             backend = "llama"
         roster.append({"name": i["name"], "template": i.get("template", ""),
-                       "backend": backend, "running": is_running(i),
+                       "backend": backend, "running": _instances.is_running(i),
                        "model": cfg.get(mkey, "") if mkey else "",
                        "mcps": [n for n in (cfg.get("MCP_SERVERS", "") or "").split(",") if n]})
     return h._json({"agents": roster})
@@ -3891,7 +3813,7 @@ def _rt_memory_post(h):
     target = guest["name"] if guest else _tail(h, "/api/memory/")[0]
     key, value = b.get("key", ""), b.get("value")   # null = delete
     msg = _store.mem_store(target, key, value)
-    if guest or any(i.get("name") == target for i in load_instances()):
+    if guest or any(i.get("name") == target for i in _instances.load_instances()):
         try:                                            # the readable mirror in /memory —
             _memfs.note_write(target, key, value)       # for real instances only, no folder per typo
             _memfs.commit(target, f"memory_store: {str(key)[:60]}")
@@ -3900,7 +3822,7 @@ def _rt_memory_post(h):
     # Also store semantically; if the embedder fails the flat memory stays.
     sem = _store.sem_store(target, value, key) if value is not None else False
     if value is not None:
-        if hindsight_retains(target):
+        if _instances.hindsight_retains(target):
             _hindsight.retain_async(target, f"{key}: {value}", ("note",))  # explicit note -> second memory
     msg += " (+semantic)" if sem else ("" if value is None else " (semantic off)")
     return h._json({"msg": msg})
@@ -4366,7 +4288,7 @@ def _rt_usage_for(h):
 
 @ROUTER.get("/api/policy", admin=True)
 def _rt_policy(h):
-    return h._json({"instances": [effective_policy(i) for i in load_instances()]})
+    return h._json({"instances": [effective_policy(i) for i in _instances.load_instances()]})
 
 
 @ROUTER.get("/api/audit/", prefix=True, admin=True)
@@ -4756,21 +4678,21 @@ def _rt_instance_create(h):
 
 def _set_config_key(name, key, val):
     """Set/delete a single config key (secrets stay out — broker only)."""
-    inst = next((i for i in load_instances() if i["name"] == name), None)
+    inst = next((i for i in _instances.load_instances() if i["name"] == name), None)
     if not inst:
         return "unknown"
     if not re.fullmatch(r"[A-Z][A-Z0-9_]{1,40}", key) or key in _settings.NEVER_PERSIST:
         return f"error: key '{key}' not allowed"
-    if key == "MCP_SERVERS" and mcp_servers_error(val):
-        return "error: " + mcp_servers_error(val)
+    if key == "MCP_SERVERS" and _instances.mcp_servers_error(val):
+        return "error: " + _instances.mcp_servers_error(val)
     cfg = inst.setdefault("config", {})
     if val in ("", None):
         cfg.pop(key, None)
     else:
         cfg[key] = str(val)
-    save_instance(inst)
+    _instances.save_instance(inst)
     return (f"{key} " + ("removed" if val in ("", None) else f"= {val}")
-            + (" (applies after stop/start)" if is_running(inst) else ""))
+            + (" (applies after stop/start)" if _instances.is_running(inst) else ""))
 
 
 @ROUTER.get("/api/mounts")
@@ -4782,7 +4704,7 @@ def _rt_mounts(h):
     inst = h._guest()
     if inst is None:
         name = _qs(h).get("instance", [""])[0]
-        inst = next((i for i in load_instances() if i["name"] == name), None)
+        inst = next((i for i in _instances.load_instances() if i["name"] == name), None)
         if inst is None:
             return h._json({"error": "instance?"}, 404)
     return desired_lines(inst).encode(), "text/plain; charset=utf-8"
@@ -4811,7 +4733,7 @@ def _rt_instance_action(h):
         return reset_upper(name)
     if action == "model":
         return set_model(name, h._body().get("model", ""))
-    inst = next((i for i in load_instances() if i["name"] == name), None)
+    inst = next((i for i in _instances.load_instances() if i["name"] == name), None)
     if not inst:
         return "unknown"
     if action == "restart":       # stop/start: picks up a rebuilt image
@@ -4825,16 +4747,6 @@ def _rt_instance_action(h):
 
 
 
-def mcp_servers_error(value):
-    """'' when every name in a comma list is in the MCP catalog, else the
-    complaint. Assigning a server that does not exist would only surface as
-    'MCP start failed' in the guest log at the next start."""
-    names = [x.strip() for x in str(value or "").split(",") if x.strip()]
-    known = {m.get("name") for m in _mcp.load_mcps()}
-    bad = [n for n in names if n not in known]
-    return f"unknown MCP server(s): {', '.join(bad)}" if bad else ""
-
-
 def migrate_mcp_config_out_of_instances():
     """MCP_CONFIG contained the substituted secrets in plain text. The server
     names are its keys, so they can be lifted losslessly into MCP_SERVERS; the
@@ -4843,7 +4755,7 @@ def migrate_mcp_config_out_of_instances():
     pol = _secrets.load_secret_policy()
     by_inst = pol.setdefault("by_instance", {})
     touched = False
-    for inst in load_instances():
+    for inst in _instances.load_instances():
         cfg = inst.get("config") or {}
         if "MCP_CONFIG" not in cfg:
             continue
@@ -4865,7 +4777,7 @@ def migrate_mcp_config_out_of_instances():
                     touched = True
         cfg.pop("MCP_CONFIG", None)
         try:
-            save_instance(inst)
+            _instances.save_instance(inst)
             print(f"[migrate] {inst['name']}: MCP_CONFIG -> MCP_SERVERS={','.join(names) or '-'}"
                   f"{' + Policy ' + ','.join(sorted(_mcp.mcp_required_secrets(names))) if names else ''}",
                   flush=True)
@@ -4880,7 +4792,7 @@ def migrate_secrets_out_of_instances():
     API key lose it here. Since the rework the agent fetches it via the broker;
     a key in the instance file would only be a copy that travels onto every
     config disk. Runs as root, who owns the files."""
-    for inst in load_instances():
+    for inst in _instances.load_instances():
         cfg = inst.get("config") or {}
         hit = [k for k in _settings.SECRET_PARAMS if k in cfg]
         if not hit:
@@ -4888,7 +4800,7 @@ def migrate_secrets_out_of_instances():
         for k in hit:
             cfg.pop(k)
         try:
-            save_instance(inst)
+            _instances.save_instance(inst)
             print(f"[migrate] {inst['name']}: {', '.join(hit)} removed", flush=True)
         except OSError as e:
             print(f"[migrate] {inst['name']}: {e}", flush=True)
