@@ -224,7 +224,7 @@ class AgentLogic(unittest.TestCase):
         a._llm.or_chat_stream = fake_stream; a.exec_tool = fake_exec
         a._config.HEARTBEAT_SEC = 0.03; a._drain_steer = lambda *x: False; a._goal = None
         try:
-            del a._history[1:]
+            del a._context._history[1:]
             a.run_stream("build something", toks.append)
         finally:
             (a._llm.or_chat_stream, a.exec_tool, a._config.HEARTBEAT_SEC, a._drain_steer, a._goal) = saved
@@ -285,19 +285,19 @@ class AgentLogic(unittest.TestCase):
         old_tz = os.environ.get("TZ")
         try:
             os.environ["TZ"] = "Europe/Berlin"
-            line = a._now_line()
+            line = a._context._now_line()
             self.assertTrue(line.startswith("[Now] "))
             self.assertIn("(Europe/Berlin, UTC+0", line)             # +01:00 or +02:00
             self.assertRegex(line, r"T18:30:00\+0[12]:00")             # tool-input example
             self.assertIn(time.strftime("%Y-%m-%d"), line)   # host and guest tz agree today
-            a._history[:] = [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"},
+            a._context._history[:] = [{"role": "system", "content": "sys"}, {"role": "user", "content": "hi"},
                              {"role": "assistant", "content": "Es ist 16:36 Uhr."}]
-            a._inject_now(); a._inject_now()
-            nows = [m for m in a._history if m["role"] == "system" and m["content"].startswith("[Now]")]
+            a._context._inject_now(); a._context._inject_now()
+            nows = [m for m in a._context._history if m["role"] == "system" and m["content"].startswith("[Now]")]
             self.assertEqual(len(nows), 1)
-            self.assertEqual(a._history[0]["content"], "sys")
-            self.assertTrue(a._history[-1]["content"].startswith("[Now]"))   # last = next to the question
-            self.assertIn("outdated", a._history[-1]["content"])
+            self.assertEqual(a._context._history[0]["content"], "sys")
+            self.assertTrue(a._context._history[-1]["content"].startswith("[Now]"))   # last = next to the question
+            self.assertIn("outdated", a._context._history[-1]["content"])
             # playbooks and missions sit next to the question as well (rules at
             # the top were ignored: "12:31 Uhr" against a no-"Uhr" rule)
             old_get = a._mgrclient._mgr_get
@@ -305,15 +305,15 @@ class AgentLogic(unittest.TestCase):
                 a._mgrclient._mgr_get = lambda base, path, timeout=30: (
                     json.dumps({"playbooks": [{"text": "keine Uhr"}]}) if "playbooks" in path
                     else json.dumps({"missions": []}))
-                a._inject_playbooks(); a._inject_playbooks()
-                pbs = [m for m in a._history if m["role"] == "system" and m["content"].startswith(a.PLAYBOOK_TAG)]
+                a._context._inject_playbooks(); a._context._inject_playbooks()
+                pbs = [m for m in a._context._history if m["role"] == "system" and m["content"].startswith(a._context.PLAYBOOK_TAG)]
                 self.assertEqual(len(pbs), 1)
-                self.assertTrue(a._history[-1]["content"].startswith(a.PLAYBOOK_TAG))
-                self.assertEqual(a._history[0]["content"], "sys")
+                self.assertTrue(a._context._history[-1]["content"].startswith(a._context.PLAYBOOK_TAG))
+                self.assertEqual(a._context._history[0]["content"], "sys")
             finally:
                 a._mgrclient._mgr_get = old_get
             os.environ["TZ"] = "Not/AZone"
-            self.assertTrue(a._now_line().startswith("[Now] "))   # falls back, never raises
+            self.assertTrue(a._context._now_line().startswith("[Now] "))   # falls back, never raises
         finally:
             if old_tz is None:
                 os.environ.pop("TZ", None)
@@ -326,20 +326,20 @@ class AgentLogic(unittest.TestCase):
         a = self.a
         tmp = tempfile.mkdtemp(prefix="e2e-memidx-")
         open(os.path.join(tmp, "MEMORY.md"), "w").write("# Memory of vc\n\n- [[radio]] Radio — Swiss Classic\n")
-        old = a.MEMORY_DIR
+        old = a._context.MEMORY_DIR
         try:
-            a.MEMORY_DIR = tmp
-            a._history[:] = [{"role": "system", "content": "sys"}]
-            a._inject_memory_index(); a._inject_memory_index()
-            blocks = [m for m in a._history if m["content"].startswith(a.MEMINDEX_TAG)]
+            a._context.MEMORY_DIR = tmp
+            a._context._history[:] = [{"role": "system", "content": "sys"}]
+            a._context._inject_memory_index(); a._context._inject_memory_index()
+            blocks = [m for m in a._context._history if m["content"].startswith(a._context.MEMINDEX_TAG)]
             self.assertEqual(len(blocks), 1)
             self.assertIn("[[radio]]", blocks[0]["content"])
             self.assertIn(tmp, blocks[0]["content"])
-            a.MEMORY_DIR = ""
-            a._inject_memory_index()
-            self.assertEqual([m for m in a._history if m["content"].startswith(a.MEMINDEX_TAG)], [])
+            a._context.MEMORY_DIR = ""
+            a._context._inject_memory_index()
+            self.assertEqual([m for m in a._context._history if m["content"].startswith(a._context.MEMINDEX_TAG)], [])
         finally:
-            a.MEMORY_DIR = old
+            a._context.MEMORY_DIR = old
 
     def test_spawn_subagent_rides_the_task_path(self):
         """spawn_subagent no longer calls admin routes (403 for guests since
@@ -608,14 +608,14 @@ class AgentLogic(unittest.TestCase):
     # --- Prompt-Templates -----------------------------------------------------
     def test_prompt_expansion(self):
         a = self.a
-        a._prompts_cache["map"] = {"daily": "Write the daily briefing."}
-        a._prompts_cache["ts"] = __import__("time").time()
-        self.assertEqual(a._expand_prompt("/daily"), "Write the daily briefing.")
-        self.assertEqual(a._expand_prompt("/daily just short"),
+        a._context._prompts_cache["map"] = {"daily": "Write the daily briefing."}
+        a._context._prompts_cache["ts"] = __import__("time").time()
+        self.assertEqual(a._context._expand_prompt("/daily"), "Write the daily briefing.")
+        self.assertEqual(a._context._expand_prompt("/daily just short"),
                          "Write the daily briefing. just short")
-        self.assertEqual(a._expand_prompt("/reset"), "/reset")     # built-in takes precedence
-        self.assertEqual(a._expand_prompt("/gibtsnicht"), "/gibtsnicht")
-        self.assertEqual(a._expand_prompt("normal text"), "normal text")
+        self.assertEqual(a._context._expand_prompt("/reset"), "/reset")     # built-in takes precedence
+        self.assertEqual(a._context._expand_prompt("/gibtsnicht"), "/gibtsnicht")
+        self.assertEqual(a._context._expand_prompt("normal text"), "normal text")
 
     # --- Plugin-Loader ----------------------------------------------------------
     def test_plugin_loader(self):
@@ -644,7 +644,7 @@ class AgentLogic(unittest.TestCase):
         answers with what it has; '/steps N <text>' (alias /maxSteps) caps the
         steps for that turn only."""
         a = self.a
-        old = a._llm.or_chat, a.exec_tool, a._config.MAX_STEPS, a._deadline[0], list(a._history)
+        old = a._llm.or_chat, a.exec_tool, a._config.MAX_STEPS, a._context._deadline[0], list(a._context._history)
         calls = []
         try:
             def chat(msgs, tools, model=None):
@@ -657,14 +657,14 @@ class AgentLogic(unittest.TestCase):
             a._llm.or_chat = chat
             a.exec_tool = lambda name, args: "hit"
             hist = [{"role": "system", "content": "s"}, {"role": "user", "content": "search"}]
-            a._deadline[0] = time.time() + a.DEADLINE_MARGIN - 1          # already inside the margin
+            a._context._deadline[0] = time.time() + a.DEADLINE_MARGIN - 1          # already inside the margin
             out = a._tool_loop(hist)
             self.assertIn("partial: 2 hits", out)
             self.assertIn("time budget", out)
             self.assertEqual(calls, [False])                                # one call, tools off
             self.assertTrue(any(a._DEADLINE_NOTE in str(m.get("content")) for m in hist))
             # a deadline far away: the loop runs its steps as usual
-            calls.clear(); a._deadline[0] = time.time() + 3600; a._config.MAX_STEPS = 2
+            calls.clear(); a._context._deadline[0] = time.time() + 3600; a._config.MAX_STEPS = 2
             self.assertEqual(a._tool_loop([{"role": "user", "content": "x"}]), "(max tool steps reached)")
             self.assertEqual(calls, [True, True])
             # /steps N <text> for one turn, /maxSteps alias, then the old cap again
@@ -683,8 +683,8 @@ class AgentLogic(unittest.TestCase):
             self.assertEqual(seen, [3])
             self.assertEqual(a._config.MAX_STEPS, 12)
         finally:
-            a._llm.or_chat, a.exec_tool, a._config.MAX_STEPS, a._deadline[0] = old[:4]
-            a._history[:] = old[4]
+            a._llm.or_chat, a.exec_tool, a._config.MAX_STEPS, a._context._deadline[0] = old[:4]
+            a._context._history[:] = old[4]
 
     def test_turn_markers_and_spans(self):
         """A turn posts start/end markers (kind, steps, ms, outcome), every LLM
@@ -692,7 +692,7 @@ class AgentLogic(unittest.TestCase):
         ms; slash commands produce no trace."""
         a = self.a
         posts = []
-        old = a._mgrclient._mgr, a._llm.or_chat, a.exec_tool, a._mgrclient.report_usage, list(a._history), a._config.MAX_STEPS, a.BUILTIN.get("web_search")
+        old = a._mgrclient._mgr, a._llm.or_chat, a.exec_tool, a._mgrclient.report_usage, list(a._context._history), a._config.MAX_STEPS, a.BUILTIN.get("web_search")
         try:
             a._mgrclient._mgr = lambda base, path, payload=None, timeout=60: posts.append((path, payload))
             a._mgrclient.report_usage = lambda u, ms=None, ok=True, err="": posts.append(("/api/usage", {"turn": a._observe._turn_id[0], "step": a._observe._turn_step[0], "ms": ms, "ok": ok, "err": err}))
@@ -730,7 +730,7 @@ class AgentLogic(unittest.TestCase):
             self.assertEqual(a._learn._outcome_of("⚠️ LLM HTTP 500"), "error")
         finally:
             a._mgrclient._mgr, a._llm.or_chat, a.exec_tool, a._mgrclient.report_usage = old[:4]
-            a._history[:] = old[4]; a._config.MAX_STEPS = old[5]
+            a._context._history[:] = old[4]; a._config.MAX_STEPS = old[5]
             if old[6] is not None:
                 a.BUILTIN["web_search"] = old[6]
             else:
@@ -783,45 +783,45 @@ class AgentLogic(unittest.TestCase):
     # --- Tree-Chat: /branch + /back -------------------------------------------
     def test_branch_and_back(self):
         a = self.a
-        old_hist = list(a._history)
+        old_hist = list(a._context._history)
         old_chat = a._llm.or_chat
         try:
-            a._history[:] = [{"role": "system", "content": "s"},
+            a._context._history[:] = [{"role": "system", "content": "s"},
                              {"role": "user", "content": "main topic"}]
             a._llm.or_chat = lambda msgs, tools, model=None: {"role": "assistant",
                                                          "content": "essence of the follow-up"}
-            out = a._branch_open("/branch piper")
+            out = a._context._branch_open("/branch piper")
             self.assertIn("depth 1", out)
-            self.assertEqual(a._branch_depth(), 1)
-            a._history.append({"role": "user", "content": "follow-up?"})
-            a._history.append({"role": "assistant", "content": "reply in the branch"})
-            out = a._branch_close("/back")
-            self.assertEqual(a._branch_depth(), 0)
+            self.assertEqual(a._context._branch_depth(), 1)
+            a._context._history.append({"role": "user", "content": "follow-up?"})
+            a._context._history.append({"role": "assistant", "content": "reply in the branch"})
+            out = a._context._branch_close("/back")
+            self.assertEqual(a._context._branch_depth(), 0)
             self.assertIn("main topic", out)
             # branch content gone, sidenote present, origin intact
-            joined = " | ".join(str(m.get("content")) for m in a._history)
+            joined = " | ".join(str(m.get("content")) for m in a._context._history)
             self.assertNotIn("reply in the branch", joined)
-            self.assertIn(a.NOTE_TAG, joined)
+            self.assertIn(a._context.NOTE_TAG, joined)
             self.assertIn("main topic", joined)
             # /back without a branch
-            self.assertIn("No open", a._branch_close("/back"))
+            self.assertIn("No open", a._context._branch_close("/back"))
         finally:
             a._llm.or_chat = old_chat
-            a._history[:] = old_hist
+            a._context._history[:] = old_hist
 
     def test_branch_drop(self):
         a = self.a
-        old_hist = list(a._history)
+        old_hist = list(a._context._history)
         try:
-            a._history[:] = [{"role": "system", "content": "s"}]
-            a._branch_open("/branch x")
-            a._history.append({"role": "user", "content": "geheim"})
-            a._branch_close("/back drop")
-            joined = " | ".join(str(m.get("content")) for m in a._history)
+            a._context._history[:] = [{"role": "system", "content": "s"}]
+            a._context._branch_open("/branch x")
+            a._context._history.append({"role": "user", "content": "geheim"})
+            a._context._branch_close("/back drop")
+            joined = " | ".join(str(m.get("content")) for m in a._context._history)
             self.assertNotIn("geheim", joined)
-            self.assertNotIn(a.NOTE_TAG, joined)   # spurlos
+            self.assertNotIn(a._context.NOTE_TAG, joined)   # spurlos
         finally:
-            a._history[:] = old_hist
+            a._context._history[:] = old_hist
 
     # --- Goal-Kommando ------------------------------------------------------
     def test_goal_set_show_off(self):
@@ -914,21 +914,21 @@ class AgentLogic(unittest.TestCase):
         """AUTO_RESET_MIN: a context that idled longer than that starts over at
         the next turn; a recent turn, a fresh context or 0 leave it alone."""
         a = self.a
-        old = a.AUTO_RESET_MIN, a._last_turn[0], list(a._history)
+        old = a.AUTO_RESET_MIN, a._last_turn[0], list(a._context._history)
         try:
-            a._history[:] = [{"role": "system", "content": "S"}, {"role": "user", "content": "u"}, {"role": "assistant", "content": "a"}]
+            a._context._history[:] = [{"role": "system", "content": "S"}, {"role": "user", "content": "u"}, {"role": "assistant", "content": "a"}]
             a.AUTO_RESET_MIN = 0; a._last_turn[0] = time.time() - 3600
-            self.assertFalse(a._auto_reset()); self.assertEqual(len(a._history), 3)
+            self.assertFalse(a._auto_reset()); self.assertEqual(len(a._context._history), 3)
             a.AUTO_RESET_MIN = 30; a._last_turn[0] = time.time() - 600
-            self.assertFalse(a._auto_reset()); self.assertEqual(len(a._history), 3)      # 10 min idle: keep
+            self.assertFalse(a._auto_reset()); self.assertEqual(len(a._context._history), 3)      # 10 min idle: keep
             a._last_turn[0] = time.time() - 3600
-            self.assertTrue(a._auto_reset()); self.assertEqual(len(a._history), 1)       # 60 min idle: fresh
+            self.assertTrue(a._auto_reset()); self.assertEqual(len(a._context._history), 1)       # 60 min idle: fresh
             a._last_turn[0] = time.time() - 3600
             self.assertFalse(a._auto_reset())                                             # already fresh: nothing to drop
-            a._last_turn[0] = 0.0; a._history.append({"role": "user", "content": "u"})
+            a._last_turn[0] = 0.0; a._context._history.append({"role": "user", "content": "u"})
             self.assertFalse(a._auto_reset())                                             # first turn after boot: keep
         finally:
-            a.AUTO_RESET_MIN, a._last_turn[0] = old[0], old[1]; a._history[:] = old[2]
+            a.AUTO_RESET_MIN, a._last_turn[0] = old[0], old[1]; a._context._history[:] = old[2]
 
     def test_llm_timeouts_and_retry_policy_for_local_models(self):
         """A local model gets long timeouts and no retry after a timeout (it is
@@ -978,19 +978,19 @@ class AgentLogic(unittest.TestCase):
         """A-3: a recall hit already in the memory index is dropped, exact
         duplicates are dropped, and the block is capped by RECALL_MAX_CHARS."""
         a = self.a
-        old = a._mgrclient._mgr, list(a._history), a.MEMORY_DIR, a.RECALL_MAX_CHARS
+        old = a._mgrclient._mgr, list(a._context._history), a._context.MEMORY_DIR, a._context.RECALL_MAX_CHARS
         try:
-            a.MEMORY_DIR = ""
-            a.RECALL_MAX_CHARS = 60
+            a._context.MEMORY_DIR = ""
+            a._context.RECALL_MAX_CHARS = 60
             hits = [{"text": "Ulrich bikes to work", "score": 0.9},
                     {"text": "Ulrich bikes to work", "score": 0.9},
                     {"text": "likes Radio Lauder in the mornings", "score": 0.9},
                     {"text": "a third distinct fact that pushes over the budget", "score": 0.9}]
             a._mgrclient._mgr = lambda base, path, payload=None, timeout=60: json.dumps({"hits": hits})
-            a._history[:] = [{"role": "system", "content": a._config.SYSTEM},
-                             {"role": "system", "content": a.MEMINDEX_TAG + " index: Ulrich bikes to work"}]
-            a._recall("how does he commute?")
-            block = [mm for mm in a._history if str(mm.get("content","")).startswith(a.RECALL_TAG)]
+            a._context._history[:] = [{"role": "system", "content": a._config.SYSTEM},
+                             {"role": "system", "content": a._context.MEMINDEX_TAG + " index: Ulrich bikes to work"}]
+            a._context._recall("how does he commute?")
+            block = [mm for mm in a._context._history if str(mm.get("content","")).startswith(a._context.RECALL_TAG)]
             self.assertEqual(len(block), 1)
             txt = block[0]["content"]
             self.assertNotIn("bikes to work", txt)
@@ -998,8 +998,8 @@ class AgentLogic(unittest.TestCase):
             self.assertNotIn("third distinct fact", txt)
             self.assertEqual(txt.count("- "), 1)
         finally:
-            a._mgrclient._mgr, a.MEMORY_DIR, a.RECALL_MAX_CHARS = old[0], old[2], old[3]
-            a._history[:] = old[1]
+            a._mgrclient._mgr, a._context.MEMORY_DIR, a._context.RECALL_MAX_CHARS = old[0], old[2], old[3]
+            a._context._history[:] = old[1]
 
     def test_maybe_learn_gated_and_visible(self):
         """A-4: skill-learning fires only on a long successful non-slash turn,
@@ -1117,42 +1117,42 @@ class AgentLogic(unittest.TestCase):
 
     def test_summarizing_split(self):
         a = self.a
-        old_sum, old_max, old_keep, old_hist = a._summarize, a.CTX_MAX_MSGS, a.CTX_PRESERVE_RECENT, list(a._history)
+        old_sum, old_max, old_keep, old_hist = a._context._summarize, a._context.CTX_MAX_MSGS, a._context.CTX_PRESERVE_RECENT, list(a._context._history)
         try:
-            a._summarize = lambda msgs, prior="": f"MOCK(prior={prior or '-'},n={len(msgs)})"
-            a.CTX_MAX_MSGS, a.CTX_PRESERVE_RECENT = 6, 4
+            a._context._summarize = lambda msgs, prior="": f"MOCK(prior={prior or '-'},n={len(msgs)})"
+            a._context.CTX_MAX_MSGS, a._context.CTX_PRESERVE_RECENT = 6, 4
             h = [{"role": "system", "content": a._config.SYSTEM}]
             for i in range(5):
                 h += [{"role": "user", "content": f"f{i}"}, {"role": "assistant", "content": f"a{i}"}]
-            a._history[:] = h
-            a._trim_history()
-            self.assertTrue(a._history[1]["content"].startswith(a.SUMMARY_TAG))
-            self.assertEqual(a._history[2]["role"], "user")        # recent an user-Grenze
-            self.assertEqual(a._history[-1]["content"], "a4")      # juengste bleibt
+            a._context._history[:] = h
+            a._context._trim_history()
+            self.assertTrue(a._context._history[1]["content"].startswith(a._context.SUMMARY_TAG))
+            self.assertEqual(a._context._history[2]["role"], "user")        # recent an user-Grenze
+            self.assertEqual(a._context._history[-1]["content"], "a4")      # juengste bleibt
         finally:
-            a._summarize, a.CTX_MAX_MSGS, a.CTX_PRESERVE_RECENT = old_sum, old_max, old_keep
-            a._history[:] = old_hist
+            a._context._summarize, a._context.CTX_MAX_MSGS, a._context.CTX_PRESERVE_RECENT = old_sum, old_max, old_keep
+            a._context._history[:] = old_hist
 
     def test_summarizing_folds_prior(self):
         a = self.a
         seen = {}
-        old_sum, old_max, old_keep, old_hist = a._summarize, a.CTX_MAX_MSGS, a.CTX_PRESERVE_RECENT, list(a._history)
+        old_sum, old_max, old_keep, old_hist = a._context._summarize, a._context.CTX_MAX_MSGS, a._context.CTX_PRESERVE_RECENT, list(a._context._history)
         try:
             def fake_sum(msgs, prior=""):
                 seen["prior"] = prior
                 return "NEU"
-            a._summarize = fake_sum
-            a.CTX_MAX_MSGS, a.CTX_PRESERVE_RECENT = 4, 2
+            a._context._summarize = fake_sum
+            a._context.CTX_MAX_MSGS, a._context.CTX_PRESERVE_RECENT = 4, 2
             h = [{"role": "system", "content": a._config.SYSTEM},
-                 {"role": "system", "content": a.SUMMARY_TAG + " ALT"}]
+                 {"role": "system", "content": a._context.SUMMARY_TAG + " ALT"}]
             for i in range(4):
                 h += [{"role": "user", "content": f"f{i}"}, {"role": "assistant", "content": f"a{i}"}]
-            a._history[:] = h
-            a._trim_history()
+            a._context._history[:] = h
+            a._context._trim_history()
             self.assertEqual(seen.get("prior"), "ALT")             # alte Zusammenfassung eingefaltet
         finally:
-            a._summarize, a.CTX_MAX_MSGS, a.CTX_PRESERVE_RECENT = old_sum, old_max, old_keep
-            a._history[:] = old_hist
+            a._context._summarize, a._context.CTX_MAX_MSGS, a._context.CTX_PRESERVE_RECENT = old_sum, old_max, old_keep
+            a._context._history[:] = old_hist
 
     # --- Retry / leere-Tools-Fix im Request-Body ----------------------------
     def test_or_chat_omits_empty_tools(self):
