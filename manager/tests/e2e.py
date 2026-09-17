@@ -2330,15 +2330,15 @@ class ManagerFunctions(unittest.TestCase):
         reaches a VM only when the key is also in guest_readable."""
         m = self.m
         guest = {"name": "hass", "template": "openrouter", "index": 7, "config": {}}
-        old = m.instance_by_ip, m.load_secret_policy, m.secret_store
+        old = m.instance_by_ip, m._secrets.load_secret_policy, m._secrets.secret_store
         try:
             m.instance_by_ip = lambda ip: guest if ip == "172.30.7.2" else None
-            m.secret_store = lambda: {"HA_TOKEN": "t0k", "OPENROUTER_API_KEY": "k3y"}
-            m.load_secret_policy = lambda: {"by_template": {"openrouter": ["OPENROUTER_API_KEY"]},
+            m._secrets.secret_store = lambda: {"HA_TOKEN": "t0k", "OPENROUTER_API_KEY": "k3y"}
+            m._secrets.load_secret_policy = lambda: {"by_template": {"openrouter": ["OPENROUTER_API_KEY"]},
                                             "by_instance": {"hass": ["HA_TOKEN"]},
                                             "guest_readable": ["HA_TOKEN"]}
-            self.assertEqual(m.allowed_secret_keys(guest), {"OPENROUTER_API_KEY", "HA_TOKEN"})
-            self.assertEqual(m.guest_readable_keys(guest), {"HA_TOKEN"})
+            self.assertEqual(m._secrets.allowed_secret_keys(guest), {"OPENROUTER_API_KEY", "HA_TOKEN"})
+            self.assertEqual(m._secrets.guest_readable_keys(guest), {"HA_TOKEN"})
             h = self._handler("/api/secret/HA_TOKEN", "172.30.7.2"); h._do_GET()
             self.assertIn(b'"value": "t0k"', h.wfile.getvalue())
             h = self._handler("/api/secret/OPENROUTER_API_KEY", "172.30.7.2"); h._do_GET()
@@ -2346,15 +2346,15 @@ class ManagerFunctions(unittest.TestCase):
             h = self._handler("/api/secrets", "172.30.7.2"); h._do_GET()
             self.assertIn(b'"allowed": ["HA_TOKEN"]', h.wfile.getvalue())
             # the saver keeps the third list, deduplicated and sorted
-            tmp = tempfile.mkdtemp(prefix="e2e-secpol-"); oldf = m.SECRET_POLICY_FILE
+            tmp = tempfile.mkdtemp(prefix="e2e-secpol-"); oldf = m._secrets.SECRET_POLICY_FILE
             try:
-                m.SECRET_POLICY_FILE = os.path.join(tmp, "p.json")
-                m.save_secret_policy({"by_template": {}, "by_instance": {}, "guest_readable": ["B", "A", "B", 3]})
-                self.assertEqual(json.load(open(m.SECRET_POLICY_FILE))["guest_readable"], ["A", "B"])
+                m._secrets.SECRET_POLICY_FILE = os.path.join(tmp, "p.json")
+                m._secrets.save_secret_policy({"by_template": {}, "by_instance": {}, "guest_readable": ["B", "A", "B", 3]})
+                self.assertEqual(json.load(open(m._secrets.SECRET_POLICY_FILE))["guest_readable"], ["A", "B"])
             finally:
-                m.SECRET_POLICY_FILE = oldf
+                m._secrets.SECRET_POLICY_FILE = oldf
         finally:
-            m.instance_by_ip, m.load_secret_policy, m.secret_store = old
+            m.instance_by_ip, m._secrets.load_secret_policy, m._secrets.secret_store = old
 
     def test_harness_disk_rebuilds_when_agent_source_changes(self):
         """The agent code rides a read-only drive built from AGENT_SRC: built
@@ -2400,24 +2400,24 @@ class ManagerFunctions(unittest.TestCase):
         it is seeded from the releases once (nothing breaks on upgrade) and
         the file is rewritten with the list; a file that has the key is left alone."""
         m = self.m
-        tmp = tempfile.mkdtemp(prefix="e2e-secpol2-"); oldf, olds = m.SECRET_POLICY_FILE, m._settings.load_settings
+        tmp = tempfile.mkdtemp(prefix="e2e-secpol2-"); oldf, olds = m._secrets.SECRET_POLICY_FILE, m._settings.load_settings
         try:
-            m.SECRET_POLICY_FILE = os.path.join(tmp, "p.json")
+            m._secrets.SECRET_POLICY_FILE = os.path.join(tmp, "p.json")
             legacy = {"by_template": {"openrouter": ["OPENROUTER_API_KEY"]},
                       "by_instance": {"hass": ["HA_TOKEN", "OPENROUTER_API_KEY"]}}
-            with open(m.SECRET_POLICY_FILE, "w") as fh:
+            with open(m._secrets.SECRET_POLICY_FILE, "w") as fh:
                 json.dump(legacy, fh)
             m._settings.load_settings = lambda: {}
-            self.assertEqual(m.load_secret_policy()["guest_readable"], ["HA_TOKEN", "OPENROUTER_API_KEY"])
-            self.assertEqual(json.load(open(m.SECRET_POLICY_FILE))["guest_readable"], ["HA_TOKEN", "OPENROUTER_API_KEY"])
-            with open(m.SECRET_POLICY_FILE, "w") as fh:
+            self.assertEqual(m._secrets.load_secret_policy()["guest_readable"], ["HA_TOKEN", "OPENROUTER_API_KEY"])
+            self.assertEqual(json.load(open(m._secrets.SECRET_POLICY_FILE))["guest_readable"], ["HA_TOKEN", "OPENROUTER_API_KEY"])
+            with open(m._secrets.SECRET_POLICY_FILE, "w") as fh:
                 json.dump(legacy, fh)
             m._settings.load_settings = lambda: {"LLM_KEY_PROXY": "1"}       # proxy on: the LLM key stays on the host
-            self.assertEqual(m.load_secret_policy()["guest_readable"], ["HA_TOKEN"])
-            m.save_secret_policy({"by_template": {"openrouter": ["OPENROUTER_API_KEY"]}, "by_instance": {}, "guest_readable": []})
-            self.assertEqual(m.load_secret_policy()["guest_readable"], [])          # an explicit empty list stays
+            self.assertEqual(m._secrets.load_secret_policy()["guest_readable"], ["HA_TOKEN"])
+            m._secrets.save_secret_policy({"by_template": {"openrouter": ["OPENROUTER_API_KEY"]}, "by_instance": {}, "guest_readable": []})
+            self.assertEqual(m._secrets.load_secret_policy()["guest_readable"], [])          # an explicit empty list stays
         finally:
-            m.SECRET_POLICY_FILE, m._settings.load_settings = oldf, olds
+            m._secrets.SECRET_POLICY_FILE, m._settings.load_settings = oldf, olds
 
     def test_stale_image_detection_and_rebuild_push(self):
         """A running VM started before its base image was rebuilt is 'stale':
@@ -2919,15 +2919,15 @@ class ManagerFunctions(unittest.TestCase):
         entry = {"name": "caldav", "command": "caldav-mcp", "args": [],
                  "env": {"CALDAV_BASE_URL": "https://cal.example.com/dav", "CALDAV_USERNAME": "me",
                          "CALDAV_PASSWORD": "${CALDAV_PASSWORD}"}}
-        old = mcpmod.secret_store, mcpmod.load_mcps, m._mcp.load_mcps, m.load_secret_policy
+        old = mcpmod.secret_store, mcpmod.load_mcps, m._mcp.load_mcps, m._secrets.load_secret_policy
         mcpmod.load_mcps = m._mcp.load_mcps = lambda: [entry]
-        m.load_secret_policy = lambda: {"by_template": {}, "guest_readable": [],
+        m._secrets.load_secret_policy = lambda: {"by_template": {}, "guest_readable": [],
                                         "by_instance": {"myassistant": ["CALDAV_PASSWORD"], "voicecommand": ["CALDAV_PASSWORD"]}}
         self.assertIn("caldav", [x["name"] for x in m._mcp.load_mcps()])
         self.assertEqual(m._mcp.mcp_required_secrets(["caldav"]), {"CALDAV_PASSWORD"})
         for name in ("myassistant", "voicecommand"):
             self.assertIn("CALDAV_PASSWORD",
-                          m.allowed_secret_keys({"name": name, "template": "openrouter"}),
+                          m._secrets.allowed_secret_keys({"name": name, "template": "openrouter"}),
                           f"{name} has no CALDAV_PASSWORD release")
         mcpmod.secret_store = lambda: {"CALDAV_PASSWORD": "s3cret"}
         try:
@@ -2938,7 +2938,7 @@ class ManagerFunctions(unittest.TestCase):
                 ["caldav"], allowed=set()))["mcpServers"]["caldav"]["env"]
             self.assertEqual(env["CALDAV_PASSWORD"], "${CALDAV_PASSWORD}")
         finally:
-            mcpmod.secret_store, mcpmod.load_mcps, m._mcp.load_mcps, m.load_secret_policy = old
+            mcpmod.secret_store, mcpmod.load_mcps, m._mcp.load_mcps, m._secrets.load_secret_policy = old
 
     # ---- guest boundary (multi-tenancy S-fixes, 2026-09-06) ------------------
     def _handler(self, path, ip, method="GET", auth=None):
@@ -3972,7 +3972,7 @@ class ManagerFunctions(unittest.TestCase):
         import mgr.store as st
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-session-")
-        old = (m.load_instances, m.is_running, m.pidfile, m._settings.load_settings, m.secret_store, m.load_secret_policy,
+        old = (m.load_instances, m.is_running, m.pidfile, m._settings.load_settings, m._secrets.secret_store, m._secrets.load_secret_policy,
                m._mcp.load_mcps, m.load_skills, m._paths.RUN_DIR, m.instance_by_ip, m._auth.PW, st.HISTORY_DB, m.image_state)
         try:
             inst = {"name": "vm1", "index": 3, "template": "openrouter", "rootfs": "instances/openrouter-rootfs.ext4",
@@ -3986,8 +3986,8 @@ class ManagerFunctions(unittest.TestCase):
             with open(os.path.join(tmp, "vm1.log"), "w") as fh:
                 fh.write("[init] harness from /dev/vdc\nagent ready\n")
             m._settings.load_settings = lambda: {"LLM_KEY_PROXY": "1", "BRAVE_API_KEY": "b"}
-            m.secret_store = lambda: {"CALDAV_PASSWORD": "s3cret", "HA_TOKEN": "t"}
-            m.load_secret_policy = lambda: {"by_template": {}, "by_instance": {"vm1": ["HA_TOKEN"]}, "guest_readable": []}
+            m._secrets.secret_store = lambda: {"CALDAV_PASSWORD": "s3cret", "HA_TOKEN": "t"}
+            m._secrets.load_secret_policy = lambda: {"by_template": {}, "by_instance": {"vm1": ["HA_TOKEN"]}, "guest_readable": []}
             m._mcp.load_mcps = lambda: [{"name": "caldav", "command": "c", "env": {"CALDAV_PASSWORD": "${CALDAV_PASSWORD}"}},
                                    {"name": "homeassistant", "command": "h", "args": ["Bearer ${HA_TOKEN}"]}]
             m.load_skills = lambda: [{"name": "a"}, {"name": "b"}]
@@ -4015,7 +4015,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertRegex(m.session_info(cl)["login"], r"^(ok · valid \d+h \d+m|expired on the host.*|missing \(log in on the host\))$")
             self.assertNotIn("commands", m.session_info(cl))                       # the / picker lists them
         finally:
-            (m.load_instances, m.is_running, m.pidfile, m._settings.load_settings, m.secret_store, m.load_secret_policy,
+            (m.load_instances, m.is_running, m.pidfile, m._settings.load_settings, m._secrets.secret_store, m._secrets.load_secret_policy,
              m._mcp.load_mcps, m.load_skills, m._paths.RUN_DIR, m.instance_by_ip, m._auth.PW, st.HISTORY_DB, m.image_state) = old
 
     def test_chat_page_carries_panel_and_search(self):
@@ -4052,24 +4052,24 @@ class ManagerFunctions(unittest.TestCase):
         file stays 0600, values never come back through /api/secret-keys."""
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-secstore-")
-        old = m.SECRETS_FILE, m._settings.load_settings, m.instance_by_ip, m._auth.PW
+        old = m._secrets.SECRETS_FILE, m._settings.load_settings, m.instance_by_ip, m._auth.PW
         try:
-            m.SECRETS_FILE = os.path.join(tmp, "secrets.env")
-            with open(m.SECRETS_FILE, "w") as fh:
+            m._secrets.SECRETS_FILE = os.path.join(tmp, "secrets.env")
+            with open(m._secrets.SECRETS_FILE, "w") as fh:
                 fh.write("# my secrets\nHA_TOKEN=old\nMRMUSIC_TOKEN=m\n")
-            os.chmod(m.SECRETS_FILE, 0o600)
+            os.chmod(m._secrets.SECRETS_FILE, 0o600)
             m._settings.load_settings = lambda: {"OPENROUTER_API_KEY": "sk"}
-            self.assertEqual(m.secret_set("CALDAV_PASSWORD", "p4ss"), "CALDAV_PASSWORD added")
-            self.assertEqual(m.secret_set("HA_TOKEN", "new"), "HA_TOKEN replaced")
-            self.assertIn("invalid name", m.secret_set("bad-name", "x"))
-            self.assertIn("one non-empty line", m.secret_set("X_KEY", "a\nb"))
-            self.assertIn("one non-empty line", m.secret_set("X_KEY", "  "))
-            txt = open(m.SECRETS_FILE).read()
+            self.assertEqual(m._secrets.secret_set("CALDAV_PASSWORD", "p4ss"), "CALDAV_PASSWORD added")
+            self.assertEqual(m._secrets.secret_set("HA_TOKEN", "new"), "HA_TOKEN replaced")
+            self.assertIn("invalid name", m._secrets.secret_set("bad-name", "x"))
+            self.assertIn("one non-empty line", m._secrets.secret_set("X_KEY", "a\nb"))
+            self.assertIn("one non-empty line", m._secrets.secret_set("X_KEY", "  "))
+            txt = open(m._secrets.SECRETS_FILE).read()
             self.assertEqual(txt, "# my secrets\nHA_TOKEN=new\nMRMUSIC_TOKEN=m\nCALDAV_PASSWORD=p4ss\n")
-            self.assertEqual(os.stat(m.SECRETS_FILE).st_mode & 0o777, 0o600)
-            self.assertEqual(m.secret_delete("MRMUSIC_TOKEN"), "MRMUSIC_TOKEN deleted")
-            self.assertEqual(m.secret_delete("MRMUSIC_TOKEN"), "MRMUSIC_TOKEN not in the store")
-            self.assertEqual(set(m.load_secrets_file()), {"HA_TOKEN", "CALDAV_PASSWORD"})
+            self.assertEqual(os.stat(m._secrets.SECRETS_FILE).st_mode & 0o777, 0o600)
+            self.assertEqual(m._secrets.secret_delete("MRMUSIC_TOKEN"), "MRMUSIC_TOKEN deleted")
+            self.assertEqual(m._secrets.secret_delete("MRMUSIC_TOKEN"), "MRMUSIC_TOKEN not in the store")
+            self.assertEqual(set(m._secrets.load_secrets_file()), {"HA_TOKEN", "CALDAV_PASSWORD"})
             m.instance_by_ip = lambda ip: None; m._auth.PW = ""
             h = self._handler("/api/secret-keys", "10.0.0.5"); h._do_GET()
             body = json.loads(h.wfile.getvalue().split(b"\r\n\r\n", 1)[1])
@@ -4084,7 +4084,7 @@ class ManagerFunctions(unittest.TestCase):
             h = self._post_handler("/api/secret-store", "172.30.3.2", b'{"name": "X_KEY", "value": "v"}'); h.do_POST()
             self.assertEqual(self._status(h), 403)                                       # guests: never
         finally:
-            m.SECRETS_FILE, m._settings.load_settings, m.instance_by_ip, m._auth.PW = old
+            m._secrets.SECRETS_FILE, m._settings.load_settings, m.instance_by_ip, m._auth.PW = old
 
     def test_guest_get_denylist_covers_ui_proxy_and_terminal(self):
         """GET /i/<other>/term opened the shell of every other VM — only POST

@@ -41,6 +41,7 @@ WEB_GUEST_PORT = 8080   # port of the web bridge in the microVM
 TERM_GUEST_PORT = 7682  # port of the webterm (browser terminal) in the microVM
 
 from mgr import paths as _paths  # noqa: E402
+from mgr import secrets as _secrets  # noqa: E402
 from mgr import llmproxy as _llmproxy  # noqa: E402
 from mgr import ui as _ui  # noqa: E402
 from mgr import routes as _routes  # noqa: E402
@@ -76,13 +77,6 @@ _signal_mod.configure(_paths.BASE)
 # the tool gating and the egress rules would then be moot.
 # An allowlist instead of individual checks: a new route is then closed by
 # default, not open by default.
-# Subscription login of the claude template: the user's credential on the host.
-# The manager runs as root and may read the 0600 file; the guest fetches it at
-# boot via /api/claude-credentials (claude template only, by source IP).
-# Defaults derive from the layout the installer lays out: the manager tree
-# ($BASE/firecracker) sits next to the operator's home files, so the parent
-# of BASE is the home; nothing here names a particular user.
-CLAUDE_CRED_SRC = os.environ.get("CLAUDE_CRED_SRC", os.path.join(_paths.HOME_DIR, ".claude", ".credentials.json"))
 GUEST_POST_PATHS = ("/api/usage", "/api/audit", "/api/task", "/api/chat-log", "/api/trace",
                     "/api/skill-proposals", "/api/sessions-search",
                     "/api/stt", "/api/tts", "/api/signal", "/api/mcp",
@@ -2393,144 +2387,6 @@ _rules.configure(_paths.BASE)
 # ---- Missions: moved out to mgr/missions.py (imported early, see above) ----
 
 
-# ---- Secrets broker (on-demand, allowlist per template/instance) -----------
-SECRETS_FILE = os.environ.get("SECRETS_FILE", os.path.join(_paths.HOME_DIR, ".config", "kat56", "secrets.env"))
-_SECRET_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,63}$")
-
-
-def _secrets_write(lines):
-    """Rewrite the store atomically: same directory, mode 0600, the owner
-    the file had (the manager runs as root, the file is the operator's)."""
-    d = os.path.dirname(SECRETS_FILE)
-    os.makedirs(d, exist_ok=True)
-    uid = gid = None
-    try:
-        st = os.stat(SECRETS_FILE); uid, gid = st.st_uid, st.st_gid
-    except OSError:
-        pass
-    fd, tmp = tempfile.mkstemp(prefix=".secrets.", dir=d)
-    with os.fdopen(fd, "w") as fh:
-        fh.write("".join(lines))
-    os.chmod(tmp, 0o600)
-    if uid is not None and os.geteuid() == 0:
-        os.chown(tmp, uid, gid)
-    os.replace(tmp, SECRETS_FILE)
-
-
-def secret_set(name, value):
-    """Add or replace one value in the store. Names are SHOUTING_SNAKE, the
-    value one line; other lines (order, comments) stay as they are. The
-    value is never echoed back — the UI shows only that the key is set."""
-    name = str(name or "").strip()
-    if not _SECRET_NAME_RE.match(name):
-        return "invalid name (A-Z, 0-9, _ ; 2-64 chars, starts with a letter)"
-    value = str(value or "")
-    if not value.strip() or "\n" in value or "\r" in value or len(value) > 4096:
-        return "value must be one non-empty line (max 4096 chars)"
-    try:
-        lines = open(SECRETS_FILE).readlines() if os.path.exists(SECRETS_FILE) else []
-    except OSError as e:
-        return f"error: {e}"
-    new, done = [], False
-    for ln in lines:
-        k = ln.split("=", 1)[0].strip() if "=" in ln and not ln.lstrip().startswith("#") else None
-        if k == name:
-            if not done:
-                new.append(f"{name}={value}\n"); done = True
-            continue                          # a duplicate line is dropped
-        new.append(ln if ln.endswith("\n") else ln + "\n")
-    if not done:
-        new.append(f"{name}={value}\n")
-    try:
-        _secrets_write(new)
-    except OSError as e:
-        return f"error: {e}"
-    print(f"[secrets] {'replaced' if done else 'added'} {name}", flush=True)
-    return f"{name} {'replaced' if done else 'added'}"
-
-
-def secret_delete(name):
-    name = str(name or "").strip()
-    if not _SECRET_NAME_RE.match(name):
-        return "invalid name"
-    try:
-        lines = open(SECRETS_FILE).readlines() if os.path.exists(SECRETS_FILE) else []
-    except OSError as e:
-        return f"error: {e}"
-    keep = [ln for ln in lines
-            if not ("=" in ln and not ln.lstrip().startswith("#") and ln.split("=", 1)[0].strip() == name)]
-    if len(keep) == len(lines):
-        return f"{name} not in the store"
-    try:
-        _secrets_write(keep)
-    except OSError as e:
-        return f"error: {e}"
-    print(f"[secrets] deleted {name}", flush=True)
-    return f"{name} deleted"
-SECRET_POLICY_FILE = os.path.join(_paths.BASE, "secret-policy.json")
-
-
-def load_secrets_file():
-    out = {}
-    try:
-        with open(SECRETS_FILE) as fh:
-            for line in fh:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                out[k.strip()] = v.strip().strip('"').strip("'")
-    except OSError:
-        pass
-    return out
-
-
-def secret_store():
-    """All brokerable secrets. Source 1 is the secret store (0600). Source 2 is
-    the manager settings — the LLM keys are maintained there, and since they no
-    longer flow into the instance config, the broker has to deliver them. The
-    store wins on a name collision."""
-    out = dict(load_secrets_file())
-    for k, v in _settings.load_settings().items():
-        if k in _settings.SECRET_PARAMS and v and not out.get(k):
-            out[k] = v
-    return out
-
-
-def load_secret_policy():
-    try:
-        with open(SECRET_POLICY_FILE) as fh:
-            p = json.load(fh)
-        if isinstance(p, dict):
-            if "guest_readable" not in p:
-                # Upgrade path: before the two-rights model every release was
-                # readable raw. Seed the list from the releases ONCE so an
-                # existing install keeps working; prune it in the Secrets tab.
-                seed = sorted({k for grp in ("by_template", "by_instance")
-                               for v in (p.get(grp) or {}).values() if isinstance(v, list)
-                               for k in v if isinstance(k, str)})
-                if (_settings.load_settings().get("LLM_KEY_PROXY") or "") == "1":
-                    seed = [k for k in seed if k not in {kn for _, kn in _llmproxy.LLM_PROXY_UPSTREAMS.values()}]
-                p["guest_readable"] = seed
-                save_secret_policy(p)
-                print(f"[secrets] guest_readable seeded from existing releases: {', '.join(seed) or '-'}", flush=True)
-            return p
-    except (FileNotFoundError, ValueError):
-        pass
-    return {"by_template": {}, "by_instance": {}, "guest_readable": []}
-
-
-def guest_readable_keys(inst):
-    """Keys a guest may fetch as RAW values through the broker. Two rights,
-    two lists: a release in by_template/by_instance lets the HUB substitute
-    the secret into an MCP config on the host; only a key that is ALSO in
-    `guest_readable` ever leaves the host (get_secret). Since the hub and the
-    LLM key proxy exist, that list is empty by default — a VM that needs a
-    raw token is the exception, not the rule."""
-    pol = load_secret_policy()
-    return allowed_secret_keys(inst) & set(pol.get("guest_readable") or [])
-
-
 def instance_by_ip(ip):
     for i in load_instances():
         try:
@@ -2539,38 +2395,6 @@ def instance_by_ip(ip):
         except Exception:
             continue
     return None
-
-
-def allowed_secret_keys(inst):
-    """Effective allowlist = by_template[template] ∪ by_instance[name]. Default deny."""
-    if not inst:
-        return set()
-    pol = load_secret_policy()
-    keys = set(pol.get("by_template", {}).get(inst.get("template", ""), []))
-    keys |= set(pol.get("by_instance", {}).get(inst.get("name", ""), []))
-    return keys
-
-
-def save_secret_policy(pol):
-    """Save the policy (only {by_template,by_instance} with string lists)."""
-    if not isinstance(pol, dict):
-        return "invalid"
-    clean = {"by_template": {}, "by_instance": {}, "guest_readable": []}
-    for grp in ("by_template", "by_instance"):
-        src = pol.get(grp, {})
-        if isinstance(src, dict):
-            for k, v in src.items():
-                if isinstance(v, list):
-                    clean[grp][str(k)] = [str(x) for x in v if isinstance(x, str)]
-    gr = pol.get("guest_readable", [])
-    if isinstance(gr, list):
-        clean["guest_readable"] = sorted({str(x) for x in gr if isinstance(x, str)})
-    try:
-        with open(SECRET_POLICY_FILE, "w") as fh:
-            json.dump(clean, fh, indent=2)
-        return "saved"
-    except OSError as e:
-        return f"error: {e}"
 
 
 # ---- MCP catalog + hub: moved out to mgr/mcp.py ----------------------------
@@ -2616,7 +2440,7 @@ def effective_policy(inst):
         "model": model,
         "tools_all": tools_allowed is None,
         "tools": tools_allowed if tools_allowed is not None else [t["name"] for t in AGENT_TOOLS_CATALOG],
-        "secrets": sorted(allowed_secret_keys(inst)),
+        "secrets": sorted(_secrets.allowed_secret_keys(inst)),
         "mcps": mcps,
         "katfs_share": cfg.get("KATFS_SHARE", ""),
         "auto_reset": str(cfg.get("AUTO_RESET_MIN", "") or "0"),
@@ -2624,7 +2448,7 @@ def effective_policy(inst):
 
 
 # mgr/mcp needs the secret functions; they are defined above by now.
-_mcp.configure(_paths.BASE, load_instances, allowed_secret_keys, secret_store)
+_mcp.configure(_paths.BASE, load_instances, _secrets.allowed_secret_keys, _secrets.secret_store)
 
 # ---- web -------------------------------------------------------------------
 # PAGE (HTML/JS of the manager UI) now lives in mgr/ui.py.
@@ -2917,7 +2741,7 @@ def _ha_ws_target():
 
 
 from mgr import haalias as _haalias  # noqa: E402
-_haalias.configure(_ha_ws_target, lambda: secret_store().get("HA_TOKEN"))
+_haalias.configure(_ha_ws_target, lambda: _secrets.secret_store().get("HA_TOKEN"))
 
 ROUTER = _routes.Router()
 
@@ -2938,7 +2762,7 @@ def claude_login_state():
     """The host's Claude login as the session panel shows it: not only present,
     but how long its access token is still valid (the VM works from a copy)."""
     try:
-        with open(CLAUDE_CRED_SRC) as fh:
+        with open(_secrets.CLAUDE_CRED_SRC) as fh:
             exp = (json.load(fh).get("claudeAiOauth") or {}).get("expiresAt") or 0
     except (OSError, ValueError):
         return "missing (log in on the host)"
@@ -2965,7 +2789,7 @@ def session_info(inst):
         login = "key proxy"
     else:
         keyname = "ORCAROUTER_API_KEY" if tpl in ("orcarouter", "llama") else "OPENROUTER_API_KEY"
-        login = "api key" if secret_store().get(keyname) else "no key"
+        login = "api key" if _secrets.secret_store().get(keyname) else "no key"
     mem_dir = _memfs.folder(name) if uses_harness(inst) else None
     notes = 0
     if mem_dir:
@@ -2985,7 +2809,7 @@ def session_info(inst):
         {"name": "Skills", "state": f"{len(load_skills())} in catalog", "ok": True},
         {"name": "Traces", "state": f"{len(_store.turns_read(name, limit=50))} recent turns", "ok": True},
     ]
-    allowed = allowed_secret_keys(inst)
+    allowed = _secrets.allowed_secret_keys(inst)
     mcps = []
     for n in [x for x in (cfg.get("MCP_SERVERS", "") or "").split(",") if x]:
         missing = sorted(_mcp.mcp_required_secrets([n]) - allowed)
@@ -3894,7 +3718,7 @@ def _rt_llm_proxy(h):
 def _rt_secrets(h):
     # What get_secret may fetch: released AND guest-readable.
     inst = h._guest()
-    keys = sorted(guest_readable_keys(inst)) if inst else []
+    keys = sorted(_secrets.guest_readable_keys(inst)) if inst else []
     return h._json({"allowed": keys, "instance": inst.get("name") if inst else None})
 
 
@@ -3908,7 +3732,7 @@ def _rt_claude_credentials(h):
     if inst is None or inst.get("template") != "claude":
         return h._json({"error": "claude template guests only"}, 403)
     try:
-        with open(CLAUDE_CRED_SRC) as fh:
+        with open(_secrets.CLAUDE_CRED_SRC) as fh:
             full = json.load(fh)
         return h._json({"claudeAiOauth": full["claudeAiOauth"]})
     except (OSError, ValueError, KeyError):
@@ -3919,9 +3743,9 @@ def _rt_claude_credentials(h):
 def _rt_secret(h):
     name = h.path.split("/api/secret/", 1)[1]
     inst = h._guest()
-    if inst is None or name not in guest_readable_keys(inst):
+    if inst is None or name not in _secrets.guest_readable_keys(inst):
         return h._json({"error": "not allowed (released for the hub only, or not released)"}, 403)
-    return h._json({"value": secret_store().get(name, "")})
+    return h._json({"value": _secrets.secret_store().get(name, "")})
 
 
 @ROUTER.get("/api/mcp-config")
@@ -3934,7 +3758,7 @@ def _rt_mcp_config(h):
         return h._json({"error": "guests only"}, 403)
     names = [n for n in (inst.get("config", {}).get("MCP_SERVERS", "") or "").split(",") if n]
     blob = _mcp.build_mcp_config(names, allowed=set()) if names else ""
-    missing = sorted(_mcp.mcp_required_secrets(names) - allowed_secret_keys(inst))
+    missing = sorted(_mcp.mcp_required_secrets(names) - _secrets.allowed_secret_keys(inst))
     data = json.loads(blob) if blob else {"mcpServers": {}}
     if missing:
         data["unresolved"] = missing
@@ -4578,8 +4402,8 @@ def _rt_security(h):
 def _rt_secret_keys(h):
     # Names only, never values; `sources` says where a key lives (the store
     # file, editable here, or the settings, edited in the Settings tab).
-    store = load_secrets_file()
-    keys = sorted(secret_store().keys())
+    store = _secrets.load_secrets_file()
+    keys = sorted(_secrets.secret_store().keys())
     return h._json({"keys": keys, "sources": {k: ("store" if k in store else "settings") for k in keys}})
 
 
@@ -4591,20 +4415,20 @@ def _rt_update(h):
 @_msg_route("POST", "/api/secret-store")
 def _rt_secret_store_set(h):
     b = h._body()
-    return secret_set(b.get("name", ""), b.get("value", ""))
+    return _secrets.secret_set(b.get("name", ""), b.get("value", ""))
 
 
 @_msg_route("POST", "/api/secret-store/", prefix=True)
 def _rt_secret_store_delete(h):
     parts = h.path.split("?", 1)[0].strip("/").split("/")
     if len(parts) == 4 and parts[3] == "delete":
-        return secret_delete(parts[2])
+        return _secrets.secret_delete(parts[2])
     return "unknown"
 
 
 @ROUTER.get("/api/secret-policy", admin=True)
 def _rt_secret_policy(h):
-    return h._json(load_secret_policy())
+    return h._json(_secrets.load_secret_policy())
 
 
 @ROUTER.get("/api/mcps", admin=True)
@@ -4801,7 +4625,7 @@ def run_task_now(tid):
 
 @_msg_route("POST", "/api/secret-policy")
 def _rt_secret_policy_save(h):
-    return save_secret_policy(h._body())
+    return _secrets.save_secret_policy(h._body())
 
 
 @_msg_route("POST", "/api/mcps")
@@ -5019,7 +4843,7 @@ def migrate_mcp_config_out_of_instances():
     names are its keys, so they can be lifted losslessly into MCP_SERVERS; the
     secrets needed for that are granted to the instance specifically, so nothing
     that worked before stops working."""
-    pol = load_secret_policy()
+    pol = _secrets.load_secret_policy()
     by_inst = pol.setdefault("by_instance", {})
     touched = False
     for inst in load_instances():
@@ -5051,7 +4875,7 @@ def migrate_mcp_config_out_of_instances():
         except OSError as e:
             print(f"[migrate] {inst['name']}: {e}", flush=True)
     if touched:
-        save_secret_policy(pol)
+        _secrets.save_secret_policy(pol)
 
 
 def migrate_secrets_out_of_instances():
