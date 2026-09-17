@@ -2153,7 +2153,7 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual(mcpmod.hub_env({"TZ": "UTC"})["TZ"], "UTC")
         finally:
             mcpmod.HUB_TZ = old
-        self.assertEqual(self.m._mcp.HUB_TZ, self.m.HOST_TZ)
+        self.assertEqual(self.m._mcp.HUB_TZ, self.m._host.HOST_TZ)
 
     def test_mcp_servers_validated_against_catalog(self):
         """The Policy tab assigns MCPs through the config route: names must
@@ -2459,8 +2459,8 @@ class ManagerFunctions(unittest.TestCase):
     def test_guest_config_carries_host_timezone(self):
         """Guests boot in UTC; the manager hands them the host's zone name."""
         m = self.m
-        self.assertTrue(m.HOST_TZ)
-        self.assertEqual(m.HOST_TZ, os.environ.get("GUEST_TZ") or m._host_tz())
+        self.assertTrue(m._host.HOST_TZ)
+        self.assertEqual(m._host.HOST_TZ, os.environ.get("GUEST_TZ") or m._host._host_tz())
 
     def test_task_model_reaches_the_ephemeral_vm(self):
         """spawn_subagent/create_task may name a model: it travels through
@@ -4189,11 +4189,11 @@ class ManagerFunctions(unittest.TestCase):
             ins = [c for c in calls if c[1] == "-I"]
             self.assertEqual(ins[0][2:], ("INPUT", "1", "-i", "fc+", "-j", "DROP"))
             ports = {c[c.index("--dport") + 1] for c in ins if "--dport" in c}
-            self.assertEqual(ports, {str(m.LISTEN[1]), "2049"})
+            self.assertEqual(ports, {str(m._host.LISTEN[1]), "2049"})
             self.assertTrue(any("ESTABLISHED,RELATED" in c for c in ins))
             self.assertTrue(all(c[2] == "INPUT" and ("fc+" in c or m.POOL in c) for c in ins))
             # a pool source on the LAN interface is forged: dropped before any by-IP check
-            self.assertIn(("iptables", "-I", "INPUT", "1", "-i", m.HOSTIF, "-s", m.POOL, "-j", "DROP"), ins)
+            self.assertIn(("iptables", "-I", "INPUT", "1", "-i", m._host.HOSTIF, "-s", m.POOL, "-j", "DROP"), ins)
             # an ACCEPT that already exists (maybe below the DROP) is removed and re-inserted on top
             calls.clear()
             state = {"nfs": 1}      # one stray copy of the NFS rule

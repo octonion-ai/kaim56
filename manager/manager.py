@@ -44,6 +44,7 @@ WEB_GUEST_PORT = 8080   # port of the web bridge in the microVM
 TERM_GUEST_PORT = 7682  # port of the webterm (browser terminal) in the microVM
 
 from mgr import paths as _paths  # noqa: E402
+from mgr import host as _host  # noqa: E402
 from mgr import util as _util  # noqa: E402
 from mgr import models as _models  # noqa: E402
 from mgr import about as _about  # noqa: E402
@@ -150,54 +151,7 @@ def origin_allowed(origin):
     except ValueError:
         return False
     return bool(host) and host in trusted_hosts()
-def _uplink_iface():
-    """Interface of the default route ("… dev eth0 …")."""
-    try:
-        out = subprocess.run(["ip", "-o", "route", "show", "default"],
-                             capture_output=True, text=True, timeout=5).stdout.split()
-        return out[out.index("dev") + 1]
-    except Exception:
-        return ""
-
-
-def _pick_hostif():
-    """Uplink for the guests' MASQUERADE rule. A hard-wired NIC name is a silent
-    trap: if the kernel renames it (update, new hardware, reboot), the NAT rule
-    points nowhere — the microVMs then reach neither DNS nor the LLM, and nothing
-    logs an error. That's why a configured name only counts if the interface
-    really exists; otherwise the default route wins."""
-    want = os.environ.get("HOSTIF") or _settings.SITE.get("HOSTIF") or ""
-    if want and os.path.exists(f"/sys/class/net/{want}"):
-        return want
-    auto = _uplink_iface()
-    if want and auto:
-        print(f"[net] HOSTIF={want} does not exist — using {auto} (default route)",
-              flush=True)
-    return auto or want or "eth0"
-
-
-HOSTIF = _pick_hostif()
-LISTEN = ("0.0.0.0", int(os.environ.get("PORT", "8700")))
-def _host_tz():
-    """The host's timezone name for the guests (they boot in UTC otherwise):
-    /etc/timezone, else the /etc/localtime symlink, else UTC."""
-    try:
-        t = open("/etc/timezone").read().strip()
-        if t:
-            return t
-    except OSError:
-        pass
-    try:
-        p = os.path.realpath("/etc/localtime")
-        if "/zoneinfo/" in p:
-            return p.split("/zoneinfo/", 1)[1]
-    except OSError:
-        pass
-    return "UTC"
-
-
-HOST_TZ = os.environ.get("GUEST_TZ") or _host_tz()
-_mcp.HUB_TZ = HOST_TZ          # hub processes (caldav-mcp …) format dates in this zone
+_mcp.HUB_TZ = _host.HOST_TZ          # hub processes (caldav-mcp …) format dates in this zone
 USER = os.environ.get("MANAGER_USER", "admin")
 PW = os.environ.get("MANAGER_PASS", "")   # empty => no auth (only behind Traefik!)
 
@@ -1674,10 +1628,10 @@ def resource_stats():
 # ---- networking ------------------------------------------------------------
 def ensure_net_base():
     _util.sh("sysctl", "-w", "net.ipv4.ip_forward=1", check=False)
-    r = _util.sh("iptables", "-t", "nat", "-C", "POSTROUTING", "-s", POOL, "-o", HOSTIF,
+    r = _util.sh("iptables", "-t", "nat", "-C", "POSTROUTING", "-s", POOL, "-o", _host.HOSTIF,
            "-j", "MASQUERADE", check=False)
     if r.returncode != 0:
-        _util.sh("iptables", "-t", "nat", "-A", "POSTROUTING", "-s", POOL, "-o", HOSTIF,
+        _util.sh("iptables", "-t", "nat", "-A", "POSTROUTING", "-s", POOL, "-o", _host.HOSTIF,
            "-j", "MASQUERADE", check=False)
     # Guest isolation: microVMs must NOT route to each other. A compromised
     # agent could otherwise reach another instance's chat/term ports (8080/7682,
@@ -1692,7 +1646,7 @@ def ensure_net_base():
 
 # Guest -> host: what a VM legitimately needs from its gateway (.1 of the /30).
 GUEST_INPUT_ACCEPT = (
-    ("-p", "tcp", "--dport", str(LISTEN[1])),          # manager: API, broker, LLM proxy
+    ("-p", "tcp", "--dport", str(_host.LISTEN[1])),          # manager: API, broker, LLM proxy
     ("-p", "tcp", "--dport", "2049"),                  # NFS workspace
     ("-p", "icmp"),                                    # ping the gateway
     ("-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED"),  # replies to host->guest (proxy)
@@ -1716,9 +1670,9 @@ def ensure_guest_input_rules():
         _util.sh("iptables", "-I", "INPUT", "1", "-i", "fc+", *spec, "-j", "ACCEPT", check=False)
     # A pool address arriving on the LAN interface is forged (a LAN box posing
     # as a stopped VM would pass every by-IP check): drop it first.
-    if HOSTIF and _util.sh("iptables", "-C", "INPUT", "-i", HOSTIF, "-s", POOL, "-j", "DROP",
+    if _host.HOSTIF and _util.sh("iptables", "-C", "INPUT", "-i", _host.HOSTIF, "-s", POOL, "-j", "DROP",
                      check=False).returncode != 0:
-        _util.sh("iptables", "-I", "INPUT", "1", "-i", HOSTIF, "-s", POOL, "-j", "DROP", check=False)
+        _util.sh("iptables", "-I", "INPUT", "1", "-i", _host.HOSTIF, "-s", POOL, "-j", "DROP", check=False)
 
 
 def _antispoof_rules(n):
@@ -2144,7 +2098,7 @@ def guest_env(inst):
     # claude/fabric are found (guest-init sources the config disk).
     cfg.setdefault("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
     cfg["FC_INSTANCE"] = inst["name"]   # for the host-folder reconciler in the guest
-    cfg.setdefault("TZ", HOST_TZ)        # the agent's clock: [Now] line per turn
+    cfg.setdefault("TZ", _host.HOST_TZ)        # the agent's clock: [Now] line per turn
     cfg["GUEST_DNS"] = GUEST_DNS         # guest-init writes resolv.conf from it (site.json, not the image)
     cfg["AGENT_EXPORT"] = workspace_dir(inst)   # its own workspace export, by absolute path
     if uses_harness(inst):
@@ -3237,7 +3191,7 @@ def render():
                 .replace("__SKILLS__", _util.js_json(
                     [{"name": x.get("name", ""), "description": x.get("description", "")}
                      for x in load_skills()], ensure_ascii=False))
-                .replace("__HOSTIF__", HOSTIF).replace("__POOL__", POOL)
+                .replace("__HOSTIF__", _host.HOSTIF).replace("__POOL__", POOL)
                 .replace("__PUBLIC_HOST__", _settings.PUBLIC_HOST)
                 .replace("__SIGNAL_HOST__", _settings.SIGNAL_HOST)
                 .replace("__CODE_LINK__",
@@ -5673,7 +5627,7 @@ def harden_files(base=None):
 
 
 if __name__ == "__main__":
-    print(f"kAIm56 on http://{LISTEN[0]}:{LISTEN[1]}  (auth={'on' if PW else 'OFF'})",
+    print(f"kAIm56 on http://{_host.LISTEN[0]}:{_host.LISTEN[1]}  (auth={'on' if PW else 'OFF'})",
           flush=True)
     os.umask(0o077)                  # new files are root's; the few others read get a mode below
     harden_files()
@@ -5686,4 +5640,4 @@ if __name__ == "__main__":
     migrate_mcp_config_out_of_instances()
     threading.Thread(target=_task_worker, daemon=True).start()
     threading.Thread(target=_signal_receiver, daemon=True).start()
-    ThreadingHTTPServer(LISTEN, H).serve_forever()
+    ThreadingHTTPServer(_host.LISTEN, H).serve_forever()
