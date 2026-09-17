@@ -2230,6 +2230,25 @@ class ManagerFunctions(unittest.TestCase):
         finally:
             m._instances.load_instances, m._instances.is_running, m._instances.net_of, urllib.request.urlopen, m._guests.instance_by_ip = old
 
+    def test_mgr_modules_never_import_manager_and_manager_is_wiring_only(self):
+        """The two invariants of the split: no mgr module imports manager.py
+        (no cycles, every module loads on its own), and manager.py holds no
+        routes, handler or domain code — imports, wiring and main only."""
+        import ast as _ast
+        mgr_dir = os.path.join(FC_DIR, "mgr")
+        for f in sorted(os.listdir(mgr_dir)):
+            if not f.endswith(".py"):
+                continue
+            for n in _ast.walk(_ast.parse(open(os.path.join(mgr_dir, f)).read())):
+                if isinstance(n, _ast.Import):
+                    self.assertFalse(any(a.name == "manager" for a in n.names), f"mgr/{f} imports manager")
+                elif isinstance(n, _ast.ImportFrom):
+                    self.assertNotEqual(n.module, "manager", f"mgr/{f} imports from manager")
+        tree = _ast.parse(open(MANAGER_PATH).read())
+        self.assertFalse([n for n in tree.body if isinstance(n, _ast.ClassDef)], "a class crept back into manager.py")
+        fns = [n.name for n in tree.body if isinstance(n, _ast.FunctionDef)]
+        self.assertEqual(fns, ["_ha_ws_target"], f"domain code in manager.py: {fns}")
+
     def test_memfs_git_never_runs_as_root_with_hooks(self):
         """C-1: git in the guest-writable memory folder must run as the guest
         user (when the manager is root) with every config-driven execution

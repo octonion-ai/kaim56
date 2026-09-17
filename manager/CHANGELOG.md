@@ -6,7 +6,7 @@ history — `git log -p -- manager/CHANGELOG.md` before 2026-09-08 — and in th
 commit messages.
 
 ## 2026-09-17
-- Split for review (no behaviour change): manager.py moves into mgr/ modules by concern, one module per commit; cross-module calls go through the module (`_paths.BASE`), tests patch the defining module
+- Split for review (no behaviour change): manager.py (6,078 lines) becomes a composition root; the code moves into mgr/ modules by concern, security boundaries as their own files, routes split by who may call them; siblings are used as modules (`_x.func`), tests patch the defining module
 - Security H-2: the browser-terminal WebSocket handshake now requires a present, allowed Origin (403 otherwise) — any page the admin visited could open a shell in a VM with the cached login
 - Security H-3: the terminal page is served by the manager from its own webterm.py (only the /ws frames are tunneled), and any other HTML relayed from a guest gets `Content-Security-Policy: sandbox` — guest-authored HTML can no longer run script on the manager origin with the admin's session
 - Security C-1 (critical): git in the guest-writable memory folder no longer runs as root — it runs as the guest user with hooks, fsmonitor and sshCommand disabled on the command line and no global/system config; older root-owned `.git` trees are chowned to the guest on first use; a planted `.git/hooks/pre-commit` can neither run as root nor run at all (test)

@@ -5,124 +5,119 @@
 # This program is free software under the GNU AGPL v3+; see LICENSE.
 """kAIm56 — Manager (web UI + API) for 1..x microVM instances (Firecracker).
 
-Runs as root (needs /dev/kvm, ip, iptables) — e.g. via systemd. Pure standard
-library, no extra packages. Instances are stored as JSON under
-instances/<name>.json; the network is derived per instance from 'index':
-  host  172.30.<index>.1/30   guest 172.30.<index>.2/30   tap fc<index>
+Runs as root (needs /dev/kvm, ip, iptables) under systemd. Pure standard
+library. This file is the composition root and nothing else: it imports the
+mgr package, wires the few cross-references the modules cannot derive
+themselves, and starts the worker threads and the HTTP server. Everything
+else lives in mgr/, one concern per module:
+
+  security boundaries
+    auth          admin login, lockout after failed logins, trusted Origins
+    guests        a VM is identified by its source IP; what a guest may reach
+    secrets       the host secret store and the per-instance release policy
+    policy        tool catalog, per-instance tool gating, sandbox config
+    llmproxy      the key proxy: LLM keys never enter a VM; budget/rate guard
+    guestproxy    admin-to-VM relays: chat stream, terminal, katfs, /i/ proxy
+    netfw         taps, anti-spoof, host input rules, egress per instance
+    mounts        guest squash user, per-instance NFS exports, mount deny list
+    routes_guest  every HTTP route a VM may call
+    routes_admin  every HTTP route only the admin may call
+  the VMs
+    instances     instances/<name>.json, templates, network, running state
+    vm            images, harness drive, write layer, start and stop
+    tasks         task queue and worker, ephemeral VMs, orchestrator ping
+    guestchat     talking to a VM's web bridge
+    resources     CPU, memory and disk per instance
+  HTTP
+    routes        the route table (ROUTER), route helpers, body caps
+    httpd         the handler class H: auth, guest gating, dispatch
+    ui            the admin page (render) with ui_css / ui_html / ui_js
+  data and integrations
+    settings, about, models, chats, skills, personas, plugins, audit, voice,
+    browse, store, memfs, hindsight, missions, rules, mcp, katfs, irohgw,
+    signal, gateway, notify, saddler, websearch, extract, haalias
+  small
+    paths, host, util, startup
+
+Conventions: an mgr module never imports this file. A module uses a sibling
+as ``_name.func`` (module attribute, not ``from mgr.x import f``), so a test
+can replace one definition in one place; the tests reach every module as
+``manager._name`` — that is why every module is imported here, used or not.
 """
 import os
 import threading
 from http.server import ThreadingHTTPServer
 
+from mgr import about as _about              # noqa: F401
+from mgr import audit as _audit
+from mgr import auth as _auth
+from mgr import browse as _browse            # noqa: F401
+from mgr import chats as _chats              # noqa: F401
+from mgr import gateway as _gateway
+from mgr import guestchat as _guestchat      # noqa: F401
+from mgr import guestproxy as _guestproxy    # noqa: F401
+from mgr import guests as _guests            # noqa: F401
+from mgr import haalias as _haalias
+from mgr import hindsight as _hindsight
+from mgr import host as _host
+from mgr import httpd as _httpd
+from mgr import instances as _instances
+from mgr import irohgw as _irohgw
+from mgr import katfs as _katfs              # noqa: F401
+from mgr import llmproxy as _llmproxy        # noqa: F401
+from mgr import mcp as _mcp
+from mgr import memfs as _memfs
+from mgr import missions as _missions
+from mgr import models as _models            # noqa: F401
+from mgr import mounts as _mounts
+from mgr import netfw as _netfw              # noqa: F401
+from mgr import notify as _notify
+from mgr import paths as _paths
+from mgr import personas as _personas        # noqa: F401
+from mgr import plugins as _plugins          # noqa: F401
+from mgr import policy as _policy            # noqa: F401
+from mgr import resources as _resources      # noqa: F401
+from mgr import routes as _routes            # noqa: F401
+from mgr import routes_admin as _routes_admin  # noqa: F401  (registers its routes in ROUTER on import)
+from mgr import routes_guest as _routes_guest  # noqa: F401  (registers its routes in ROUTER on import)
+from mgr import rules as _rules
+from mgr import saddler as _saddler_mod
+from mgr import secrets as _secrets
+from mgr import settings as _settings
+from mgr import signal as _signal_mod
+from mgr import skills as _skills            # noqa: F401
+from mgr import startup as _startup
+from mgr import store as _store
+from mgr import tasks as _tasks
+from mgr import ui as _ui                    # noqa: F401
+from mgr import util as _util                # noqa: F401
+from mgr import vm as _vm                    # noqa: F401
+from mgr import voice as _voice              # noqa: F401
+from mgr import websearch as _websearch_mod
 
-from mgr import paths as _paths  # noqa: E402
-from mgr import startup as _startup  # noqa: E402
-from mgr import httpd as _httpd  # noqa: E402
-from mgr import guestproxy as _guestproxy  # noqa: E402,F401  (tests reach it as m._x)
-# The route modules register their functions in mgr.routes.ROUTER when imported.
-from mgr import routes_guest as _routes_guest  # noqa: E402,F401
-from mgr import routes_admin as _routes_admin  # noqa: E402,F401
-from mgr import tasks as _tasks  # noqa: E402
-from mgr import guestchat as _guestchat  # noqa: E402,F401  (tests reach it as m._x)
-from mgr import resources as _resources  # noqa: E402,F401  (tests reach it as m._x)
-from mgr import personas as _personas  # noqa: E402,F401  (tests reach it as m._x)
-from mgr import policy as _policy  # noqa: E402,F401  (tests reach it as m._x)
-from mgr import skills as _skills  # noqa: E402,F401  (tests reach it as m._x)
-from mgr import chats as _chats  # noqa: E402,F401  (tests reach it as m._x)
-from mgr import netfw as _netfw  # noqa: E402,F401  (tests reach it as m._x)
-from mgr import mounts as _mounts  # noqa: E402
-from mgr import vm as _vm  # noqa: E402,F401  (tests reach it as m._x)
-from mgr import guests as _guests  # noqa: E402,F401  (tests reach it as m._x)
-from mgr import instances as _instances  # noqa: E402
-from mgr import secrets as _secrets  # noqa: E402
-from mgr import llmproxy as _llmproxy  # noqa: E402,F401  (tests reach it as m._x)
-from mgr import ui as _ui  # noqa: E402,F401  (tests reach it as m._x)
-from mgr import routes as _routes  # noqa: E402,F401  (tests reach it as m._x)
-from mgr import katfs as _katfs  # noqa: E402,F401  (tests reach it as m._x)
-from mgr import plugins as _plugins  # noqa: E402,F401  (tests reach it as m._x)
-from mgr import voice as _voice  # noqa: E402,F401  (tests reach it as m._x)
-from mgr import browse as _browse  # noqa: E402,F401  (tests reach it as m._x)
-from mgr import audit as _audit  # noqa: E402
-from mgr import auth as _auth  # noqa: E402
-from mgr import host as _host  # noqa: E402
-from mgr import util as _util  # noqa: E402,F401  (tests reach it as m._x)
-from mgr import models as _models  # noqa: E402,F401  (tests reach it as m._x)
-from mgr import about as _about  # noqa: E402,F401  (tests reach it as m._x)
-from mgr import settings as _settings  # noqa: E402
-
-# Load the mgr package early: injections (notify/sem) happen further down,
-# as soon as the respective functions are defined.
-from mgr import missions as _missions  # noqa: E402
+# ---- wiring: what a module cannot derive itself ------------------------------
 _missions.configure(_paths.BASE)
-from mgr import mcp as _mcp  # noqa: E402
 _mcp.configure(_paths.BASE, _instances.load_instances, _secrets.allowed_secret_keys, _secrets.secret_store)
-from mgr import memfs as _memfs  # noqa: E402
 _memfs.configure(_paths.BASE)
-from mgr import hindsight as _hindsight  # noqa: E402
-_hindsight.configure(lambda: _settings.load_settings(), log=print)   # load_settings is defined further down; called lazily
-from mgr import signal as _signal_mod  # noqa: E402
+_hindsight.configure(lambda: _settings.load_settings(), log=print)
 _signal_mod.configure(_paths.BASE)
 _mcp.HUB_TZ = _host.HOST_TZ          # hub processes (caldav-mcp …) format dates in this zone
 os.makedirs(_paths.RUN_DIR, exist_ok=True)
-
-
-# ---- Signal (send/HITL/receive): moved out to mgr/signal.py ---------------
-
-
-# ---- Security gateway: moved out to mgr/gateway.py -------------------------
-from mgr import gateway as _gateway  # noqa: E402
 _gateway.configure(_paths.BASE)
-
-
-# ---- Notifications: moved out to mgr/notify.py -----------------------------
-from mgr import notify as _notify  # noqa: E402
 _notify.configure(_paths.BASE)
 _missions.notify_add = _notify.notify_add   # injection (mgr/missions)
-
-
-# ---- Background jobs (task queue + scheduler) ------------------------------
-
-# ---- store: SQLite history/usage/semantics + memory -> mgr/store.py -------
-from mgr import store as _store  # noqa: E402
 _store.configure(_paths.BASE)
 _missions.sem_store = _store.sem_store   # injection (mgr/missions)
-
-
-# ---- Playbooks + prompt templates: moved out to mgr/rules.py ---------------
-from mgr import rules as _rules  # noqa: E402
 _rules.configure(_paths.BASE)
-
-
-# ---- Missions: moved out to mgr/missions.py (imported early, see above) ----
-
-
-# ---- MCP catalog + hub: moved out to mgr/mcp.py ----------------------------
-
-
-# ---- katfs: moved out to mgr/katfs.py --------------------------------------
-
-from mgr import irohgw as _irohgw  # noqa: E402
 _irohgw.configure(_paths.BASE)
-
-# ---- web -------------------------------------------------------------------
-# PAGE (HTML/JS of the manager UI) now lives in mgr/ui.py.
-
-# ---- Routing table ---------------------------------------------------------
-# Erster Schritt weg von der if-Kette (Strangler wie beim mgr/-Paket): wer hier
-# steht, wird ueber die Tabelle zugestellt; alles andere faellt weiter durch die
-# Kette. Eine Route liefert (body, content_type) und ueberlaesst das Senden dem
-# Verteiler — oder None, wenn sie selbst geantwortet hat.
-from mgr import saddler as _saddler_mod  # noqa: E402
 _saddler_mod.configure(_audit.AUDIT_DIR, _store.HISTORY_DB)
-
-from mgr import websearch as _websearch_mod  # noqa: E402
 _websearch_mod.configure(lambda key: (_settings.load_settings().get(key) or ""))
 
 
 def _ha_ws_target():
-    """(host, port) des Home-Assistant-WebSocket aus dem MCP-Katalog. Der
-    'homeassistant'-Eintrag traegt die URL in args[0]; wir leiten daraus die
-    WS-Adresse ab (kein zusaetzlicher Config-Ort)."""
+    """(host, port) of the Home Assistant WebSocket, from the MCP catalog: the
+    'homeassistant' entry carries the URL in args[0]; the WS address derives
+    from it (no second place to configure)."""
     for m in _mcp.load_mcps():
         if m.get("name") == "homeassistant":
             for a in m.get("args", []):
@@ -134,7 +129,6 @@ def _ha_ws_target():
     return None
 
 
-from mgr import haalias as _haalias  # noqa: E402
 _haalias.configure(_ha_ws_target, lambda: _secrets.secret_store().get("HA_TOKEN"))
 
 if __name__ == "__main__":
