@@ -1400,37 +1400,37 @@ class ManagerFunctions(unittest.TestCase):
         NEWER edit (then the tombstone is dropped)."""
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-tomb-")
-        oc, ot = m.CHATS_FILE, m.TOMBSTONES_FILE
-        m.CHATS_FILE = os.path.join(tmp, "chats.json")
-        m.TOMBSTONES_FILE = os.path.join(tmp, "tombs.json")
+        oc, ot = m._chats.CHATS_FILE, m._chats.TOMBSTONES_FILE
+        m._chats.CHATS_FILE = os.path.join(tmp, "chats.json")
+        m._chats.TOMBSTONES_FILE = os.path.join(tmp, "tombs.json")
         try:
             NOW = 1_800_000_000_000
-            has = lambda: any(c.get("id") == "x" for c in m.load_chats())
-            m.merge_chats([{"id": "x", "updatedAt": NOW - 5000,
+            has = lambda: any(c.get("id") == "x" for c in m._chats.load_chats())
+            m._chats.merge_chats([{"id": "x", "updatedAt": NOW - 5000,
                             "messages": [{"user": True, "text": "hi"}]}])
             self.assertTrue(has())
-            m.merge_chats({"chats": [], "tombstones": {"x": NOW}})       # delete
+            m._chats.merge_chats({"chats": [], "tombstones": {"x": NOW}})       # delete
             self.assertFalse(has())
-            self.assertIn("x", m.load_tombstones())
-            m.merge_chats([{"id": "x", "updatedAt": NOW - 1000,          # Re-Push alt
+            self.assertIn("x", m._chats.load_tombstones())
+            m._chats.merge_chats([{"id": "x", "updatedAt": NOW - 1000,          # Re-Push alt
                             "messages": [{"user": True, "text": "hi"}]}])
             self.assertFalse(has())                                      # bleibt weg
-            m.merge_chats([{"id": "x", "updatedAt": NOW + 9000,          # echte Bearbeitung
+            m._chats.merge_chats([{"id": "x", "updatedAt": NOW + 9000,          # echte Bearbeitung
                             "messages": [{"user": True, "text": "edit"}]}])
             self.assertTrue(has())                                       # aufersteht
-            self.assertNotIn("x", m.load_tombstones())                   # Tombstone weg
+            self.assertNotIn("x", m._chats.load_tombstones())                   # Tombstone weg
             # A bogus far-future timestamp (leaked sync fixture, year 2286) must
             # still be deletable — it must not beat the deletion.
-            m.merge_chats([{"id": "y", "updatedAt": 10000000000001,
+            m._chats.merge_chats([{"id": "y", "updatedAt": 10000000000001,
                             "messages": [{"user": True, "text": "SYNC"}]}])
-            self.assertTrue(any(c.get("id") == "y" for c in m.load_chats()))
-            m.merge_chats({"chats": [], "tombstones": {"y": NOW}})       # delete now
-            self.assertFalse(any(c.get("id") == "y" for c in m.load_chats()))
-            m.merge_chats([{"id": "y", "updatedAt": 10000000000001,      # re-push the future chat
+            self.assertTrue(any(c.get("id") == "y" for c in m._chats.load_chats()))
+            m._chats.merge_chats({"chats": [], "tombstones": {"y": NOW}})       # delete now
+            self.assertFalse(any(c.get("id") == "y" for c in m._chats.load_chats()))
+            m._chats.merge_chats([{"id": "y", "updatedAt": 10000000000001,      # re-push the future chat
                             "messages": [{"user": True, "text": "SYNC"}]}])
-            self.assertFalse(any(c.get("id") == "y" for c in m.load_chats()))   # stays deleted
+            self.assertFalse(any(c.get("id") == "y" for c in m._chats.load_chats()))   # stays deleted
         finally:
-            m.CHATS_FILE, m.TOMBSTONES_FILE = oc, ot
+            m._chats.CHATS_FILE, m._chats.TOMBSTONES_FILE = oc, ot
 
     def test_provider_switch_sets_and_clears_keys(self):
         m = self.m
@@ -2082,30 +2082,30 @@ class ManagerFunctions(unittest.TestCase):
         opens a new one. Web-chat ids are left alone."""
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-voice-")
-        oc, ot = m.CHATS_FILE, m.TOMBSTONES_FILE
-        m.CHATS_FILE, m.TOMBSTONES_FILE = os.path.join(tmp, "chats.json"), os.path.join(tmp, "tombs.json")
-        m._voice_sessions.clear()
+        oc, ot = m._chats.CHATS_FILE, m._chats.TOMBSTONES_FILE
+        m._chats.CHATS_FILE, m._chats.TOMBSTONES_FILE = os.path.join(tmp, "chats.json"), os.path.join(tmp, "tombs.json")
+        m._chats._voice_sessions.clear()
         try:
-            self.assertEqual(m.voice_session("vc", "10.0.0.9", "1757000000000"), "")   # web chat
-            self.assertEqual(m.voice_session("vc", "10.0.0.9", "voice-1757"), "voice-vc-1757")
-            s1 = m.voice_session("vc", "10.0.0.9")            # ESP: manager-kept
+            self.assertEqual(m._chats.voice_session("vc", "10.0.0.9", "1757000000000"), "")   # web chat
+            self.assertEqual(m._chats.voice_session("vc", "10.0.0.9", "voice-1757"), "voice-vc-1757")
+            s1 = m._chats.voice_session("vc", "10.0.0.9")            # ESP: manager-kept
             self.assertTrue(s1.startswith("voice-vc-"))
-            self.assertEqual(m.voice_session("vc", "10.0.0.9"), s1)   # stable
-            m.chat_log_append("vc", s1, "Radio aus", "Radio ist aus.", kind="voice")
-            m.chat_log_append("vc", s1, "Wie spät?", "16:36 Uhr.", kind="voice")
-            m.voice_session("vc", "10.0.0.9", reset=True)
+            self.assertEqual(m._chats.voice_session("vc", "10.0.0.9"), s1)   # stable
+            m._chats.chat_log_append("vc", s1, "Radio aus", "Radio ist aus.", kind="voice")
+            m._chats.chat_log_append("vc", s1, "Wie spät?", "16:36 Uhr.", kind="voice")
+            m._chats.voice_session("vc", "10.0.0.9", reset=True)
             time.sleep(1.1)                                     # session ids carry seconds
-            s2 = m.voice_session("vc", "10.0.0.9")
+            s2 = m._chats.voice_session("vc", "10.0.0.9")
             self.assertNotEqual(s1, s2)
-            m.chat_log_append("vc", s2, "Hallo", "Hallo!", kind="voice")
-            chats = {c["id"]: c for c in m.load_chats()}
+            m._chats.chat_log_append("vc", s2, "Hallo", "Hallo!", kind="voice")
+            chats = {c["id"]: c for c in m._chats.load_chats()}
             self.assertEqual(len(chats[s1]["messages"]), 4)     # archived, intact
             self.assertEqual(len(chats[s2]["messages"]), 2)
             self.assertEqual(chats[s1]["instance"], "vc")
             self.assertTrue(chats[s1]["title"].startswith("Voice · vc · "))
         finally:
-            m.CHATS_FILE, m.TOMBSTONES_FILE = oc, ot
-            m._voice_sessions.clear()
+            m._chats.CHATS_FILE, m._chats.TOMBSTONES_FILE = oc, ot
+            m._chats._voice_sessions.clear()
 
     def test_tts_reads_no_tool_lines(self):
         """Read aloud must skip tool status, think blocks, fences and decor —
@@ -3047,25 +3047,25 @@ class ManagerFunctions(unittest.TestCase):
         as relayed by that agent so the orchestrator knows who spoke."""
         m = self.m
         web = {"name": "web1", "template": "openrouter", "index": 3, "config": {"TRANSPORT": "web"}}
-        old = m._guests.instance_by_ip, m.load_chats, m._inbox_wm, m.INBOX_WM_FILE
+        old = m._guests.instance_by_ip, m._chats.load_chats, m._chats._inbox_wm, m._chats.INBOX_WM_FILE
         try:
             m._guests.instance_by_ip = lambda ip: web if ip == "172.30.3.2" else None
             h = self._post_handler("/api/chat-log", "172.30.3.2", b'{"sender":"x","user":"hi"}')
             h.do_POST()
             self.assertEqual(self._status(h), 403)
-            m.load_chats = lambda: [
+            m._chats.load_chats = lambda: [
                 {"id": "sig-hass-4915", "instance": "hass", "title": "Signal", "updatedAt": 5000,
                  "messages": [{"user": True, "text": "Licht aus"}]},
                 {"id": "web-1", "instance": "orchestrator", "title": "Web", "updatedAt": 5000,
                  "messages": [{"user": True, "text": "Plan"}]}]
-            m._inbox_wm = lambda: 0
-            items = {i["id"]: i for i in m.inbox_since(peek=True)}
+            m._chats._inbox_wm = lambda: 0
+            items = {i["id"]: i for i in m._chats.inbox_since(peek=True)}
             self.assertEqual(items["sig-hass-4915"]["via"], "signal:hass")
             self.assertTrue(items["sig-hass-4915"]["text"].startswith("[Signal message relayed by agent 'hass'] Licht aus"))
             self.assertNotIn("via", items["web-1"])
             self.assertEqual(items["web-1"]["text"], "Plan")
         finally:
-            m._guests.instance_by_ip, m.load_chats, m._inbox_wm, m.INBOX_WM_FILE = old
+            m._guests.instance_by_ip, m._chats.load_chats, m._chats._inbox_wm, m._chats.INBOX_WM_FILE = old
 
     def test_mount_validation_and_guest_mount_list(self):
         """A host folder never exposes the manager tree, the agent sources or
@@ -3148,25 +3148,25 @@ class ManagerFunctions(unittest.TestCase):
         off for that instance; explicit notes obey the same switch."""
         m = self.m
         seen = []
-        old = (m._instances.load_instances, m._guests.instance_by_ip, m.save_chats, m.load_chats, m._memfs.timeline_add,
+        old = (m._instances.load_instances, m._guests.instance_by_ip, m._chats.save_chats, m._chats.load_chats, m._memfs.timeline_add,
                m._hindsight.retain_async)
         try:
             m._hindsight.retain_async = lambda inst, text, tags=(): seen.append((inst, text, tuple(tags)))
             m._memfs.timeline_add = lambda *a, **k: None
-            m.load_chats = lambda: []; m.save_chats = lambda c: 1
+            m._chats.load_chats = lambda: []; m._chats.save_chats = lambda c: 1
             m._instances.load_instances = lambda: [{"name": "a", "config": {}}, {"name": "voice", "config": {"HINDSIGHT_RETAIN": "0"}}]
             self.assertTrue(m._instances.hindsight_retains("a")); self.assertFalse(m._instances.hindsight_retains("voice"))
-            m.chat_log_append("a", "", "mach das Radio an", "Das Radio ist an.", kind="voice")
+            m._chats.chat_log_append("a", "", "mach das Radio an", "Das Radio ist an.", kind="voice")
             self.assertEqual(len(seen), 1)
             inst, text, tags = seen[0]
             self.assertEqual(inst, "a"); self.assertEqual(text, "mach das Radio an")   # user only
             self.assertNotIn("Das Radio ist an", text)                                  # NOT the agent reply
             self.assertIn("user", tags)
             seen.clear()
-            m.chat_log_append("voice", "", "hallo", "hi", kind="voice")                 # retention off
+            m._chats.chat_log_append("voice", "", "hallo", "hi", kind="voice")                 # retention off
             self.assertEqual(seen, [])
         finally:
-            (m._instances.load_instances, m._guests.instance_by_ip, m.save_chats, m.load_chats, m._memfs.timeline_add,
+            (m._instances.load_instances, m._guests.instance_by_ip, m._chats.save_chats, m._chats.load_chats, m._memfs.timeline_add,
              m._hindsight.retain_async) = old
 
     def test_hindsight_second_memory(self):
@@ -3324,11 +3324,11 @@ class ManagerFunctions(unittest.TestCase):
         touches no chat."""
         m = self.m
         seen = []
-        old = m._guests.instance_by_ip, m._notify.notify_add, m.chat_log_append, m._audit.audit_append
+        old = m._guests.instance_by_ip, m._notify.notify_add, m._chats.chat_log_append, m._audit.audit_append
         try:
             m._guests.instance_by_ip = lambda ip: {"name": "orch"} if ip == "172.30.1.2" else None
             m._notify.notify_add = lambda inst, title, body, link="": ("id1", "")
-            m.chat_log_append = lambda inst, sender, u, r, kind="signal": seen.append((inst, u, r, kind)) or 1
+            m._chats.chat_log_append = lambda inst, sender, u, r, kind="signal": seen.append((inst, u, r, kind)) or 1
             m._audit.audit_append = lambda *a, **k: None
             h = self._post_handler("/api/notify", "172.30.1.2", json.dumps({"title": "Saddler weekly", "message": "Failures 67 (was 20)"}).encode())
             h._do_POST()
@@ -3344,7 +3344,7 @@ class ManagerFunctions(unittest.TestCase):
             h._do_POST()
             self.assertEqual(len(seen), 1)
         finally:
-            m._guests.instance_by_ip, m._notify.notify_add, m.chat_log_append, m._audit.audit_append = old
+            m._guests.instance_by_ip, m._notify.notify_add, m._chats.chat_log_append, m._audit.audit_append = old
 
     def test_tool_allowlist_enforced_at_the_host(self):
         """A-2: a restricted instance is refused a capability it did not list;
@@ -3355,10 +3355,10 @@ class ManagerFunctions(unittest.TestCase):
         self.assertFalse(m.tool_allowed({"config": {"AGENT_TOOLS": "bash,read_file"}}, "send_signal"))
         self.assertFalse(m.tool_allowed({"config": {"AGENT_TOOLS": "bash"}}, "ha_control"))
         seen = []
-        old = m._guests.instance_by_ip, m._notify.notify_add, m._audit.audit_append, m.chat_log_append
+        old = m._guests.instance_by_ip, m._notify.notify_add, m._audit.audit_append, m._chats.chat_log_append
         try:
             m._notify.notify_add = lambda *a, **k: seen.append(a) or ("id", "")
-            m._audit.audit_append = lambda *a, **k: None; m.chat_log_append = lambda *a, **k: 1
+            m._audit.audit_append = lambda *a, **k: None; m._chats.chat_log_append = lambda *a, **k: 1
             m._guests.instance_by_ip = lambda ip: {"name": "r", "config": {"AGENT_TOOLS": "bash"}} if ip == "172.30.1.2" else None
             h = self._post_handler("/api/notify", "172.30.1.2", json.dumps({"title": "t", "message": "m"}).encode())
             h._do_POST()
@@ -3368,7 +3368,7 @@ class ManagerFunctions(unittest.TestCase):
             h._do_POST()
             self.assertEqual(self._status(h), 200); self.assertEqual(len(seen), 1)
         finally:
-            m._guests.instance_by_ip, m._notify.notify_add, m._audit.audit_append, m.chat_log_append = old
+            m._guests.instance_by_ip, m._notify.notify_add, m._audit.audit_append, m._chats.chat_log_append = old
 
     def test_persona_carries_tools_and_model(self):
         """Feature 3: a persona keeps an optional recommended tool subset and
@@ -3932,16 +3932,16 @@ class ManagerFunctions(unittest.TestCase):
         import mgr.store as st
         m = self.m
         tmp = tempfile.mkdtemp(prefix="e2e-fts-")
-        old = st.HISTORY_DB, m.load_chats, m.CHATS_FILE, m._guests.instance_by_ip, dict(st._fts_state)
+        old = st.HISTORY_DB, m._chats.load_chats, m._chats.CHATS_FILE, m._guests.instance_by_ip, dict(st._fts_state)
         try:
             st.HISTORY_DB = os.path.join(tmp, "history.db"); st._fts_state["mtime"] = None
-            m.CHATS_FILE = os.path.join(tmp, "chats.json"); open(m.CHATS_FILE, "w").write("[]")
+            m._chats.CHATS_FILE = os.path.join(tmp, "chats.json"); open(m._chats.CHATS_FILE, "w").write("[]")
             chats = [{"id": "c1", "instance": "vm1", "title": "Jobs", "updatedAt": 1788000000000,
                       "messages": [{"user": True, "text": "Was war mit Vaillant in Remscheid?"},
                                    {"user": False, "text": "Vaillant sucht einen Senior Project Manager Security."}]},
                      {"id": "c2", "instance": "vm2", "title": "Garten", "updatedAt": 1788000000000,
                       "messages": [{"user": True, "text": "Gartenhaus Licht an"}]}]
-            m.load_chats = lambda: chats
+            m._chats.load_chats = lambda: chats
             st.history_add("vm2", "MSFT Kurs holen", "MSFT 512.30 — alert sent", True)
             hits = m.sessions_search("Vaillant")
             self.assertEqual({(h["instance"], h["kind"]) for h in hits}, {("vm1", "chat")})
@@ -3958,10 +3958,10 @@ class ManagerFunctions(unittest.TestCase):
             self.assertEqual(len(json.loads(h.wfile.getvalue().split(b"\r\n\r\n", 1)[1])["hits"]), 1)
             # a changed chats.json is picked up
             chats[1]["messages"].append({"user": False, "text": "Licht im Gartenhaus ist an."})
-            os.utime(m.CHATS_FILE, (1, 1))
+            os.utime(m._chats.CHATS_FILE, (1, 1))
             self.assertEqual(len(m.sessions_search("Gartenhaus")), 2)
         finally:
-            st.HISTORY_DB, m.load_chats, m.CHATS_FILE, m._guests.instance_by_ip = old[:4]
+            st.HISTORY_DB, m._chats.load_chats, m._chats.CHATS_FILE, m._guests.instance_by_ip = old[:4]
             st._fts_state.clear(); st._fts_state.update(old[4])
 
     def test_session_panel_data_and_log(self):
