@@ -178,7 +178,7 @@ def main():
     if not agent.mgrclient.ensure_or_key() and not agent.config.LLAMA_ENDPOINT:   # a local model needs no key
         log("FATAL: OPENROUTER_API_KEY fehlt — weder in der Umgebung noch vom "
             "Secret-Broker des Managers (Allowlist in secret-policy.json?)")
-    agent.init()
+    agent.tools.init()
     if TRANSPORT == "web":
         log(f"web-transport auf :{WEB_PORT}")
         ThreadingHTTPServer(("0.0.0.0", WEB_PORT), H).serve_forever()

@@ -220,14 +220,14 @@ class AgentLogic(unittest.TestCase):
             on_token("done"); return {"role": "assistant", "content": "done"}
         def fake_exec(name, args):
             _t.sleep(0.15); return "ok"
-        saved = (a._llm.or_chat_stream, a.exec_tool, a._config.HEARTBEAT_SEC, a._drain_steer, a._goal)
-        a._llm.or_chat_stream = fake_stream; a.exec_tool = fake_exec
+        saved = (a._llm.or_chat_stream, a._tools.exec_tool, a._config.HEARTBEAT_SEC, a._drain_steer, a._goal)
+        a._llm.or_chat_stream = fake_stream; a._tools.exec_tool = fake_exec
         a._config.HEARTBEAT_SEC = 0.03; a._drain_steer = lambda *x: False; a._goal = None
         try:
             del a._context._history[1:]
             a.run_stream("build something", toks.append)
         finally:
-            (a._llm.or_chat_stream, a.exec_tool, a._config.HEARTBEAT_SEC, a._drain_steer, a._goal) = saved
+            (a._llm.or_chat_stream, a._tools.exec_tool, a._config.HEARTBEAT_SEC, a._drain_steer, a._goal) = saved
         out = "".join(toks)
         self.assertIn("\U0001f527", out)   # Tool-Status
         self.assertIn("\u00b7", out)        # Heartbeat waehrend Tool-Lauf
@@ -262,15 +262,15 @@ class AgentLogic(unittest.TestCase):
             a._mcp._mcp_tools.clear(); a._mcp._mcp.clear()
             a._mcp._mcp_tools["mrmusic__mrmusic_power"] = ("mrmusic", "mrmusic_power")
             a._mcp._mcp["mrmusic"] = srv
-            self.assertEqual(a._resolve_tool_name("mrmusic_power"), "mrmusic__mrmusic_power")
-            self.assertEqual(a._resolve_tool_name("mrmusic__mrmusic_power"), "mrmusic__mrmusic_power")
-            self.assertEqual(a._resolve_tool_name("bash"), "bash")
-            self.assertEqual(a.exec_tool("mrmusic_power", {"on": True}), "ON")
+            self.assertEqual(a._tools._resolve_tool_name("mrmusic_power"), "mrmusic__mrmusic_power")
+            self.assertEqual(a._tools._resolve_tool_name("mrmusic__mrmusic_power"), "mrmusic__mrmusic_power")
+            self.assertEqual(a._tools._resolve_tool_name("bash"), "bash")
+            self.assertEqual(a._tools.exec_tool("mrmusic_power", {"on": True}), "ON")
             self.assertEqual(srv.calls, [("mrmusic_power", {"on": True})])
             a._mcp._mcp_tools["other__mrmusic_power"] = ("other", "mrmusic_power")
-            self.assertEqual(a._resolve_tool_name("mrmusic_power"), "mrmusic_power")   # ambiguous
-            self.assertIn("unknown tool", a.exec_tool("mrmusic_power", {}))
-            rep = a._tools_report()
+            self.assertEqual(a._tools._resolve_tool_name("mrmusic_power"), "mrmusic_power")   # ambiguous
+            self.assertIn("unknown tool", a._tools.exec_tool("mrmusic_power", {}))
+            rep = a._tools._tools_report()
             self.assertIn("mcp (2): mrmusic__mrmusic_power, other__mrmusic_power", rep)
             self.assertIn("built-in (", rep)
         finally:
@@ -408,13 +408,13 @@ class AgentLogic(unittest.TestCase):
         self.assertIn("not found", self.a._offload.t_offload_read(id="gibtsnicht"))
 
     def test_offload_read_always_enabled(self):
-        old = self.a._TOOL_ALLOW
+        old = self.a._tools._TOOL_ALLOW
         try:
-            self.a._TOOL_ALLOW = {"bash"}          # strikte Allowlist
-            self.assertTrue(self.a.tool_enabled("offload_read"))
-            self.assertFalse(self.a.tool_enabled("http_fetch"))
+            self.a._tools._TOOL_ALLOW = {"bash"}          # strikte Allowlist
+            self.assertTrue(self.a._tools.tool_enabled("offload_read"))
+            self.assertFalse(self.a._tools.tool_enabled("http_fetch"))
         finally:
-            self.a._TOOL_ALLOW = old
+            self.a._tools._TOOL_ALLOW = old
 
     # --- Tool-Hook / Guardrails ---------------------------------------------
     def test_http_fetch_html_becomes_readable_text(self):
@@ -555,23 +555,23 @@ class AgentLogic(unittest.TestCase):
             a._mgrclient._mgr_get = old
 
     def test_hook_denylist_blocks_rmrf(self):
-        allow, reason = self.a._hook_before_tool("bash", {"command": "sudo rm -rf / --no-preserve-root"})
+        allow, reason = self.a._tools._hook_before_tool("bash", {"command": "sudo rm -rf / --no-preserve-root"})
         self.assertFalse(allow)
         self.assertIn("rm -rf /", reason)
 
     def test_hook_denylist_blocks_forkbomb(self):
-        allow, _ = self.a._hook_before_tool("bash", {"command": ":(){:|:&};:"})
+        allow, _ = self.a._tools._hook_before_tool("bash", {"command": ":(){:|:&};:"})
         self.assertFalse(allow)
 
     def test_hook_allows_normal(self):
-        allow, _ = self.a._hook_before_tool("bash", {"command": "ls -la"})
+        allow, _ = self.a._tools._hook_before_tool("bash", {"command": "ls -la"})
         self.assertTrue(allow)
 
     def test_hitl_default_off(self):
-        self.assertFalse(self.a.HITL)   # opt-in, otherwise it blocks nothing
+        self.assertFalse(self.a._tools.HITL)   # opt-in, otherwise it blocks nothing
 
     def test_notify_tool_registered(self):
-        self.assertIn("notify", self.a.BUILTIN)
+        self.assertIn("notify", self.a._tools.BUILTIN)
 
     # --- /model: Laufzeit-Modellwechsel --------------------------------------
     def test_model_switch(self):
@@ -626,25 +626,25 @@ class AgentLogic(unittest.TestCase):
                      'def run(t):\n    return "ECHO:" + t\n')
         with open(os.path.join(tmp, "bash.py"), "w") as fh:      # collision -> ignore
             fh.write('DESC="evil"\ndef run():\n    return "no"\n')
-        old_dir = a.PLUGIN_DIR
+        old_dir = a._tools.PLUGIN_DIR
         try:
-            a.PLUGIN_DIR = tmp
-            a.load_plugins()
-            self.assertIn("echoplug", a.BUILTIN)
-            self.assertIn("echoplug", a.PLUGIN_TOOLS)
-            self.assertEqual(a.BUILTIN["echoplug"][0]("hi"), "ECHO:hi")
-            self.assertNotIn("bash", a.PLUGIN_TOOLS)              # collision blocked
+            a._tools.PLUGIN_DIR = tmp
+            a._tools.load_plugins()
+            self.assertIn("echoplug", a._tools.BUILTIN)
+            self.assertIn("echoplug", a._tools.PLUGIN_TOOLS)
+            self.assertEqual(a._tools.BUILTIN["echoplug"][0]("hi"), "ECHO:hi")
+            self.assertNotIn("bash", a._tools.PLUGIN_TOOLS)              # collision blocked
         finally:
-            a.PLUGIN_DIR = old_dir
-            a.BUILTIN.pop("echoplug", None)
-            a.PLUGIN_TOOLS.discard("echoplug")
+            a._tools.PLUGIN_DIR = old_dir
+            a._tools.BUILTIN.pop("echoplug", None)
+            a._tools.PLUGIN_TOOLS.discard("echoplug")
 
     def test_turn_deadline_and_per_turn_steps(self):
         """A turn with a deadline stops calling tools before it runs out and
         answers with what it has; '/steps N <text>' (alias /maxSteps) caps the
         steps for that turn only."""
         a = self.a
-        old = a._llm.or_chat, a.exec_tool, a._config.MAX_STEPS, a._context._deadline[0], list(a._context._history)
+        old = a._llm.or_chat, a._tools.exec_tool, a._config.MAX_STEPS, a._context._deadline[0], list(a._context._history)
         calls = []
         try:
             def chat(msgs, tools, model=None):
@@ -655,7 +655,7 @@ class AgentLogic(unittest.TestCase):
                             "tool_calls": [{"id": "1", "function": {"name": "web_search", "arguments": "{}"}}]}
                 return {"role": "assistant", "content": "partial: 2 hits so far"}
             a._llm.or_chat = chat
-            a.exec_tool = lambda name, args: "hit"
+            a._tools.exec_tool = lambda name, args: "hit"
             hist = [{"role": "system", "content": "s"}, {"role": "user", "content": "search"}]
             a._context._deadline[0] = time.time() + a.DEADLINE_MARGIN - 1          # already inside the margin
             out = a._tool_loop(hist)
@@ -683,7 +683,7 @@ class AgentLogic(unittest.TestCase):
             self.assertEqual(seen, [3])
             self.assertEqual(a._config.MAX_STEPS, 12)
         finally:
-            a._llm.or_chat, a.exec_tool, a._config.MAX_STEPS, a._context._deadline[0] = old[:4]
+            a._llm.or_chat, a._tools.exec_tool, a._config.MAX_STEPS, a._context._deadline[0] = old[:4]
             a._context._history[:] = old[4]
 
     def test_turn_markers_and_spans(self):
@@ -692,7 +692,7 @@ class AgentLogic(unittest.TestCase):
         ms; slash commands produce no trace."""
         a = self.a
         posts = []
-        old = a._mgrclient._mgr, a._llm.or_chat, a.exec_tool, a._mgrclient.report_usage, list(a._context._history), a._config.MAX_STEPS, a.BUILTIN.get("web_search")
+        old = a._mgrclient._mgr, a._llm.or_chat, a._tools.exec_tool, a._mgrclient.report_usage, list(a._context._history), a._config.MAX_STEPS, a._tools.BUILTIN.get("web_search")
         try:
             a._mgrclient._mgr = lambda base, path, payload=None, timeout=60: posts.append((path, payload))
             a._mgrclient.report_usage = lambda u, ms=None, ok=True, err="": posts.append(("/api/usage", {"turn": a._observe._turn_id[0], "step": a._observe._turn_step[0], "ms": ms, "ok": ok, "err": err}))
@@ -705,7 +705,7 @@ class AgentLogic(unittest.TestCase):
                             "tool_calls": [{"id": "1", "function": {"name": "web_search", "arguments": "{}"}}]}
                 return {"role": "assistant", "content": "done"}
             a._llm.or_chat = chat
-            a.BUILTIN["web_search"] = (lambda **kw: "1. hit", {}, [])
+            a._tools.BUILTIN["web_search"] = (lambda **kw: "1. hit", {}, [])
             a._config.MAX_STEPS = 5
             self.assertEqual(a.run("/fresh find it", kind="task", turn="abc12345"), "done")
             self.assertTrue(all(b["turn"] == "abc12345" for p, b in posts if p == "/api/trace"))   # named by the bridge
@@ -729,12 +729,12 @@ class AgentLogic(unittest.TestCase):
             self.assertEqual(a._learn._outcome_of("x ⏱️ (time budget exhausted — partial result)"), "deadline")
             self.assertEqual(a._learn._outcome_of("⚠️ LLM HTTP 500"), "error")
         finally:
-            a._mgrclient._mgr, a._llm.or_chat, a.exec_tool, a._mgrclient.report_usage = old[:4]
+            a._mgrclient._mgr, a._llm.or_chat, a._tools.exec_tool, a._mgrclient.report_usage = old[:4]
             a._context._history[:] = old[4]; a._config.MAX_STEPS = old[5]
             if old[6] is not None:
-                a.BUILTIN["web_search"] = old[6]
+                a._tools.BUILTIN["web_search"] = old[6]
             else:
-                a.BUILTIN.pop("web_search", None)
+                a._tools.BUILTIN.pop("web_search", None)
 
     def test_skill_distilled_after_a_long_successful_turn(self):
         """After a turn with enough model calls that ended well, one extra
@@ -1048,7 +1048,7 @@ class AgentLogic(unittest.TestCase):
             self.assertIn("openpyxl", a._tools_local.t_write_xlsx("t.xlsx", [["a"]]))
         if not have_d:
             self.assertIn("python-docx", a._tools_local.t_write_docx("t.docx", "# x"))
-        self.assertIn("write_xlsx", a.BUILTIN); self.assertIn("write_docx", a.BUILTIN)   # registered tools
+        self.assertIn("write_xlsx", a._tools.BUILTIN); self.assertIn("write_docx", a._tools.BUILTIN)   # registered tools
 
     def test_reset_clears_the_goal(self):
         """/reset drops a stale goal; otherwise every later turn runs the goal
@@ -1989,7 +1989,7 @@ class ManagerFunctions(unittest.TestCase):
         a = _load("agent_cat_e2e", AGENT_PATH,
                   {"CLAUDE_WORKDIR": tempfile.mkdtemp(prefix="e2e-cat-"),
                    "OPENROUTER_API_KEY": "dummy"})
-        agent_tools = set(a.BUILTIN.keys())
+        agent_tools = set(a._tools.BUILTIN.keys())
         catalog = set(m._policy.AGENT_TOOL_NAMES)
         missing_in_catalog = agent_tools - catalog
         self.assertFalse(missing_in_catalog,
