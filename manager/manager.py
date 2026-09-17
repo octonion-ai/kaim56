@@ -15,10 +15,6 @@ import json
 import os
 import hmac
 import threading
-import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
@@ -40,7 +36,7 @@ from mgr import vm as _vm  # noqa: E402,F401  (tests reach it as m._x)
 from mgr import guests as _guests  # noqa: E402
 from mgr import instances as _instances  # noqa: E402
 from mgr import secrets as _secrets  # noqa: E402
-from mgr import llmproxy as _llmproxy  # noqa: E402
+from mgr import llmproxy as _llmproxy  # noqa: E402,F401  (tests reach it as m._x)
 from mgr import ui as _ui  # noqa: E402
 from mgr import routes as _routes  # noqa: E402
 from mgr import katfs as _katfs  # noqa: E402,F401  (tests reach it as m._x)
@@ -142,7 +138,7 @@ def _ha_ws_target():
 from mgr import haalias as _haalias  # noqa: E402
 _haalias.configure(_ha_ws_target, lambda: _secrets.secret_store().get("HA_TOKEN"))
 
-class H(_guestproxy.GuestProxyMixin, BaseHTTPRequestHandler):
+class H(_guestproxy.GuestProxyMixin, _llmproxy.LLMProxyMixin, BaseHTTPRequestHandler):
     # Reading a request (headers, body) may not hang a thread for ever; the
     # tunnel and the long-polls lift this per socket / wait server-side.
     timeout = 120
@@ -248,110 +244,6 @@ class H(_guestproxy.GuestProxyMixin, BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
-
-    def _llm_proxy(self, _pp):
-        """POST /api/llm/<backend>/chat/completions — credential injection
-        gateway. The body goes unchanged to the router; the manager injects the
-        Authorization header from the settings so the key never reaches the VM.
-        Streams (SSE) are passed through line by line, upstream errors
-        transparently (status + body). Deliberately NO logs of key or body —
-        those are exactly what should not leave the host or linger anywhere."""
-        parts = _pp.strip("/").split("/")      # api/llm/<backend>/chat/completions
-        backend = parts[2] if len(parts) > 2 else ""
-        if backend not in _llmproxy.LLM_PROXY_UPSTREAMS or parts[3:] != ["chat", "completions"]:
-            out = b'{"error":"unknown llm proxy path"}'
-            self.send_response(404)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(out)))
-            self.end_headers(); self.wfile.write(out); return
-        ok_g, why = _llmproxy._guard_check(_guests.instance_by_ip(self.client_address[0]))
-        if not ok_g:
-            out = json.dumps({"error": {"message": f"guardrail: {why}", "code": 429}}).encode()
-            self.send_response(429)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(out)))
-            self.end_headers(); self.wfile.write(out); return
-        url, keyname = _llmproxy.LLM_PROXY_UPSTREAMS[backend]
-        st = _settings.load_settings()
-        # Self-hosted OrcaRouter-Lite: the shared base URL applies to the proxy
-        # too — otherwise the detour would suddenly run against the cloud while
-        # direct mode talks to the own server.
-        if backend == "orcarouter" and (st.get("ORCAROUTER_URL") or "").strip():
-            u = st["ORCAROUTER_URL"].strip().rstrip("/")
-            if not u.endswith("/chat/completions"):
-                u += "/chat/completions" if u.endswith("/v1") else "/v1/chat/completions"
-            url = u
-        key = (st.get(keyname) or "").strip()
-        if not key:
-            out = json.dumps({"error": f"{keyname} not configured on host"}).encode()
-            self.send_response(503)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(out)))
-            self.end_headers(); self.wfile.write(out); return
-        payload = self._raw(_routes.BODY_MAX_LLM)
-        ginst = _guests.instance_by_ip(self.client_address[0])
-        if ginst is None and self.client_address[0].startswith("172.17."):
-            ginst = {"name": "hindsight" if _hindsight.enabled() else "services"}   # booked, not a VM
-        span = {"turn": self.headers.get("X-Kaim-Turn", "")[:16],
-                "step": self.headers.get("X-Kaim-Step", "") or None}
-        _t0 = time.monotonic()
-        try:
-            want_stream = bool(json.loads(payload or b"{}").get("stream"))
-        except (ValueError, AttributeError):
-            want_stream = False
-        req = urllib.request.Request(url, data=payload, method="POST", headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {key}",
-            "HTTP-Referer": f"https://{_settings.PUBLIC_HOST}",
-            "X-Title": "kat56-agent"})
-        try:
-            r = urllib.request.urlopen(req, timeout=600)
-        except urllib.error.HTTPError as e:
-            # Pass upstream errors through 1:1: the agent has its own retry
-            # logic for 429/5xx and shows 4xx bodies as an error message.
-            data = e.read()
-            if ginst is not None:            # a failed LLM span, with the reason
-                _store.usage_add(ginst["name"], backend, 0, 0, 0, ok=False,
-                          err=f"HTTP {e.code}: {data[:300].decode('utf-8', 'replace')}",
-                          ms=int((time.monotonic() - _t0) * 1000), **span)
-            self.send_response(e.code)
-            self.send_header("Content-Type", e.headers.get("Content-Type", "application/json"))
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers(); self.wfile.write(data); return
-        except Exception as e:
-            data = json.dumps({"error": f"llm upstream unreachable: {e!r}"}).encode()
-            self.send_response(502)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers(); self.wfile.write(data); return
-        with r:
-            self.send_response(r.status)
-            self.send_header("Content-Type", r.headers.get("Content-Type", "application/json"))
-            if want_stream:
-                # Write SSE on line by line and flush — full buffering would kill
-                # the token streaming in the agent. readline() blocks only until
-                # the next event line, never until the end of the stream. Without
-                # Content-Length the response ends with the connection close
-                # (HTTP/1.0), urllib in the guest reads until EOF.
-                self.send_header("X-Accel-Buffering", "no")
-                self.end_headers()
-                try:
-                    while True:
-                        chunk = r.readline()
-                        if not chunk:
-                            break
-                        self.wfile.write(chunk)
-                        self.wfile.flush()
-                        if b'"usage"' in chunk:
-                            _llmproxy._proxy_usage(ginst, backend, chunk, ms=int((time.monotonic() - _t0) * 1000), **span)
-                except (BrokenPipeError, ConnectionResetError):
-                    pass               # client gone -> upstream closes via with
-            else:
-                data = r.read()
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-                _llmproxy._proxy_usage(ginst, backend, data, ms=int((time.monotonic() - _t0) * 1000), **span)
 
     def _do_POST(self):
         if not self._auth():
