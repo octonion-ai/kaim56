@@ -48,6 +48,11 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("webAccess", false)
         set(v) = sp.edit().putBoolean("webAccess", v).apply()
 
+    // Barge-in: talking over the spoken reply cuts it off (echo-cancelled mic).
+    var bargeIn: Boolean
+        get() = sp.getBoolean("bargeIn", true)
+        set(v) = sp.edit().putBoolean("bargeIn", v).apply()
+
     // Active on-device model (file name in the models/ folder).
     var activeModel: String
         get() = sp.getString("activeModel", "") ?: ""

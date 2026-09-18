@@ -1,5 +1,6 @@
-# Android build environment (JDK 17 + Android SDK + Gradle) for the KatAgent APK.
-# Builds without a local Android SDK -> everything in the container. APK lands via volume mount
+# Android-Build-Umgebung (JDK 17 + Android SDK + NDK/CMake + Gradle) fuer die KatAgent-APK.
+# NDK + CMake: der Echo-Canceller (app/src/main/cpp, vendored speexdsp) wird nativ gebaut.
+# Baut ohne lokales Android-SDK -> alles im Container. APK landet via Volume-Mount
 # in ./app/build/outputs/apk/.
 FROM eclipse-temurin:17-jdk-jammy
 
@@ -21,7 +22,8 @@ ENV PATH=${PATH}:${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin:${ANDROID_SDK_ROOT
 
 # SDK-Pakete + Lizenzen
 RUN yes | sdkmanager --licenses >/dev/null 2>&1 || true && \
-    sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" >/dev/null
+    sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" \
+               "ndk;26.1.10909125" "cmake;3.22.1" >/dev/null
 
 # Gradle
 RUN wget -q https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip -O /tmp/gradle.zip && \

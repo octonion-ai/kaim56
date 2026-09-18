@@ -32,3 +32,6 @@
 # reflection; keep everything so R8 doesn't drop fields/methods it needs.
 -keep class uniffi.kaim_iroh.** { *; }
 -keepclassmembers class uniffi.kaim_iroh.** { *; }
+
+# JNI (libkatecho, barge-in echo canceller): the native method names are the symbol names.
+-keepclasseswithmembernames class de.kat56.agent.EchoMic { native <methods>; }

@@ -12,8 +12,8 @@ android {
         applicationId = "de.kat56.agent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 86
-        versionName = "5.36"
+        versionCode = 87
+        versionName = "5.37"
         ndk {
             // Xiaomi 15 = arm64-v8a. Nur diese ABI -> deutlich kleinere APK.
             abiFilters += "arm64-v8a"
@@ -44,6 +44,14 @@ android {
     }
     buildFeatures {
         compose = true
+    }
+    // Echo canceller for barge-in: vendored speexdsp + JNI, see src/main/cpp.
+    ndkVersion = "26.1.10909125"
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

@@ -1,0 +1,5 @@
+speexdsp 1.2.1 (https://www.speex.org, BSD 3-clause, see COPYING), vendored
+unchanged from the release tarball: libspeexdsp/*.c|h needed for the echo
+canceller (mdf.c), the preprocessor (preprocess.c: denoise, VAD, residual echo
+suppression), the resampler (resample.c) and KISS FFT. Not vendored: jitter
+buffer, speex_buffer, scal (needs vorbis_psy), tests, autotools. Build settings: config.h (floating point, KISS FFT).

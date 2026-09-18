@@ -7,7 +7,6 @@ import android.Manifest
 import androidx.core.content.ContextCompat
 import android.content.pm.PackageManager
 import android.media.MediaRecorder
-import android.media.MediaPlayer
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
@@ -377,6 +376,7 @@ fun KatAgentApp(prefs: Prefs, gemma: LocalGemma, store: ChatStore, assistCalls: 
     // ist nicht perfekt — besser hier pruefen als das Modell raten lassen).
     var docPreviewOpen by remember { mutableStateOf(false) }
     var web by remember { mutableStateOf(prefs.webAccess) }
+    var bargeIn by remember { mutableStateOf(prefs.bargeIn) }
     var instances by remember { mutableStateOf<List<AgentInstance>>(emptyList()) }
     // Header and settings show the sync state ("Syncing …" / "Synced · N chats").
     var syncing by remember { mutableStateOf(false) }
@@ -740,7 +740,10 @@ fun KatAgentApp(prefs: Prefs, gemma: LocalGemma, store: ChatStore, assistCalls: 
     var speakingIdx by remember { mutableStateOf(-1) }
     val recorder = remember { arrayOfNulls<MediaRecorder>(1) }
     val recFile = remember { arrayOfNulls<java.io.File>(1) }
-    val player = remember { arrayOfNulls<MediaPlayer>(1) }
+    val player = remember { arrayOfNulls<TtsPlayer>(1) }
+    // Barge-in: the echo-cancelled microphone that listens while the reply is spoken.
+    val echoMic = remember { arrayOfNulls<EchoMic>(1) }
+    var bargeListening by remember { mutableStateOf(false) }
     // Counter instead of a flag: speech synthesis runs over the network, and a
     // reply that trickles in after cancellation must not still blare out.
     val speakGen = remember { intArrayOf(0) }
@@ -753,14 +756,36 @@ fun KatAgentApp(prefs: Prefs, gemma: LocalGemma, store: ChatStore, assistCalls: 
     fun stopSpeak() {
         speakGen[0]++
         runCatching { player[0]?.stop() }
-        runCatching { player[0]?.release() }
         player[0] = null
         speakingIdx = -1
     }
 
-    fun speakText(text: String, idx: Int = -1) {
+    fun stopBargeMic() {
+        echoMic[0]?.stop(); echoMic[0] = null
+        bargeListening = false
+    }
+
+    /** Recognize on the manager and send as a voice turn (hands-free). */
+    fun transcribeAndSend(audio: ByteArray, mime: String) {
+        transcribing = true
+        scope.launch {
+            val text = withContext(Dispatchers.IO) {
+                ManagerSync.stt(prefs.serverUrl, prefs.user, prefs.pass, audio, mime)
+            }
+            transcribing = false
+            if (text.isNullOrBlank()) { status = "Didn't catch that (${ManagerSync.lastStatus})"; return@launch }
+            input = text
+            voiceIn = true
+            pendingVoiceSend = true      // hands-free: send right away
+        }
+    }
+
+    /** [bargeIn]: keep listening while speaking; talking over the reply cuts it
+     *  off and becomes the next input (voice turns only, never for read-aloud). */
+    fun speakText(text: String, idx: Int = -1, bargeIn: Boolean = false) {
         if (text.isBlank() || prefs.serverUrl.isBlank()) return
         stopSpeak()                       // never two voices at once
+        stopBargeMic()
         val gen = speakGen[0]
         speakingIdx = idx
         scope.launch {
@@ -774,21 +799,35 @@ fun KatAgentApp(prefs: Prefs, gemma: LocalGemma, store: ChatStore, assistCalls: 
             }
             withContext(Dispatchers.IO) {
                 runCatching {
-                    val f = java.io.File(context.cacheDir, "speak.wav")
-                    f.writeBytes(wav)
                     if (gen != speakGen[0]) return@runCatching
-                    player[0]?.release()
-                    player[0] = MediaPlayer().apply {
-                        setDataSource(f.absolutePath)
-                        // MediaPlayer reports back on the looper of the creating
-                        // thread; an IO thread has none, so the callback arrives on
-                        // the main looper — where it's safe to touch the Compose
-                        // state.
-                        setOnCompletionListener { mp ->
-                            mp.release()
-                            if (player[0] === mp) { player[0] = null; speakingIdx = -1 }
-                        }
-                        prepare(); start()
+                    val pcm = Wav.parse(wav)
+                    var tp: TtsPlayer? = null
+                    // The player reports on the main looper — safe for the Compose state.
+                    tp = TtsPlayer(onDone = {
+                        if (player[0] === tp) { player[0] = null; speakingIdx = -1 }
+                        echoMic[0]?.playbackEnded()
+                    })
+                    player[0]?.stop()
+                    player[0] = tp
+                    // Barge-in: the mic listens while we speak, with our own voice
+                    // taken out by the echo canceller (EchoMic / libkatecho).
+                    var mic: EchoMic? = null
+                    if (bargeIn && prefs.bargeIn && pcm != null && !recording &&
+                        ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                        PackageManager.PERMISSION_GRANTED) {
+                        // Each callback checks it still is THE mic: a stopped one may
+                        // report a frame later, after the next reply started.
+                        mic = EchoMic(pcm.rate,
+                            onBargeIn = { if (echoMic[0] === mic) { stopSpeak(); bargeListening = true; status = "Listening…" } },
+                            onUtterance = { bytes -> if (echoMic[0] === mic) { echoMic[0] = null; bargeListening = false; transcribeAndSend(bytes, "audio/wav") } },
+                            onIdle = { if (echoMic[0] === mic) { echoMic[0] = null; bargeListening = false } })
+                        if (!mic.start()) mic = null
+                    }
+                    echoMic[0] = mic
+                    val farEnd: ((ShortArray, Int) -> Unit)? = mic?.let { m -> { buf, n -> m.feedFarEnd(buf, n) } }
+                    if (!tp.play(wav, farEnd)) {
+                        mic?.stop(); echoMic[0] = null; player[0] = null
+                        mainHandler.post { speakingIdx = -1; status = "⚠️ Speech: unsupported audio" }
                     }
                 }
             }
@@ -808,21 +847,15 @@ fun KatAgentApp(prefs: Prefs, gemma: LocalGemma, store: ChatStore, assistCalls: 
         }
         transcribing = true
         scope.launch {
-            val text = withContext(Dispatchers.IO) {
-                val bytes = f.readBytes(); f.delete()
-                ManagerSync.stt(prefs.serverUrl, prefs.user, prefs.pass, bytes, "audio/mp4")
-            }
-            transcribing = false
-            if (text.isNullOrBlank()) { status = "Didn't catch that (${ManagerSync.lastStatus})"; return@launch }
-            input = text
-            voiceIn = true
-            pendingVoiceSend = true      // hands-free: send right away
+            val bytes = withContext(Dispatchers.IO) { f.readBytes().also { f.delete() } }
+            transcribeAndSend(bytes, "audio/mp4")
         }
     }
 
     fun startRec() {
         if (prefs.serverUrl.isBlank()) { status = "⚠️ Server URL missing (Settings)"; return }
         stopSpeak()                       // speaking over it means: the output is done
+        stopBargeMic()
         val f = java.io.File(context.cacheDir, "rec.m4a")
         val r = if (Build.VERSION.SDK_INT >= 31) MediaRecorder(context) else @Suppress("DEPRECATION") MediaRecorder()
         val ok = runCatching {
@@ -921,15 +954,18 @@ fun KatAgentApp(prefs: Prefs, gemma: LocalGemma, store: ChatStore, assistCalls: 
             msgs[li] = msgs[li].copy(text = "_(aborted)_")
         busy = false
         stopSpeak()
+        stopBargeMic()
         persist()
     }
 
     fun micToggle() {
         if (recording) { stopRec(); return }
+        if (bargeListening) { stopBargeMic(); status = ""; return }   // abort the barge-in capture
         // Another press during reply/auto-send: cancel and record ANEW (correcting
         // the previous statement), instead of continuing the old send.
         if (busy || pendingVoiceSend) cancelTurn()
         if (speakingIdx >= 0) stopSpeak()   // first the output, then the ear
+        stopBargeMic()
         val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
         if (granted) startRec() else micPerm.launch(Manifest.permission.RECORD_AUDIO)
@@ -993,7 +1029,7 @@ fun KatAgentApp(prefs: Prefs, gemma: LocalGemma, store: ChatStore, assistCalls: 
                 if (voiceIn) {
                     voiceIn = false
                     val bi = msgs.indexOfFirst { it.key == botKey }
-                    if (bi >= 0) speakText(splitThink(msgs[bi].text).answer, bi)
+                    if (bi >= 0) speakText(splitThink(msgs[bi].text).answer, bi, bargeIn = true)
                 }
             }
         } else {
@@ -1036,7 +1072,7 @@ fun KatAgentApp(prefs: Prefs, gemma: LocalGemma, store: ChatStore, assistCalls: 
                     mainHandler.post { setBot("⚠️ ${e.message}") }
                 } finally {
                     busy = false; persist(); listState.animateScrollToItem(msgs.size)
-                if (voiceIn) { voiceIn = false; val bi = msgs.indexOfFirst { it.key == botKey }; if (bi >= 0) speakText(splitThink(msgs[bi].text).answer, bi) }
+                if (voiceIn) { voiceIn = false; val bi = msgs.indexOfFirst { it.key == botKey }; if (bi >= 0) speakText(splitThink(msgs[bi].text).answer, bi, bargeIn = true) }
                 }
             }
         }
@@ -1395,13 +1431,13 @@ fun KatAgentApp(prefs: Prefs, gemma: LocalGemma, store: ChatStore, assistCalls: 
                             Spacer(Modifier.weight(1f))
                             RoundIconButton(
                                 { micToggle() }, enabled = !transcribing,
-                                background = if (recording) Kat.accent else Kat.tile,
+                                background = if (recording || bargeListening) Kat.accent else Kat.tile,
                             ) {
                                 Icon(
                                     if (transcribing) Icons.Filled.HourglassEmpty else Icons.Filled.Mic,
-                                    if (recording) "Stop recording" else "Speak",
+                                    if (recording || bargeListening) "Stop recording" else "Speak",
                                     Modifier.size(18.dp),
-                                    tint = if (recording) Kat.onAccent else Kat.textMuted,
+                                    tint = if (recording || bargeListening) Kat.onAccent else Kat.textMuted,
                                 )
                             }
                             Spacer(Modifier.width(8.dp))
@@ -1561,6 +1597,7 @@ fun KatAgentApp(prefs: Prefs, gemma: LocalGemma, store: ChatStore, assistCalls: 
                 SettingsScreen(
                     prefs, store, dl, instances = instances,
                     web = web, onWeb = { web = it; prefs.webAccess = it },
+                    bargeIn = bargeIn, onBargeIn = { bargeIn = it; prefs.bargeIn = it },
                     syncing = syncing, lastSync = lastSync, online = online,
                     onClose = { screen = null },
                     onSelectModel = { selectModel(it) },
@@ -2350,6 +2387,8 @@ fun SettingsScreen(
     instances: List<AgentInstance>,
     web: Boolean,
     onWeb: (Boolean) -> Unit,
+    bargeIn: Boolean,
+    onBargeIn: (Boolean) -> Unit,
     syncing: Boolean,
     lastSync: String,
     online: Boolean,
@@ -2699,6 +2738,22 @@ fun SettingsScreen(
                             )
                         }
                         KatSwitch(web, { onWeb(!web) })
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                            .tap { onBargeIn(!bargeIn) }.padding(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Barge-in", fontSize = 14.5.sp, fontFamily = Plex,
+                                fontWeight = FontWeight.Medium, color = Kat.text)
+                            Text(
+                                "Talking over the spoken reply cuts it off — the mic stays open, the assistant's own voice is cancelled on the device",
+                                Modifier.padding(top = 2.dp), fontSize = 12.5.sp, fontFamily = Plex, color = Kat.textFaint,
+                            )
+                        }
+                        KatSwitch(bargeIn, { onBargeIn(!bargeIn) })
                     }
                 }
             }

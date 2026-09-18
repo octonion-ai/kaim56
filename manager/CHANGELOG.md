@@ -5,6 +5,9 @@ entry (root causes, measurements, alternatives considered) lives in git
 history — `git log -p -- manager/CHANGELOG.md` before 2026-09-08 — and in the
 commit messages.
 
+## 2026-09-18
+- App 5.37: barge-in — talking over the spoken reply cuts it off and becomes the next input; the mic stays open during playback with the assistant's own voice removed by an on-device echo canceller (vendored speexdsp, native libkatecho); TTS now plays through AudioTrack so the played audio is the canceller's reference; switch in Settings
+
 ## 2026-09-17
 - Agent split for review: the openrouter agent becomes the package `agent/` (one concern per module); the harness drive ships the package directory, the rootfs COPY and the test loader follow
 - Split for review (no behaviour change): manager.py (6,078 lines) becomes a composition root; the code moves into mgr/ modules by concern, security boundaries as their own files, routes split by who may call them; siblings are used as modules (`_x.func`), tests patch the defining module

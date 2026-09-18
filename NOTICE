@@ -1,2 +1,5 @@
 Portions of manager/personas.json and manager/skills.json are adapted from
 ECC (https://github.com/affaan-m/ECC), MIT License, Copyright (c) 2026 Affaan Mustafa.
+
+app/app/src/main/cpp/speexdsp is speexdsp 1.2.1 (https://www.speex.org), BSD 3-clause,
+Copyright (c) 2002-2008 Jean-Marc Valin and Xiph.Org Foundation; see the COPYING file there.
