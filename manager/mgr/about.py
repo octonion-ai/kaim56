@@ -40,10 +40,23 @@ def installed_version():
         return "dev"
 
 
+def _platform_release(releases):
+    """The newest platform release in GitHub's list: a published release whose
+    tag is a version (v1.2.3). The app's releases (app-v5.38) live in the same
+    repo and would otherwise be GitHub's 'latest' — the installer must never
+    try to fetch one of those."""
+    for r in releases or []:
+        if not isinstance(r, dict) or r.get("draft") or r.get("prerelease"):
+            continue
+        if _ver_key(r.get("tag_name")):
+            return r
+    return None
+
+
 def _fetch_latest_release():
-    req = urllib.request.Request(f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest",
+    req = urllib.request.Request(f"https://api.github.com/repos/{UPDATE_REPO}/releases?per_page=20",
                                  headers={"Accept": "application/vnd.github+json", "User-Agent": "kaim56"})
-    d = json.loads(urllib.request.urlopen(req, timeout=6).read().decode())
+    d = _platform_release(json.loads(urllib.request.urlopen(req, timeout=6).read().decode())) or {}
     return {"latest": str(d.get("tag_name") or ""), "url": str(d.get("html_url") or ""),
             "notes": str(d.get("body") or "")[:1200]}
 

@@ -4403,6 +4403,17 @@ class ManagerHTTP(unittest.TestCase):
         wb.urllib.request.urlopen = lambda url, timeout=None: (_ for _ in ()).throw(OSError("no manager"))
         self.assertFalse(wb._sync_credentials(force=True))                         # no manager: keep the copy, no crash
 
+    def test_platform_release_skips_app_releases(self):
+        """The app's releases (app-v5.38) share the repo: the manager's update
+        check must pick the newest PLATFORM release, not GitHub's 'latest'."""
+        from mgr import about as _about
+        pick = _about._platform_release
+        rel = [{"tag_name": "app-v5.38"}, {"tag_name": "v1.1.0", "prerelease": True},
+               {"tag_name": "v1.0.9", "draft": True}, {"tag_name": "v1.0.1"}, {"tag_name": "v1.0.0"}]
+        self.assertEqual(pick(rel)["tag_name"], "v1.0.1")
+        self.assertIsNone(pick([{"tag_name": "app-v5.38"}]))
+        self.assertIsNone(pick(None))
+
     def test_version_and_update_check(self):
         """The installed version comes from VERSION (dev without it), the newest
         release from GitHub through a cached check whose failure is remembered,

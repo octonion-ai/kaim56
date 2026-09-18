@@ -96,7 +96,7 @@ if [ "$RELEASE" = 1 ]; then
   as_op git -C "$SRC" checkout -q "$TAG"
   echo "  release: $TAG"
 fi
-VERSION="$(as_op git -C "$SRC" describe --tags --always 2>/dev/null || echo dev)"
+VERSION="$(as_op git -C "$SRC" describe --tags --match 'v*' --always 2>/dev/null || echo dev)"
 
 # ── [3] Runtime layout (repo -> working directories) ────────────────────────
 say "[3/7] Runtime layout under $BASE"
