@@ -1,23 +1,73 @@
-# Builds the KatAgent APK from the repo and attaches it to the GitHub release
-# of a v* tag. Two jobs: the native iroh module (Rust, cargo-ndk, UniFFI
-# bindings) and the Gradle build. Signing uses the project's stable key when the
-# secret KATAGENT_KEYSTORE_B64 (base64 of app/keystore/katagent.jks) is set —
-# only then can the APK update an installed KatAgent in place, and only then is
-# it attached to the release. Without the secret a throwaway key is used and the
-# APK is kept as a workflow artifact for inspection.
+# KatAgent release pipeline. Builds the APK from the repo and publishes it:
+#
+#   * app-v<version> tag  -> GitHub release "KatAgent <version>" with the APK
+#   * push to main        -> when app/app/build.gradle.kts carries a versionName
+#                            that has no app-v<version> release yet, the tag and
+#                            the release are created (so bumping the version and
+#                            pushing IS the release)
+#   * v* tag              -> the APK is attached to that platform release as before
+#   * workflow_dispatch   -> build only (artifact), no release
+#
+# The app updates itself from these releases (AppUpdate.kt: newest app-v* tag
+# with an .apk asset). Two jobs: the native iroh module (Rust, cargo-ndk,
+# UniFFI bindings) and the Gradle build (NDK + CMake for the echo canceller).
+# Signing uses the project's stable key when the secret KATAGENT_KEYSTORE_B64
+# (base64 of app/keystore/katagent.jks) is set — only then can the APK update
+# an installed KatAgent in place, and only then is a release made. Without the
+# secret a throwaway key is used and the APK is kept as a workflow artifact.
 name: apk
 
 on:
   push:
-    tags: ['v*']
+    branches: [main]
+    tags: ['v*', 'app-v*']
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
+  plan:
+    name: what to build
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      version: ${{ steps.plan.outputs.version }}
+      app_release: ${{ steps.plan.outputs.app_release }}
+      app_tag: ${{ steps.plan.outputs.app_tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        run: |
+          v=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/app/build.gradle.kts | head -1)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "app_tag=app-v$v" >> "$GITHUB_OUTPUT"
+          case "$GITHUB_REF" in
+            refs/tags/app-v*)
+              t="${GITHUB_REF#refs/tags/app-v}"
+              if [ "$t" != "$v" ]; then
+                echo "::error::tag app-v$t but build.gradle.kts says versionName $v"; exit 1
+              fi
+              echo "build=true" >> "$GITHUB_OUTPUT"; echo "app_release=true" >> "$GITHUB_OUTPUT" ;;
+            refs/tags/v*)
+              echo "build=true" >> "$GITHUB_OUTPUT"; echo "app_release=false" >> "$GITHUB_OUTPUT" ;;
+            refs/heads/main)
+              # a new versionName without a release yet -> release it
+              if git ls-remote --tags origin "refs/tags/app-v$v" | grep -q .; then
+                echo "app-v$v already released — nothing to do"
+                echo "build=false" >> "$GITHUB_OUTPUT"; echo "app_release=false" >> "$GITHUB_OUTPUT"
+              else
+                echo "build=true" >> "$GITHUB_OUTPUT"; echo "app_release=true" >> "$GITHUB_OUTPUT"
+              fi ;;
+            *)
+              echo "build=true" >> "$GITHUB_OUTPUT"; echo "app_release=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+          cat "$GITHUB_OUTPUT"
+
   native:
     name: native iroh module (arm64-v8a)
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -56,7 +106,8 @@ jobs:
 
   apk:
     name: KatAgent APK
-    needs: native
+    needs: [plan, native]
+    if: needs.plan.outputs.build == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -87,14 +138,14 @@ jobs:
             keytool -genkeypair -keystore app/keystore/katagent.jks -storepass katagent -keypass katagent \
               -alias katagent -keyalg RSA -keysize 2048 -validity 36500 -dname "CN=KatAgent CI (throwaway)"
             echo "stable=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::KATAGENT_KEYSTORE_B64 is not set — the APK is signed with a throwaway key and NOT attached to the release"
+            echo "::warning::KATAGENT_KEYSTORE_B64 is not set — the APK is signed with a throwaway key and NOT released"
           fi
-      - name: build
-        run: gradle -p app assembleDebug --no-daemon --console=plain
+      - name: unit tests + build
+        run: gradle -p app testDebugUnitTest assembleDebug --no-daemon --console=plain
       - name: name the APK after its versionName
         id: apk
         run: |
-          v=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/app/build.gradle.kts | head -1)
+          v="${{ needs.plan.outputs.version }}"
           cp app/app/build/outputs/apk/debug/app-debug.apk "katagent-$v.apk"
           echo "file=katagent-$v.apk" >> "$GITHUB_OUTPUT"
           ls -la "katagent-$v.apk"
@@ -102,8 +153,19 @@ jobs:
         with:
           name: ${{ steps.apk.outputs.file }}
           path: ${{ steps.apk.outputs.file }}
-      - name: attach to the release
+      - name: attach to the platform release
         if: startsWith(github.ref, 'refs/tags/v') && steps.key.outputs.stable == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          files: ${{ steps.apk.outputs.file }}
+      - name: app release
+        # Creates the app-v<version> tag on this commit when it does not exist
+        # yet (push to main with a new versionName) and the release with the
+        # APK the app's self-update looks for.
+        if: needs.plan.outputs.app_release == 'true' && steps.key.outputs.stable == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.plan.outputs.app_tag }}
+          name: KatAgent ${{ needs.plan.outputs.version }}
+          generate_release_notes: true
           files: ${{ steps.apk.outputs.file }}

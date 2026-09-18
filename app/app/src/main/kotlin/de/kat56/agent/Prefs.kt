@@ -53,6 +53,20 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("bargeIn", true)
         set(v) = sp.edit().putBoolean("bargeIn", v).apply()
 
+    // Self-update from GitHub Releases (app-v* tags of updateRepo): check at
+    // start, download, hand to the installer.
+    var autoUpdate: Boolean
+        get() = sp.getBoolean("autoUpdate", true)
+        set(v) = sp.edit().putBoolean("autoUpdate", v).apply()
+
+    var updateRepo: String
+        get() = sp.getString("updateRepo", AppUpdate.DEFAULT_REPO) ?: AppUpdate.DEFAULT_REPO
+        set(v) = sp.edit().putString("updateRepo", v).apply()
+
+    var lastUpdateCheck: Long
+        get() = sp.getLong("lastUpdateCheck", 0L)
+        set(v) = sp.edit().putLong("lastUpdateCheck", v).apply()
+
     // Active on-device model (file name in the models/ folder).
     var activeModel: String
         get() = sp.getString("activeModel", "") ?: ""

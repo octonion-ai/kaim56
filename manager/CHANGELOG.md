@@ -6,6 +6,7 @@ history — `git log -p -- manager/CHANGELOG.md` before 2026-09-08 — and in th
 commit messages.
 
 ## 2026-09-18
+- App 5.38: self-update — the app checks GitHub Releases at start (newest `app-v*` with an APK), downloads it and hands it to the package installer (switch + 'Check now' in Settings); the apk workflow releases every new versionName pushed to main (or an `app-v*` tag) as a GitHub release with the APK
 - Update check picks the newest PLATFORM release (tag v1.2.3) from GitHub's release list instead of 'latest' — the app's releases (app-v5.38) share the repo; install.sh describes the version with `--match 'v*'` for the same reason
 - App 5.37: barge-in — talking over the spoken reply cuts it off and becomes the next input; the mic stays open during playback with the assistant's own voice removed by an on-device echo canceller (vendored speexdsp, native libkatecho); TTS now plays through AudioTrack so the played audio is the canceller's reference; switch in Settings
 

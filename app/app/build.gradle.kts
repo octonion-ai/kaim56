@@ -12,8 +12,8 @@ android {
         applicationId = "de.kat56.agent"
         minSdk = 26
         targetSdk = 34
-        versionCode = 87
-        versionName = "5.37"
+        versionCode = 88
+        versionName = "5.38"
         ndk {
             // Xiaomi 15 = arm64-v8a. Nur diese ABI -> deutlich kleinere APK.
             abiFilters += "arm64-v8a"
@@ -91,4 +91,6 @@ dependencies {
     // Nur fuer JVM-Tests der Brillen-Protokollschicht (Halo.kt) — laeuft ohne
     // Geraet und ohne Emulator: gradle testDebugUnitTest
     testImplementation("junit:junit:4.13.2")
+    // org.json is a stub in android.jar on the JVM: the real one for AppUpdateTest.
+    testImplementation("org.json:json:20240303")
 }

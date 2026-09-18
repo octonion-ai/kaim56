@@ -377,6 +377,57 @@ fun KatAgentApp(prefs: Prefs, gemma: LocalGemma, store: ChatStore, assistCalls: 
     var docPreviewOpen by remember { mutableStateOf(false) }
     var web by remember { mutableStateOf(prefs.webAccess) }
     var bargeIn by remember { mutableStateOf(prefs.bargeIn) }
+
+    // ── Self-update from GitHub Releases ──────────────────────────────────
+    var autoUpdate by remember { mutableStateOf(prefs.autoUpdate) }
+    var updateInfo by remember { mutableStateOf<AppUpdate.Release?>(null) }
+    var updateBusy by remember { mutableStateOf(false) }
+    var updateReady by remember { mutableStateOf<java.io.File?>(null) }   // downloaded, waiting for the installer
+    val installedVersion = remember {
+        try { context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "" } catch (e: Exception) { "" }
+    }
+
+    fun installUpdate() {
+        val f = updateReady ?: return
+        if (!AppUpdate.canInstall(context)) {
+            status = "Allow installs from KatAgent, then tap Install again"
+            AppUpdate.openInstallPermission(context); return
+        }
+        if (!AppUpdate.install(context, f)) status = "⚠️ Could not start the installer"
+    }
+
+    /** Ask GitHub; with auto-update (or [manual]) download and hand over to the installer. */
+    fun checkUpdate(manual: Boolean) {
+        if (updateBusy) return
+        updateBusy = true
+        scope.launch {
+            val r = withContext(Dispatchers.IO) { AppUpdate.fetch(prefs.updateRepo) }
+            prefs.lastUpdateCheck = System.currentTimeMillis()
+            if (r == null) { updateBusy = false; if (manual) status = "Update check failed (offline?)"; return@launch }
+            if (!AppUpdate.isNewer(installedVersion, r.version)) {
+                updateBusy = false; updateInfo = null
+                if (manual) status = "KatAgent $installedVersion is up to date"
+                return@launch
+            }
+            updateInfo = r
+            val f = AppUpdate.updateFile(context, r.version)
+            if (!f.exists() && (manual || prefs.autoUpdate)) {
+                status = "Downloading KatAgent ${r.version}…"
+                val ok = withContext(Dispatchers.IO) { AppUpdate.download(r.apkUrl, f) }
+                if (!ok) { updateBusy = false; status = "⚠️ Update download failed"; return@launch }
+            }
+            updateBusy = false
+            if (f.exists()) {
+                updateReady = f
+                status = "KatAgent ${r.version} ready to install"
+                if (manual || prefs.autoUpdate) installUpdate()
+            }
+        }
+    }
+    LaunchedEffect(Unit) {
+        delay(4000)
+        if (prefs.autoUpdate && System.currentTimeMillis() - prefs.lastUpdateCheck > 6 * 3600_000L) checkUpdate(false)
+    }
     var instances by remember { mutableStateOf<List<AgentInstance>>(emptyList()) }
     // Header and settings show the sync state ("Syncing …" / "Synced · N chats").
     var syncing by remember { mutableStateOf(false) }
@@ -1598,6 +1649,9 @@ fun KatAgentApp(prefs: Prefs, gemma: LocalGemma, store: ChatStore, assistCalls: 
                     prefs, store, dl, instances = instances,
                     web = web, onWeb = { web = it; prefs.webAccess = it },
                     bargeIn = bargeIn, onBargeIn = { bargeIn = it; prefs.bargeIn = it },
+                    autoUpdate = autoUpdate, onAutoUpdate = { autoUpdate = it; prefs.autoUpdate = it },
+                    update = updateInfo, updateReady = updateReady != null, updateBusy = updateBusy,
+                    onCheckUpdate = { checkUpdate(true) }, onInstallUpdate = { installUpdate() },
                     syncing = syncing, lastSync = lastSync, online = online,
                     onClose = { screen = null },
                     onSelectModel = { selectModel(it) },
@@ -2389,6 +2443,13 @@ fun SettingsScreen(
     onWeb: (Boolean) -> Unit,
     bargeIn: Boolean,
     onBargeIn: (Boolean) -> Unit,
+    autoUpdate: Boolean,
+    onAutoUpdate: (Boolean) -> Unit,
+    update: AppUpdate.Release?,
+    updateReady: Boolean,
+    updateBusy: Boolean,
+    onCheckUpdate: () -> Unit,
+    onInstallUpdate: () -> Unit,
     syncing: Boolean,
     lastSync: String,
     online: Boolean,
@@ -2754,6 +2815,55 @@ fun SettingsScreen(
                             )
                         }
                         KatSwitch(bargeIn, { onBargeIn(!bargeIn) })
+                    }
+                }
+            }
+
+            // ── App update ─────────────────────────────────────────────────
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Kicker("App update", Modifier.padding(horizontal = 4.dp))
+                KatCard(padding = PaddingValues(4.dp), spacing = 0.dp) {
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                            .tap { onAutoUpdate(!autoUpdate) }.padding(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Automatic updates", fontSize = 14.5.sp, fontFamily = Plex,
+                                fontWeight = FontWeight.Medium, color = Kat.text)
+                            Text(
+                                "Installed $ver — new releases from GitHub are downloaded at start and handed to the installer",
+                                Modifier.padding(top = 2.dp), fontSize = 12.5.sp, fontFamily = Plex, color = Kat.textFaint,
+                            )
+                        }
+                        KatSwitch(autoUpdate, { onAutoUpdate(!autoUpdate) })
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().padding(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                when {
+                                    updateBusy -> "Checking…"
+                                    update != null && updateReady -> "KatAgent ${update.version} ready to install"
+                                    update != null -> "KatAgent ${update.version} available"
+                                    else -> "No newer release known"
+                                },
+                                fontSize = 13.sp, fontFamily = Plex, color = Kat.text,
+                            )
+                        }
+                        Text(
+                            if (update != null && updateReady) "Install" else if (update != null) "Download" else "Check now",
+                            Modifier.clip(RoundedCornerShape(8.dp))
+                                .background(if (update != null) Kat.accent else Kat.tile)
+                                .tap { if (!updateBusy) { if (update != null && updateReady) onInstallUpdate() else onCheckUpdate() } }
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            fontSize = 13.sp, fontFamily = Plex, fontWeight = FontWeight.Medium,
+                            color = if (update != null) Kat.onAccent else Kat.textMuted,
+                        )
                     }
                 }
             }
